@@ -1,0 +1,301 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Installation
+
+Get RAT up and running on your machine in under 5 minutes. All you need is Docker.
+
+---
+
+## Prerequisites
+
+Before installing RAT, make sure you have the following installed:
+
+| Requirement | Minimum Version | Check Command |
+|---|---|---|
+| **Docker** | 24.0+ | `docker --version` |
+| **Docker Compose** | 2.20+ (V2 plugin) | `docker compose version` |
+| **RAM** | 4 GB free | — |
+| **Disk** | 2 GB free | — |
+
+<Callout type="warning">
+RAT runs 7 containers simultaneously. If your machine has less than 4 GB of free RAM,
+you may experience slow startups or container crashes — especially the runner and ratq
+services which load DuckDB and PyArrow into memory.
+</Callout>
+
+<Callout type="info">
+Docker Compose V2 is required (the `docker compose` plugin, not the legacy `docker-compose` standalone binary).
+Most modern Docker Desktop installations include V2 by default.
+</Callout>
+
+---
+
+## Install RAT
+
+<Steps>
+
+### Clone the repository
+
+```bash filename="Terminal"
+git clone https://github.com/squat-collective/rat.git
+cd rat
+```
+
+### Start all services
+
+You have two options to start RAT:
+
+<Tabs items={['make (recommended)', 'docker compose']}>
+<Tabs.Tab>
+```bash filename="Terminal"
+make up
+```
+
+The `make up` command builds all images (if needed) and starts every service in the
+correct order with health check dependencies.
+</Tabs.Tab>
+<Tabs.Tab>
+```bash filename="Terminal"
+docker compose -f infra/docker-compose.yml up -d
+```
+
+The `-d` flag runs containers in detached mode so you get your terminal back.
+</Tabs.Tab>
+</Tabs>
+
+<Callout type="info">
+The first start takes 2-5 minutes because Docker needs to pull base images and build
+the application containers. Subsequent starts are much faster thanks to layer caching.
+</Callout>
+
+### Wait for health checks
+
+All services register health checks with Docker. Wait until every container reports `healthy`:
+
+```bash filename="Terminal"
+docker compose -f infra/docker-compose.yml ps
+```
+
+You should see output similar to:
+
+```
+NAME        STATUS                  PORTS
+postgres    Up 30s (healthy)        5432/tcp
+minio       Up 30s (healthy)        9000/tcp, 0.0.0.0:9001->9001/tcp
+nessie      Up 30s (healthy)        0.0.0.0:19120->19120/tcp
+ratd        Up 25s (healthy)        0.0.0.0:8080->8080/tcp
+runner      Up 20s (healthy)        50051/tcp
+ratq        Up 20s (healthy)        50052/tcp
+portal      Up 15s (healthy)        0.0.0.0:3000->3000/tcp
+```
+
+You can also verify individual services manually:
+
+```bash filename="Terminal"
+# Check the API server
+curl -s http://localhost:8080/health | jq .
+
+# Check the portal
+curl -s -o /dev/null -w "%{http_code}" http://localhost:3000
+```
+
+The `/health` endpoint returns JSON with the status of each subsystem:
+
+```json filename="GET /health response"
+{
+  "status": "ok",
+  "services": {
+    "postgres": "healthy",
+    "minio": "healthy",
+    "nessie": "healthy",
+    "runner": "healthy",
+    "ratq": "healthy"
+  }
+}
+```
+
+### Open the Portal
+
+Once all services are healthy, open your browser and navigate to:
+
+**[http://localhost:3000](http://localhost:3000)**
+
+You should see the RAT Portal dashboard. No login is required for the Community Edition — it is a single-user platform.
+
+</Steps>
+
+---
+
+## Service Ports
+
+These are the ports exposed on your host machine:
+
+| Service | Port | URL | Description |
+|---|---|---|---|
+| **Portal** | 3000 | [localhost:3000](http://localhost:3000) | Web IDE — your main interface |
+| **API (ratd)** | 8080 | [localhost:8080](http://localhost:8080) | REST API server |
+| **MinIO Console** | 9001 | [localhost:9001](http://localhost:9001) | S3 storage admin UI |
+| **Nessie** | 19120 | [localhost:19120](http://localhost:19120) | Iceberg catalog API |
+
+<Callout type="info">
+The runner and ratq services do not expose ports to the host — they communicate with
+ratd over the internal Docker network via gRPC.
+</Callout>
+
+---
+
+## Default Credentials
+
+| Service | Username | Password |
+|---|---|---|
+| **MinIO Console** | `minioadmin` | `minioadmin` |
+
+The MinIO console at [localhost:9001](http://localhost:9001) lets you browse the raw data
+files stored in S3. You do not need to access it during normal use — it is helpful for
+debugging and verifying that pipeline data has been written correctly.
+
+<Callout type="warning">
+These are development credentials. If you deploy RAT in production, change them in your
+compose environment variables. See the [Deployment](/deployment) section for guidance.
+</Callout>
+
+---
+
+## Stopping RAT
+
+To stop all services while preserving your data:
+
+<Tabs items={['make', 'docker compose']}>
+<Tabs.Tab>
+```bash filename="Terminal"
+make down
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```bash filename="Terminal"
+docker compose -f infra/docker-compose.yml down
+```
+</Tabs.Tab>
+</Tabs>
+
+To stop all services **and delete all data** (volumes):
+
+```bash filename="Terminal"
+docker compose -f infra/docker-compose.yml down -v
+```
+
+<Callout type="error">
+The `-v` flag removes all Docker volumes, which means all your pipelines, runs, tables,
+and stored data will be permanently deleted. Use this only when you want a clean slate.
+</Callout>
+
+---
+
+## Troubleshooting
+
+### Port conflicts
+
+If a port is already in use, Docker will fail to bind it. Check for conflicts:
+
+```bash filename="Terminal"
+# Check which process is using port 3000
+lsof -i :3000
+
+# Or on Linux without lsof
+ss -tlnp | grep 3000
+```
+
+Common conflicts:
+- **Port 3000** — Another Node.js or React development server
+- **Port 8080** — Java application servers, other API servers
+- **Port 9001** — Other MinIO instances
+- **Port 5432** — A local PostgreSQL installation
+
+To resolve, either stop the conflicting process or override the port in your compose
+environment.
+
+### Container crashes or OOM
+
+If containers keep restarting, you likely do not have enough memory:
+
+```bash filename="Terminal"
+# Check container resource usage
+docker stats --no-stream
+```
+
+Solutions:
+- Close other memory-intensive applications (browsers, IDEs)
+- Increase Docker Desktop memory limit (Settings -> Resources -> Memory -> set to 4 GB+)
+- On Linux with cgroup limits, ensure the Docker daemon has at least 4 GB available
+
+### Checking logs
+
+View logs for all services:
+
+<Tabs items={['make', 'docker compose']}>
+<Tabs.Tab>
+```bash filename="Terminal"
+make logs
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```bash filename="Terminal"
+docker compose -f infra/docker-compose.yml logs -f
+```
+</Tabs.Tab>
+</Tabs>
+
+View logs for a specific service:
+
+```bash filename="Terminal"
+# API server logs
+docker compose -f infra/docker-compose.yml logs -f ratd
+
+# Runner logs (pipeline execution)
+docker compose -f infra/docker-compose.yml logs -f runner
+
+# Portal logs
+docker compose -f infra/docker-compose.yml logs -f portal
+```
+
+### Services fail to connect to each other
+
+If ratd reports that it cannot reach runner, ratq, or Nessie, the services may have
+started out of order. Restart them:
+
+```bash filename="Terminal"
+docker compose -f infra/docker-compose.yml restart ratd runner ratq
+```
+
+### Clean rebuild
+
+If something is fundamentally broken, you can start completely fresh:
+
+```bash filename="Terminal"
+# Stop everything, remove volumes, rebuild all images
+docker compose -f infra/docker-compose.yml down -v
+docker compose -f infra/docker-compose.yml build --no-cache
+docker compose -f infra/docker-compose.yml up -d
+```
+
+Or with make:
+
+```bash filename="Terminal"
+make clean
+make build
+make up
+```
+
+---
+
+## Next Steps
+
+<Cards>
+  <Card title="Your First Pipeline" href="/getting-started/first-pipeline">
+    Build a data pipeline from scratch in 10 minutes
+  </Card>
+  <Card title="Portal Tour" href="/getting-started/portal-tour">
+    Explore the web IDE and all its features
+  </Card>
+</Cards>

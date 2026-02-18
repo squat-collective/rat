@@ -1,0 +1,489 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Landing Zones
+
+Landing zones are file upload areas where you drop raw data files (CSV, Parquet, JSON) into RAT. They act as the entry point for data that does not come from a database or API — think spreadsheet exports, vendor data dumps, IoT data files, or manual uploads.
+
+## What Are Landing Zones?
+
+A landing zone is a designated folder in S3 (MinIO) where files can be uploaded and then read by pipelines. Each landing zone has a name and belongs to a namespace:
+
+```
+s3://rat/{namespace}/landing/{zone_name}/
+```
+
+For example, a landing zone called `orders` in the `ecommerce` namespace:
+
+```
+s3://rat/ecommerce/landing/orders/
+├── orders_2024_01.csv
+├── orders_2024_02.csv
+└── orders_2024_03.csv
+```
+
+Pipelines read from landing zones using the `{{ landing_zone('zone_name') }}` template function, which resolves to the S3 glob path for all files in the zone.
+
+## When to Use Landing Zones
+
+<Cards>
+  <Card title="File-based data sources">
+    CSV exports from external systems, vendor data drops, spreadsheets converted to CSV
+  </Card>
+  <Card title="Manual data uploads">
+    One-off data loads, seed data, reference tables maintained in spreadsheets
+  </Card>
+  <Card title="IoT and sensor data">
+    Files written by edge devices or data collectors that batch data into files
+  </Card>
+  <Card title="Migration and backfill">
+    Historical data exported from legacy systems for initial load into RAT
+  </Card>
+</Cards>
+
+<Callout type="info">
+Landing zones are for **file-based** data ingestion. If your data source is a database, API, or streaming platform, you should use a different approach (e.g., an external tool that writes to the landing zone, or a Python pipeline with DuckDB's HTTP extension).
+</Callout>
+
+## Creating a Landing Zone
+
+### From the Portal
+
+<Steps>
+### Navigate to the namespace
+
+Go to the namespace where you want to create the landing zone.
+
+### Open the Landing Zones panel
+
+Click on "Landing Zones" in the namespace sidebar.
+
+### Create the zone
+
+Click "New Landing Zone", enter a name (e.g., `orders`), and confirm. The name should be lowercase with underscores — no spaces or special characters.
+</Steps>
+
+### From the API
+
+You can also create landing zones via the RAT API:
+
+```bash filename="Terminal"
+curl -X POST http://localhost:8080/api/v1/namespaces/ecommerce/storage/landing-zones \
+  -H "Content-Type: application/json" \
+  -d '{"name": "orders"}'
+```
+
+## Uploading Files
+
+### From the Portal (Drag and Drop)
+
+The portal provides a drag-and-drop upload interface:
+
+<Steps>
+### Navigate to the landing zone
+
+Go to your namespace -> Landing Zones -> select the zone.
+
+### Upload files
+
+Drag and drop files onto the upload area, or click to browse. Multiple files can be uploaded at once.
+
+### Verify upload
+
+Uploaded files appear in the file list with their size and upload timestamp.
+</Steps>
+
+### From the API
+
+Upload files via the storage API:
+
+```bash filename="Terminal"
+# Upload a single file
+curl -X PUT http://localhost:8080/api/v1/namespaces/ecommerce/storage/upload \
+  -F "file=@orders_2024_03.csv" \
+  -F "path=landing/orders/orders_2024_03.csv"
+```
+
+### Programmatically via S3
+
+Since MinIO is S3-compatible, you can use any S3 client to upload files directly:
+
+```bash filename="Terminal"
+# Using AWS CLI (configured for MinIO)
+aws --endpoint-url http://localhost:9000 \
+  s3 cp orders_2024_03.csv s3://rat/ecommerce/landing/orders/
+
+# Using mc (MinIO client)
+mc cp orders_2024_03.csv minio/rat/ecommerce/landing/orders/
+```
+
+## Using `landing_zone()` in SQL
+
+The `{{ landing_zone('zone_name') }}` template function resolves to a glob path that matches all files in the zone:
+
+```
+{{ landing_zone('orders') }}  -->  s3://rat/ecommerce/landing/orders/**
+```
+
+Use it with DuckDB's file-reading functions to load data into your pipeline.
+
+### Reading CSV Files
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: append_only
+-- @archive_landing_zones: true
+
+SELECT *
+FROM read_csv_auto(
+    '{{ landing_zone("orders") }}',
+    header = true,
+    all_varchar = true
+)
+```
+
+The `read_csv_auto` function auto-detects delimiters, quote characters, and column types. Using `all_varchar = true` is recommended for Bronze pipelines to avoid type inference issues.
+
+### CSV with Explicit Schema
+
+For more control, specify the schema explicitly:
+
+```sql filename="pipeline.sql"
+SELECT *
+FROM read_csv(
+    '{{ landing_zone("orders") }}',
+    columns = {
+        'order_id': 'INTEGER',
+        'customer_id': 'INTEGER',
+        'product_name': 'VARCHAR',
+        'quantity': 'INTEGER',
+        'price': 'DECIMAL(10,2)',
+        'order_date': 'DATE'
+    },
+    header = true,
+    dateformat = '%Y-%m-%d'
+)
+```
+
+### Reading Parquet Files
+
+```sql filename="pipeline.sql"
+SELECT *
+FROM read_parquet('{{ landing_zone("events") }}')
+```
+
+Parquet files carry their own schema, so no configuration is needed. They are also much faster to read than CSV.
+
+### Reading JSON Files
+
+```sql filename="pipeline.sql"
+SELECT *
+FROM read_json_auto(
+    '{{ landing_zone("api_responses") }}',
+    format = 'auto'
+)
+```
+
+DuckDB can read JSON files, including newline-delimited JSON (NDJSON):
+
+```sql filename="pipeline.sql"
+SELECT *
+FROM read_ndjson_auto('{{ landing_zone("logs") }}')
+```
+
+### Adding Metadata Columns
+
+It is a best practice to add metadata columns that track where and when data was loaded:
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: append_only
+-- @archive_landing_zones: true
+
+SELECT
+    *,
+    filename AS _source_file,
+    '{{ run_started_at }}' AS _loaded_at
+FROM read_csv_auto(
+    '{{ landing_zone("orders") }}',
+    header = true,
+    all_varchar = true,
+    filename = true
+)
+```
+
+The `filename = true` parameter adds a `filename` column with the source file path for each row.
+
+## Landing Zone Directory Structure
+
+A landing zone has the following structure on S3:
+
+```
+s3://rat/{namespace}/landing/{zone_name}/
+├── file1.csv                    # Active files (read by pipelines)
+├── file2.csv
+├── _samples/                    # Sample files for preview mode
+│   └── sample_data.csv
+└── _processed/                  # Archived files (after successful runs)
+    ├── run-abc123/
+    │   ├── file1.csv
+    │   └── file2.csv
+    └── run-def456/
+        └── file3.csv
+```
+
+### Active Files
+
+Files in the root of the landing zone are "active" — they are picked up by `{{ landing_zone() }}` on the next pipeline run.
+
+### Sample Files (`_samples/`)
+
+The `_samples/` directory holds small sample files used by the portal's preview mode. When you click "Preview" on a pipeline that reads from a landing zone, RAT uses the sample files instead of the full dataset. This lets you test your pipeline SQL without processing large files.
+
+<Callout type="info">
+Sample files should be representative of your real data but small — a few dozen rows is enough. They are never processed during actual pipeline runs, only used for preview and development.
+</Callout>
+
+To add sample files:
+
+```bash filename="Terminal"
+# Upload a sample file
+aws --endpoint-url http://localhost:9000 \
+  s3 cp sample_orders.csv s3://rat/ecommerce/landing/orders/_samples/
+```
+
+Or use the portal's landing zone interface to upload files directly to the `_samples/` directory.
+
+### Processed Files (`_processed/`)
+
+When a pipeline runs with `archive_landing_zones: true`, files are moved from the root to `_processed/{run_id}/` after a successful run. This prevents the same files from being processed again.
+
+## Archiving
+
+Archiving moves processed files out of the active zone after a successful pipeline run. This is essential for `append_only` pipelines to prevent duplicate processing.
+
+### Enabling Archiving
+
+Add the `archive_landing_zones` annotation to your pipeline:
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: append_only
+-- @archive_landing_zones: true
+
+SELECT * FROM read_csv_auto('{{ landing_zone("orders") }}', header = true)
+```
+
+Or in `config.yaml`:
+
+```yaml filename="config.yaml"
+merge_strategy: append_only
+archive_landing_zones: true
+```
+
+### How Archiving Works
+
+<Mermaid chart={`
+sequenceDiagram
+    participant LZ as Landing Zone
+    participant P as Pipeline
+    participant A as Archive
+
+    Note over LZ: orders/file1.csv
+    Note over LZ: orders/file2.csv
+    P->>LZ: Read all files
+    P->>P: Process data
+    P->>P: Quality tests pass
+    P->>P: Branch merged to main
+    LZ->>A: Move file1.csv → _processed/run-abc/
+    LZ->>A: Move file2.csv → _processed/run-abc/
+    Note over LZ: orders/ (empty)
+    Note over A: orders/_processed/run-abc/file1.csv
+    Note over A: orders/_processed/run-abc/file2.csv
+`} />
+
+Key points:
+- Files are archived **only after a successful run** (branch merged to main)
+- If the run fails (quality tests, execution error), files stay in the active zone
+- Archived files are organized by run ID for traceability
+- The `_processed/` directory is never read by `{{ landing_zone() }}`
+
+<Callout type="warning">
+Without `archive_landing_zones: true`, files remain in the active zone forever. For `append_only` pipelines, this means every run will re-process all files, creating duplicates. Always enable archiving with `append_only`.
+</Callout>
+
+## Landing Zone Triggers
+
+RAT can automatically trigger a pipeline run when new files are uploaded to a landing zone. This creates an event-driven ingestion pattern.
+
+### How Triggers Work
+
+<Mermaid chart={`
+flowchart LR
+    A[File uploaded\nto landing zone] --> B[landing_zone_upload\nevent fires]
+    B --> C[Trigger matched\npipeline]
+    C --> D[Pipeline run\nstarts automatically]
+
+    style A fill:#a855f7,color:#fff
+    style D fill:#22c55e,color:#000
+`} />
+
+When a file is uploaded to a landing zone (via portal, API, or S3), RAT fires a `landing_zone_upload` event. If a pipeline is configured to trigger on that event, it runs automatically.
+
+### Configuring Triggers
+
+Set up the trigger in your pipeline's `config.yaml`:
+
+```yaml filename="config.yaml"
+merge_strategy: append_only
+archive_landing_zones: true
+triggers:
+  - type: landing_zone_upload
+    zone: orders
+```
+
+Now whenever files are uploaded to the `orders` landing zone, this pipeline runs automatically.
+
+<Callout type="info">
+Triggers are debounced — if multiple files are uploaded in quick succession, RAT waits briefly before triggering to batch them into a single run.
+</Callout>
+
+## Supported File Formats
+
+DuckDB supports reading many file formats from landing zones:
+
+| Format | Function | Extensions | Notes |
+|---|---|---|---|
+| CSV | `read_csv_auto()` / `read_csv()` | `.csv`, `.tsv`, `.txt` | Auto-detects delimiter, quoting, types |
+| Parquet | `read_parquet()` | `.parquet` | Fastest format, self-describing schema |
+| JSON | `read_json_auto()` | `.json` | Supports nested objects and arrays |
+| NDJSON | `read_ndjson_auto()` | `.ndjson`, `.jsonl` | Newline-delimited JSON, one object per line |
+
+<Callout type="info">
+**Prefer Parquet** when you control the file format. Parquet is columnar, compressed, and self-describing — it reads 10-100x faster than CSV and does not have quoting/escaping issues.
+</Callout>
+
+### Handling Multiple File Formats
+
+If your landing zone contains mixed file types, use DuckDB's glob patterns:
+
+```sql filename="pipeline.sql"
+-- Read only CSV files from a mixed landing zone
+SELECT * FROM read_csv_auto(
+    '{{ landing_zone("mixed_data") }}/*.csv',
+    header = true
+)
+```
+
+## Full Example: CSV Upload to Bronze Ingest Pipeline
+
+Here is a complete end-to-end example of using landing zones to ingest order data.
+
+### Step 1: Create the Landing Zone
+
+Create a landing zone called `orders` in the `ecommerce` namespace (via portal or API).
+
+### Step 2: Upload Sample Data
+
+Create a sample file for preview:
+
+```csv filename="ecommerce/landing/orders/_samples/sample_orders.csv"
+order_id,customer_id,product_name,quantity,price,status,order_date,updated_at
+1001,42,Widget A,2,29.99,shipped,2024-03-01,2024-03-02T10:30:00Z
+1002,17,Gadget B,1,149.99,pending,2024-03-01,2024-03-01T14:15:00Z
+1003,42,Widget C,5,9.99,delivered,2024-02-28,2024-03-01T09:00:00Z
+```
+
+### Step 3: Write the Bronze Pipeline
+
+```sql filename="ecommerce/pipelines/bronze/raw_orders/pipeline.sql"
+-- @merge_strategy: append_only
+-- @archive_landing_zones: true
+-- @description: Ingest raw order CSVs from the orders landing zone
+
+SELECT
+    *,
+    filename AS _source_file,
+    '{{ run_started_at }}' AS _loaded_at
+FROM read_csv_auto(
+    '{{ landing_zone("orders") }}',
+    header = true,
+    all_varchar = true,
+    filename = true
+)
+```
+
+### Step 4: Add Quality Tests
+
+```sql filename="ecommerce/pipelines/bronze/raw_orders/tests/quality/test_has_required_columns.sql"
+-- @severity: error
+-- @description: Source files must contain order_id and customer_id columns
+-- @remediation: Verify the CSV header matches the expected schema
+
+SELECT 1 AS violation
+WHERE NOT EXISTS (
+    SELECT order_id, customer_id FROM {{ this }} LIMIT 1
+)
+```
+
+```sql filename="ecommerce/pipelines/bronze/raw_orders/tests/quality/test_not_empty.sql"
+-- @severity: error
+-- @description: Landing zone must contain at least one row of data
+
+SELECT 1 AS violation
+WHERE (SELECT COUNT(*) FROM {{ this }}) = 0
+```
+
+### Step 5: Configure Trigger (Optional)
+
+```yaml filename="ecommerce/pipelines/bronze/raw_orders/config.yaml"
+merge_strategy: append_only
+archive_landing_zones: true
+triggers:
+  - type: landing_zone_upload
+    zone: orders
+```
+
+### Step 6: Upload Data and Run
+
+Upload your CSV files to the `orders` landing zone. If triggers are configured, the pipeline runs automatically. Otherwise, trigger it manually from the portal.
+
+### What Happens
+
+<Mermaid chart={`
+flowchart TD
+    A[Upload orders_2024_03.csv\nto landing zone] --> B[Pipeline triggered]
+    B --> C[Create branch run-xyz]
+    C --> D[Read CSV files from\nlanding zone]
+    D --> E[Write to Iceberg\non branch]
+    E --> F[Run quality tests]
+    F --> G{Tests pass?}
+    G -->|Yes| H[Merge to main]
+    H --> I[Archive CSV to\n_processed/run-xyz/]
+    G -->|No| J[Delete branch\nFiles stay in zone]
+
+    style H fill:#22c55e,color:#000
+    style I fill:#22c55e,color:#000
+    style J fill:#ef4444,color:#fff
+`} />
+
+After a successful run:
+- The data is in `ecommerce.bronze.raw_orders` (Iceberg table)
+- The CSV files are archived to `_processed/run-xyz/`
+- The landing zone root is empty, ready for new files
+- Downstream pipelines (Silver, Gold) can now `ref('bronze.raw_orders')`
+
+## Tips and Best Practices
+
+<Cards>
+  <Card title="Always archive with append_only">
+    If your pipeline uses `append_only` strategy, always set `archive_landing_zones: true`. Otherwise, every run reprocesses all files, creating duplicates.
+  </Card>
+  <Card title="Use all_varchar for CSV Bronze">
+    Read CSVs with `all_varchar = true` in Bronze. Cast types in Silver. This prevents type inference failures on messy data.
+  </Card>
+  <Card title="Add _source_file metadata">
+    Include `filename = true` in `read_csv_auto()` and add it as `_source_file`. This lets you trace every row back to its source file.
+  </Card>
+  <Card title="Keep sample files small">
+    Sample files in `_samples/` should be 10-50 rows, enough to test SQL without waiting. They are for development, not production.
+  </Card>
+</Cards>

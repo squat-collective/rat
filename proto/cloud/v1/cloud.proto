@@ -1,0 +1,32 @@
+syntax = "proto3";
+package ratatouille.cloud.v1;
+
+option go_package = "github.com/rat-data/rat/platform/gen/cloud/v1;cloudv1";
+
+// Field reservation policy: see common/v1/common.proto.
+// When removing fields, always add `reserved` for both the number and name.
+
+// CloudService handles cloud credential vending for AWS, GCP, and other providers.
+// Separated from EnforcementService (which owns CanAccess) to keep credential
+// vending as a standalone concern. Implemented by cloud provider plugins (e.g., cloud-aws).
+service CloudService {
+  // Vend scoped S3 credentials for a user within a namespace.
+  // Returns temporary credentials (e.g., AWS STS AssumeRole) scoped to the
+  // namespace's S3 prefix.
+  rpc GetCredentials(GetCredentialsRequest) returns (GetCredentialsResponse);
+}
+
+message GetCredentialsRequest {
+  string user_id = 1;              // user requesting credentials
+  string namespace = 2;            // scope credentials to this namespace's S3 prefix
+}
+
+message GetCredentialsResponse {
+  string access_key = 1;           // temporary access key
+  string secret_key = 2 [debug_redact = true];           // temporary secret key
+  string session_token = 3 [debug_redact = true];        // session token (STS)
+  string region = 4;               // cloud region (e.g., "us-east-1")
+  string endpoint = 5;             // S3 endpoint override (empty = default AWS)
+  string bucket = 6;               // target S3 bucket
+  int64 expires_at = 7;            // Unix timestamp when credentials expire
+}

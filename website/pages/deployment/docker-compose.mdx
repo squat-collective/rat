@@ -1,0 +1,435 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Docker Compose
+
+RAT runs as a set of 7 interconnected services managed by Docker Compose. This page covers the production-ready configuration, resource tuning, networking, and persistence.
+
+---
+
+## Architecture Overview
+
+<Mermaid chart={`
+flowchart TB
+    subgraph frontend["Frontend Network (rat_frontend)"]
+        portal["portal\n(Next.js)\nPort 3000"]
+        ratd["ratd\n(Go API)\nPort 8080"]
+    end
+
+    subgraph backend["Backend Network (infra_default)"]
+        ratq["ratq\n(Python)\ngRPC 50051"]
+        runner["runner\n(Python)\ngRPC 50052"]
+        postgres["postgres\nPort 5432"]
+        minio["minio\nPort 9000/9001"]
+        nessie["nessie\nPort 19120"]
+        minio_init["minio-init\n(bootstrap)"]
+    end
+
+    portal --> ratd
+    ratd --> ratq
+    ratd --> runner
+    ratd --> postgres
+    ratd --> minio
+    ratd --> nessie
+    ratq --> minio
+    ratq --> nessie
+    runner --> minio
+    runner --> nessie
+    runner -.->|callback| ratd
+    minio_init --> minio
+`} />
+
+---
+
+## Services
+
+The compose file defines 7 long-running services plus 1 bootstrap container:
+
+| Service | Image | Role | Exposed Ports |
+|---|---|---|---|
+| **ratd** | Custom (Go) | API server, scheduler, plugin host | `8080` (HTTP) |
+| **ratq** | Custom (Python) | Interactive DuckDB queries (read-only) | Internal only |
+| **runner** | Custom (Python) | Pipeline execution, Iceberg writes | Internal only |
+| **portal** | Custom (Next.js) | Web IDE | `3000` (HTTP) |
+| **postgres** | `postgres:16.4-alpine` | Platform state database | `127.0.0.1:5432` |
+| **minio** | `minio/minio` | S3-compatible object storage | `127.0.0.1:9000`, `127.0.0.1:9001` |
+| **nessie** | `ghcr.io/projectnessie/nessie:0.79.0` | Iceberg REST catalog | `127.0.0.1:19120` |
+| **minio-init** | `minio/mc` | Bootstrap (bucket creation, exits after) | None |
+
+<Callout type="info">
+The `ratq` and `runner` services do not expose ports to the host machine. They communicate with `ratd` exclusively over the internal Docker network via gRPC (ConnectRPC).
+</Callout>
+
+---
+
+## Service Configuration
+
+### ratd (Go Platform)
+
+The central API server. All external traffic flows through `ratd`.
+
+```yaml filename="infra/docker-compose.yml (ratd)"
+ratd:
+  build:
+    context: ../platform
+    dockerfile: Dockerfile
+  init: true
+  ports:
+    - "8080:8080"
+  environment:
+    DATABASE_URL: postgres://rat:rat@postgres:5432/rat?sslmode=disable
+    <<: *s3-credentials
+    NESSIE_URL: http://nessie:19120/api/v1
+    RATQ_ADDR: http://ratq:50051
+    RUNNER_ADDR: http://runner:50052
+    EDITION: community
+  depends_on:
+    postgres: { condition: service_healthy }
+    minio: { condition: service_healthy }
+    nessie: { condition: service_healthy }
+  healthcheck:
+    test: ["CMD", "/ratd", "healthcheck"]
+    interval: 5s
+    timeout: 3s
+    retries: 5
+    start_period: 5s
+```
+
+### runner (Python Pipeline Executor)
+
+The heaviest service — executes pipelines with DuckDB, PyArrow, and PyIceberg.
+
+```yaml filename="infra/docker-compose.yml (runner)"
+runner:
+  build:
+    context: ../runner
+    dockerfile: Dockerfile
+  init: true
+  environment:
+    GRPC_PORT: "50052"
+    RATD_CALLBACK_URL: http://ratd:8080
+    <<: *s3-credentials
+    NESSIE_URL: http://nessie:19120/api/v1
+  depends_on:
+    minio: { condition: service_healthy }
+    nessie: { condition: service_healthy }
+  stop_grace_period: 30s
+```
+
+<Callout type="info">
+The runner has a `stop_grace_period: 30s` to allow in-progress pipeline runs to complete gracefully during shutdown. Other services use the default 10-second grace period.
+</Callout>
+
+### portal (Next.js Web IDE)
+
+The user-facing web application. Connects to `ratd` for all API calls.
+
+```yaml filename="infra/docker-compose.yml (portal)"
+portal:
+  build:
+    context: ..
+    dockerfile: portal/Dockerfile
+  init: true
+  ports:
+    - "3000:3000"
+  environment:
+    NEXT_PUBLIC_API_URL: http://localhost:8080
+    API_URL: http://ratd:8080
+  depends_on:
+    ratd: { condition: service_healthy }
+```
+
+<Callout type="warning">
+The portal build context is the monorepo root (`..`), not the `portal/` directory. This is because the Dockerfile needs access to the `sdk-typescript/` directory to build the SDK as part of the portal image.
+</Callout>
+
+---
+
+## Resource Limits and Tuning
+
+Every service has CPU and memory limits. These are configured in the `deploy.resources.limits` section.
+
+### Default Limits
+
+| Service | Memory | CPU | PIDs | Notes |
+|---|---|---|---|---|
+| **ratd** | 512 MB | 1.0 | 100 | Lightweight Go binary |
+| **ratq** | 1 GB | 1.0 | 100 | DuckDB needs memory for query results |
+| **runner** | 2 GB | 2.0 | 100 | Largest — DuckDB + PyArrow + Iceberg writes |
+| **portal** | 512 MB | 1.0 | 100 | Next.js standalone server |
+| **postgres** | 1 GB | 1.0 | 100 | Database engine |
+| **minio** | 1 GB | 1.0 | 100 | Object storage |
+| **nessie** | 512 MB | 1.0 | 100 | Quarkus-based catalog |
+| **minio-init** | 256 MB | 0.5 | 100 | Bootstrap only |
+
+**Total**: ~7.25 GB RAM, 7.5 CPU cores at maximum utilization.
+
+### Tuning for Larger Workloads
+
+If you process large datasets, increase the runner's limits:
+
+```yaml filename="infra/docker-compose.override.yml"
+services:
+  runner:
+    environment:
+      DUCKDB_MEMORY_LIMIT: 4GB
+      DUCKDB_THREADS: 8
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+          cpus: '4.0'
+  ratq:
+    environment:
+      DUCKDB_MEMORY_LIMIT: 4GB
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+```
+
+### Tuning for Minimal Resources
+
+For development on a laptop with 8 GB RAM, reduce limits:
+
+```yaml filename="infra/docker-compose.override.yml"
+services:
+  runner:
+    environment:
+      DUCKDB_MEMORY_LIMIT: 1GB
+      DUCKDB_THREADS: 2
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+  ratq:
+    environment:
+      DUCKDB_MEMORY_LIMIT: 512MB
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+```
+
+---
+
+## Network Architecture
+
+RAT uses two Docker networks to isolate traffic:
+
+### frontend (`rat_frontend`)
+
+Browser-accessible services. Only `portal` and `ratd` are on this network.
+
+| Service | Port | Accessible From |
+|---|---|---|
+| portal | 3000 | Browser |
+| ratd | 8080 | Browser + portal |
+
+### backend (`infra_default`)
+
+Internal service communication. All services are on this network.
+
+| Service | Port | Protocol | Accessible From |
+|---|---|---|---|
+| ratd | 8080 | HTTP | portal, runner (callbacks) |
+| ratq | 50051 | gRPC | ratd |
+| runner | 50052 | gRPC | ratd |
+| postgres | 5432 | TCP | ratd, nessie |
+| minio | 9000 | HTTP | ratd, ratq, runner, nessie |
+| nessie | 19120 | HTTP | ratd, ratq, runner |
+
+<Callout type="info">
+Postgres, MinIO, and Nessie bind to `127.0.0.1` on the host (localhost only). This prevents external access in development. In production, you may want to remove the port bindings entirely or use a reverse proxy.
+</Callout>
+
+### Network Definition
+
+```yaml filename="infra/docker-compose.yml"
+networks:
+  frontend:
+    name: rat_frontend
+  backend:
+    name: infra_default
+```
+
+---
+
+## Volumes and Persistence
+
+RAT uses two named Docker volumes for persistent data:
+
+### postgres_data
+
+Stores all PostgreSQL data: pipeline metadata, run history, schedules, triggers, and quality test results.
+
+```yaml
+volumes:
+  postgres_data:
+```
+
+**Mount point**: `/var/lib/postgresql/data`
+
+### minio_data
+
+Stores all S3 objects: pipeline code, landing zone files, Iceberg data files, and Iceberg metadata.
+
+```yaml
+volumes:
+  minio_data:
+```
+
+**Mount point**: `/data`
+
+<Callout type="warning">
+Removing volumes (`docker compose down -v`) permanently deletes all data. The `minio_data` volume contains your actual data files (Parquet/Iceberg) — losing it means losing all pipeline outputs.
+</Callout>
+
+### External Volumes (Production)
+
+For production, consider using external volumes or bind mounts to a dedicated storage path:
+
+```yaml filename="infra/docker-compose.override.yml"
+volumes:
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/rat/postgres
+  minio_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/rat/minio
+```
+
+---
+
+## Health Checks
+
+Every service registers a Docker health check. The Compose file uses `depends_on` with `condition: service_healthy` to ensure services start in the correct order.
+
+| Service | Health Check | Interval | Retries | Start Period |
+|---|---|---|---|---|
+| **ratd** | `/ratd healthcheck` (CLI) | 5s | 5 | 5s |
+| **ratq** | gRPC channel ready check | 10s | 5 | 15s |
+| **runner** | gRPC channel ready check | 10s | 5 | 15s |
+| **portal** | `wget http://localhost:3000` | 10s | 3 | 30s |
+| **postgres** | `pg_isready` | 5s | 5 | 5s |
+| **minio** | `mc ready local` | 5s | 5 | 5s |
+| **nessie** | HTTP `/q/health/ready` | 10s | 5 | 15s |
+
+### Startup Order
+
+Based on `depends_on` declarations, services start in this order:
+
+<Steps>
+### Infrastructure tier
+Postgres and MinIO start first (no dependencies).
+
+### Catalog tier
+Nessie starts after Postgres is healthy (uses Postgres for metadata storage).
+
+### Service tier
+`ratd`, `ratq`, and `runner` start after their infrastructure dependencies are healthy.
+
+### UI tier
+Portal starts after `ratd` is healthy.
+</Steps>
+
+---
+
+## Shared Configuration
+
+### S3 Credentials Anchor
+
+The compose file uses a YAML anchor to avoid repeating S3 credentials across services:
+
+```yaml filename="infra/docker-compose.yml"
+x-s3-credentials: &s3-credentials
+  S3_ENDPOINT: minio:9000
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+  S3_BUCKET: rat
+  S3_USE_SSL: "false"
+  S3_REGION: us-east-1
+```
+
+Services reference it with `<<: *s3-credentials` in their `environment` block.
+
+### Logging
+
+All services use the `json-file` log driver with rotation:
+
+```yaml filename="infra/docker-compose.yml"
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+This limits each service to 30 MB of logs (3 files x 10 MB each) before rotation.
+
+---
+
+## MinIO Initialization
+
+The `minio-init` container is a one-shot bootstrap job that:
+
+1. Sets up the `mc` (MinIO Client) alias
+2. Creates the `rat` bucket if it does not exist
+3. Enables bucket versioning
+4. Adds a lifecycle rule to expire non-current versions after 7 days
+
+```yaml filename="infra/docker-compose.yml (minio-init)"
+minio-init:
+  image: minio/mc:RELEASE.2024-06-12T14-34-03Z
+  depends_on:
+    minio: { condition: service_healthy }
+  entrypoint: >
+    /bin/sh -c "
+    mc alias set local http://minio:9000 $$S3_ACCESS_KEY $$S3_SECRET_KEY &&
+    mc mb --ignore-existing local/rat &&
+    mc version enable local/rat &&
+    mc ilm rule add local/rat --noncurrent-expire-days 7 --prefix '' || true
+    "
+  restart: on-failure
+```
+
+This container exits after initialization. The `restart: on-failure` policy ensures it retries if MinIO is not yet ready.
+
+---
+
+## Compose Overrides
+
+For local customizations, create a `docker-compose.override.yml` file in the `infra/` directory:
+
+```yaml filename="infra/docker-compose.override.yml"
+services:
+  ratd:
+    environment:
+      RATE_LIMIT: "0"
+      CORS_ORIGINS: "http://localhost:3000,http://localhost:3001"
+    ports:
+      - "8080:8080"
+      - "8081:8081"  # expose gRPC port for debugging
+
+  runner:
+    environment:
+      DUCKDB_MEMORY_LIMIT: 4GB
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+```
+
+Docker Compose automatically merges `docker-compose.yml` with `docker-compose.override.yml` when both exist in the same directory.
+
+<Callout type="info">
+The `docker-compose.override.yml` file is gitignored. Use it for local development customizations that should not be committed.
+</Callout>

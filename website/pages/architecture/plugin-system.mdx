@@ -1,0 +1,453 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Plugin System
+
+RAT's plugin system allows the platform to be extended without modifying core code. The Community Edition ships with no-op implementations for all plugin slots. The Pro Edition adds real implementations (Keycloak auth, container execution, resource sharing, access control, cloud credentials) via closed-source container plugins.
+
+---
+
+## Architecture Overview
+
+<Mermaid chart={`
+flowchart TB
+    subgraph ratd ["ratd (Go API Server)"]
+        Loader["Plugin Loader"]
+        Auth["Auth Middleware"]
+        API["API Handlers"]
+    end
+
+    subgraph Plugins ["Plugin Containers (gRPC)"]
+        AuthPlugin["auth-keycloak\n(JWT validation)"]
+        ExecPlugin["container-executor\n(isolated execution)"]
+        SharePlugin["sharing-plugin\n(grant/revoke access)"]
+        EnforcePlugin["enforcement-plugin\n(CanAccess checks)"]
+        CloudPlugin["cloud-aws\n(credential vending)"]
+    end
+
+    Loader -->|ConnectRPC| AuthPlugin
+    Loader -->|ConnectRPC| ExecPlugin
+    Loader -->|ConnectRPC| SharePlugin
+    Loader -->|ConnectRPC| EnforcePlugin
+    Loader -->|ConnectRPC| CloudPlugin
+    Auth -->|Authenticate| AuthPlugin
+    API -->|CanAccess| EnforcePlugin
+    API -->|ShareResource| SharePlugin
+    API -->|GetCredentials| CloudPlugin
+`} />
+
+---
+
+## Plugin Slots
+
+RAT defines 5 plugin slots. Each slot has a specific interface (protobuf service definition) and responsibility:
+
+| Slot | Proto Service | Responsibility | Community Default | Pro Implementation |
+|------|--------------|----------------|-------------------|--------------------|
+| **auth** | `AuthService` | Authenticate requests (JWT, API key) | Noop (pass-through) | auth-keycloak |
+| **executor** | `ExecutorService` | Execute pipelines in isolated containers | WarmPoolExecutor (built-in) | container-executor |
+| **sharing** | `SharingService` | Share resources between users | Noop (single-user) | sharing-plugin |
+| **enforcement** | `EnforcementService` | Check access permissions | Noop (allow all) | enforcement-plugin |
+| **cloud** | `CloudService` | Vend cloud credentials (AWS, GCP) | Noop (not available) | cloud-aws |
+
+### Base Plugin Interface
+
+Every plugin must implement the base `PluginService`:
+
+```protobuf filename="proto/plugin/v1/plugin.proto"
+service PluginService {
+  // Health check — called periodically by ratd
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;    // "healthy", "degraded", "down"
+  string message = 2;   // Optional details
+}
+```
+
+---
+
+## Plugin Slot Details
+
+### Auth Plugin
+
+The auth plugin intercepts every incoming HTTP request and validates the caller's identity.
+
+```protobuf filename="proto/auth/v1/auth.proto"
+service AuthService {
+  // Validate a bearer token and return the user identity
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+  // Check if a user has a specific permission
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
+}
+
+message AuthenticateRequest {
+  string token = 1;          // Bearer token from Authorization header
+}
+
+message AuthenticateResponse {
+  string user_id = 1;        // Unique user identifier
+  string email = 2;          // User email
+  repeated string roles = 3; // User roles (e.g., "admin", "data-engineer")
+}
+```
+
+**Community behavior**: The Noop auth middleware passes all requests through without validation. Every request is treated as an anonymous single user.
+
+**Pro behavior** (auth-keycloak): Extracts the Bearer token from the `Authorization` header, validates it against Keycloak's JWKS endpoint, extracts user claims, and injects the user identity into the request context.
+
+### Executor Plugin
+
+The executor plugin controls how pipeline runs are dispatched and executed.
+
+```protobuf filename="Executor interface (Go)"
+type Executor interface {
+    Submit(ctx context.Context, req *SubmitRequest) (*RunHandle, error)
+    Cancel(ctx context.Context, runID string) error
+}
+```
+
+**Community behavior**: The built-in `WarmPoolExecutor` dispatches runs to the always-running runner container via ConnectRPC. It polls the runner for status every 5 seconds (with push callback as the primary mechanism).
+
+**Pro behavior** (container-executor): Spins up a fresh container per pipeline run with resource limits, network isolation, and automatic cleanup. Provides stronger isolation for multi-tenant environments.
+
+### Sharing Plugin
+
+The sharing plugin manages resource access grants between users.
+
+```protobuf filename="proto/sharing/v1/sharing.proto"
+service SharingService {
+  rpc ShareResource(ShareResourceRequest) returns (ShareResourceResponse);
+  rpc RevokeAccess(RevokeAccessRequest) returns (RevokeAccessResponse);
+  rpc ListAccess(ListAccessRequest) returns (ListAccessResponse);
+  rpc TransferOwnership(TransferOwnershipRequest) returns (TransferOwnershipResponse);
+}
+```
+
+**Community behavior**: Noop. Single-user platform --- no sharing needed.
+
+**Pro behavior**: Manages the `shares` table. Users can grant read/write access to pipelines, tables, and namespaces. Supports user-level and role-level grants.
+
+### Enforcement Plugin
+
+The enforcement plugin checks whether a user can access a specific resource before the operation proceeds.
+
+```protobuf filename="proto/enforcement/v1/enforcement.proto"
+service EnforcementService {
+  // Check if a user can perform an action on a resource
+  rpc CanAccess(CanAccessRequest) returns (CanAccessResponse);
+  // Get credentials for a cloud resource
+  rpc GetCredentials(GetCredentialsRequest) returns (GetCredentialsResponse);
+}
+```
+
+**Community behavior**: Always returns "allowed". No access control.
+
+**Pro behavior**: Checks ownership + share grants. Pipeline owners have full access. Shared users get read or write access based on their grant level. Admins bypass all checks.
+
+### Cloud Plugin
+
+The cloud plugin provides temporary cloud credentials for accessing external services.
+
+```protobuf filename="proto/enforcement/v1/enforcement.proto (GetCredentials)"
+message GetCredentialsRequest {
+  string provider = 1;     // "aws", "gcp", "azure"
+  string resource = 2;     // ARN, project ID, etc.
+}
+
+message GetCredentialsResponse {
+  map<string, string> credentials = 1;  // Temporary credentials
+  int64 expires_at = 2;                 // Unix timestamp
+}
+```
+
+**Community behavior**: Returns "not available" error. Community Edition uses local MinIO only.
+
+**Pro behavior** (cloud-aws): Uses AWS STS to vend temporary credentials scoped to specific S3 paths. Enables RAT to read/write external AWS data lakes.
+
+---
+
+## Configuration
+
+Plugins are configured in `rat.yaml`:
+
+```yaml filename="rat.yaml"
+plugins:
+  auth:
+    image: ghcr.io/squat-collective/auth-keycloak:latest
+    address: auth-keycloak:50060
+    config:
+      keycloak_url: http://keycloak:8080
+      realm: rat
+      client_id: rat-api
+
+  executor:
+    image: ghcr.io/squat-collective/container-executor:latest
+    address: container-executor:50061
+
+  sharing:
+    image: ghcr.io/squat-collective/sharing-plugin:latest
+    address: sharing-plugin:50062
+
+  enforcement:
+    image: ghcr.io/squat-collective/enforcement-plugin:latest
+    address: enforcement-plugin:50063
+
+  cloud:
+    image: ghcr.io/squat-collective/cloud-aws:latest
+    address: cloud-aws:50064
+    config:
+      region: us-east-1
+      role_arn: arn:aws:iam::123456789012:role/rat-data-access
+```
+
+### Configuration Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `image` | Yes | Container image reference |
+| `address` | Yes | gRPC address (`host:port`) |
+| `config` | No | Plugin-specific configuration (passed to the plugin) |
+
+If a plugin slot is not configured in `rat.yaml`, ratd uses the built-in Noop implementation for that slot.
+
+---
+
+## Plugin Loading
+
+On startup, ratd's plugin loader:
+
+<Steps>
+
+### Read rat.yaml
+
+The loader reads the `plugins` section from `rat.yaml` and identifies which slots have configured plugins.
+
+### Register plugins in Postgres
+
+For each configured plugin, the loader upserts a row in the `plugins` table with the plugin name, slot, image, and initial status (`unknown`).
+
+### Establish gRPC connections
+
+The loader creates ConnectRPC client connections to each plugin's gRPC address. Connections use a 5-second dial timeout.
+
+### Initial health check
+
+The loader calls `HealthCheck` on each plugin. If a plugin is unreachable, it is marked as `down` but does not block startup. ratd starts with degraded functionality.
+
+### Wire middleware and handlers
+
+- The **auth plugin** is wired into the HTTP middleware chain (layer 9)
+- The **enforcement plugin** is injected into API handlers as a dependency
+- The **sharing plugin** is injected into the sharing API handlers
+- The **executor plugin** replaces the default WarmPoolExecutor
+- The **cloud plugin** is injected into credential-vending handlers
+
+</Steps>
+
+<Mermaid chart={`
+flowchart LR
+    A["rat.yaml"] --> B["Plugin Loader"]
+    B --> C["Register in Postgres"]
+    B --> D["Create gRPC clients"]
+    D --> E["Health check"]
+    E --> F{Healthy?}
+    F -->|Yes| G["Wire into ratd"]
+    F -->|No| H["Mark as down\nUse Noop fallback"]
+`} />
+
+---
+
+## Health Checking
+
+ratd periodically health-checks all registered plugins:
+
+| Property | Value |
+|----------|-------|
+| **Interval** | 30 seconds |
+| **Timeout** | 5 seconds per plugin |
+| **Protocol** | gRPC `HealthCheck` RPC |
+| **Status values** | `healthy`, `degraded`, `down`, `unknown` |
+
+### Health Status in Postgres
+
+The `plugins` table tracks health:
+
+```sql filename="plugins table"
+SELECT name, slot, status, last_health FROM plugins;
+
+-- Example output:
+-- name            | slot        | status  | last_health
+-- auth-keycloak   | auth        | healthy | 2026-02-16 10:30:00
+-- cloud-aws       | cloud       | down    | 2026-02-16 10:29:30
+```
+
+### Health in API Response
+
+The `/health` endpoint includes plugin health:
+
+```json filename="GET /health"
+{
+  "status": "ok",
+  "services": {
+    "postgres": "healthy",
+    "minio": "healthy",
+    "nessie": "healthy",
+    "runner": "healthy",
+    "ratq": "healthy"
+  },
+  "plugins": {
+    "auth-keycloak": "healthy",
+    "cloud-aws": "down"
+  }
+}
+```
+
+### Feature Flags
+
+The `/features` endpoint reports which plugin capabilities are active:
+
+```json filename="GET /features"
+{
+  "edition": "pro",
+  "auth": true,
+  "sharing": true,
+  "enforcement": true,
+  "container_executor": true,
+  "cloud_aws": true,
+  "pipeline_triggers": true,
+  "pipeline_versions": true
+}
+```
+
+---
+
+## Community vs Pro
+
+<Callout type="info">
+The Community Edition is fully functional for single-user, self-hosted use. All data processing capabilities are identical. Pro adds multi-user collaboration, security, and cloud integration.
+</Callout>
+
+| Feature | Community (Free) | Pro (Paid) |
+|---------|-----------------|------------|
+| Pipeline execution | Built-in WarmPoolExecutor | Container-isolated executor |
+| Authentication | Noop (no auth) or API key | Keycloak JWT (OIDC) |
+| Authorization | None (single user) | Role-based access control |
+| Resource sharing | N/A | Grant/revoke per resource |
+| Cloud credentials | Local MinIO only | AWS STS credential vending |
+| Multi-user | No | Yes |
+| Audit logging | Basic (built-in) | Full audit trail |
+
+### How Pro Plugins Integrate
+
+Pro plugins are distributed as Docker images and added to the compose file:
+
+```yaml filename="docker-compose.pro.yml (overlay)"
+services:
+  auth-keycloak:
+    image: ghcr.io/squat-collective/auth-keycloak:latest
+    networks:
+      - backend
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    networks:
+      - backend
+```
+
+The Pro compose file is used as an overlay:
+
+```bash filename="Starting with Pro plugins"
+docker compose \
+  -f infra/docker-compose.yml \
+  -f ../rat-pro/infra/docker-compose.pro.yml \
+  up -d
+```
+
+---
+
+## Writing a Custom Plugin
+
+While Pro plugins are closed-source, the plugin interfaces are open. You can write your own plugins for any slot.
+
+### Requirements
+
+1. Implement the base `PluginService.HealthCheck` RPC
+2. Implement the slot-specific service RPCs
+3. Package as a Docker container
+4. Configure in `rat.yaml`
+
+### Example: Custom Auth Plugin
+
+<Steps>
+
+### Define the gRPC server
+
+Implement `AuthService.Authenticate` and `AuthService.Authorize` in your language of choice. The proto definitions are in `proto/auth/v1/auth.proto`.
+
+### Implement health check
+
+```go filename="health.go"
+func (s *Server) HealthCheck(
+    ctx context.Context,
+    req *connect.Request[pluginv1.HealthCheckRequest],
+) (*connect.Response[pluginv1.HealthCheckResponse], error) {
+    return connect.NewResponse(&pluginv1.HealthCheckResponse{
+        Status:  "healthy",
+        Message: "Custom auth plugin is running",
+    }), nil
+}
+```
+
+### Package as Docker image
+
+```dockerfile filename="Dockerfile"
+FROM golang:1.22-alpine AS build
+WORKDIR /app
+COPY . .
+RUN go build -o /auth-plugin ./cmd/server
+
+FROM scratch
+COPY --from=build /auth-plugin /auth-plugin
+EXPOSE 50060
+ENTRYPOINT ["/auth-plugin"]
+```
+
+### Configure in rat.yaml
+
+```yaml filename="rat.yaml"
+plugins:
+  auth:
+    image: my-auth-plugin:latest
+    address: my-auth-plugin:50060
+```
+
+</Steps>
+
+<Callout type="warning">
+Custom plugins must follow the exact protobuf contract. If the `Authenticate` RPC returns an error, ratd rejects the request with a 401. If the health check fails, the plugin is marked as `down` and ratd falls back to Noop behavior for that slot.
+</Callout>
+
+---
+
+## Plugin Communication
+
+All plugin communication uses **ConnectRPC** (a modern gRPC framework that works over HTTP/1.1 and HTTP/2). This means:
+
+- **curl-friendly** --- you can test plugins with standard HTTP tools
+- **No gRPC-Web proxy needed** --- ConnectRPC speaks standard HTTP
+- **Streaming support** --- for plugins that need real-time data (e.g., log forwarding)
+- **Type-safe** --- generated from protobuf definitions, compile-time checked
+
+### Connection Management
+
+ratd maintains a persistent gRPC connection to each plugin. Connections are:
+
+- **Lazy-initialized** on first use
+- **Automatically reconnected** on failure
+- **Timeout-bounded** (5 second dial timeout, 10 second RPC timeout)
+- **Load-balanced** if the plugin runs multiple replicas (via DNS round-robin)

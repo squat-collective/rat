@@ -1,0 +1,42 @@
+syntax = "proto3";
+package ratatouille.executor.v1;
+
+option go_package = "github.com/rat-data/rat/platform/gen/executor/v1;executorv1";
+
+import "common/v1/common.proto";
+
+// Field reservation policy: see common/v1/common.proto.
+// When removing fields, always add `reserved` for both the number and name.
+
+// ExecutorService handles pipeline execution dispatch.
+// Implemented by Pro executor plugins (e.g., ContainerExecutor).
+// Called by ratd (Go platform) via ConnectRPC.
+service ExecutorService {
+  // Submit a pipeline for execution.
+  // The run_id is owned by ratd -- the plugin uses it to track the run.
+  rpc Submit(SubmitRequest) returns (SubmitResponse);
+
+  // Get the current status of a run.
+  rpc GetRunStatus(ratatouille.common.v1.GetRunStatusRequest) returns (ratatouille.common.v1.GetRunStatusResponse);
+
+  // Stream logs from a running or completed pipeline.
+  rpc StreamLogs(ratatouille.common.v1.StreamLogsRequest) returns (stream ratatouille.common.v1.LogEntry);
+
+  // Cancel a running pipeline.
+  rpc Cancel(ratatouille.common.v1.CancelRunRequest) returns (ratatouille.common.v1.CancelRunResponse);
+}
+
+message SubmitRequest {
+  string run_id = 1;              // ratd-owned UUID -- the plugin uses this to track the run
+  string namespace = 2;           // target namespace (e.g., "default", "ecommerce")
+  ratatouille.common.v1.Layer layer = 3;  // target layer (bronze, silver, gold)
+  string pipeline_name = 4;       // pipeline name within the namespace/layer
+  string trigger = 5;             // trigger source: "manual", "schedule:hourly", "sensor:upstream"
+  ratatouille.common.v1.S3Credentials s3_credentials = 6;  // per-run S3 connection parameters for namespace isolation
+  map<string, string> env = 7;       // additional environment variables injected into the runner
+}
+
+message SubmitResponse {
+  string run_id = 1;              // echoed back from the request
+  ratatouille.common.v1.RunStatus status = 2;  // initial status (typically RUNNING)
+}

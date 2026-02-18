@@ -1,0 +1,215 @@
+import { Callout } from 'nextra/components'
+
+# Lineage
+
+The lineage endpoint returns the full data lineage graph (DAG) for your platform, showing how pipelines, tables, and landing zones are connected. The portal uses this data to render the interactive DAG visualization.
+
+---
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/lineage` | Get the lineage graph |
+
+---
+
+## Get Lineage Graph
+
+```
+GET /api/v1/lineage
+```
+
+Builds and returns the full lineage graph by:
+
+1. Listing all pipelines
+2. Reading pipeline SQL/Python files in parallel (bounded to 20 concurrent reads) to extract `ref()` and `landing_zone()` dependencies
+3. Batch-fetching latest runs, quality test counts, tables, and landing zones in parallel
+4. Constructing the DAG with nodes and edges
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `namespace` | `string` | — | Filter to a single namespace (optional) |
+
+### Request
+
+```bash
+curl "http://localhost:8080/api/v1/lineage?namespace=default"
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "nodes": [
+    {
+      "id": "pipeline:default.silver.orders",
+      "type": "pipeline",
+      "namespace": "default",
+      "layer": "silver",
+      "name": "orders",
+      "latest_run": {
+        "id": "run-uuid",
+        "status": "success",
+        "started_at": "2026-02-12T14:00:00Z",
+        "duration_ms": 4500
+      },
+      "quality": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0,
+        "warned": 0
+      }
+    },
+    {
+      "id": "table:default.silver.orders",
+      "type": "table",
+      "namespace": "default",
+      "layer": "silver",
+      "name": "orders",
+      "table_stats": {
+        "row_count": 12340,
+        "size_bytes": 524288
+      }
+    },
+    {
+      "id": "table:default.bronze.raw_orders",
+      "type": "table",
+      "namespace": "default",
+      "layer": "bronze",
+      "name": "raw_orders",
+      "table_stats": {
+        "row_count": 15000,
+        "size_bytes": 800000
+      }
+    },
+    {
+      "id": "landing:default.raw-uploads",
+      "type": "landing_zone",
+      "namespace": "default",
+      "name": "raw-uploads",
+      "landing_info": {
+        "file_count": 5
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "table:default.bronze.raw_orders",
+      "target": "pipeline:default.silver.orders",
+      "type": "ref"
+    },
+    {
+      "source": "pipeline:default.silver.orders",
+      "target": "table:default.silver.orders",
+      "type": "produces"
+    },
+    {
+      "source": "landing:default.raw-uploads",
+      "target": "pipeline:default.bronze.ingest",
+      "type": "landing_input"
+    }
+  ]
+}
+```
+
+---
+
+## Node Types
+
+| Type | ID Format | Description |
+|---|---|---|
+| `pipeline` | `pipeline:{namespace}.{layer}.{name}` | A data pipeline |
+| `table` | `table:{namespace}.{layer}.{name}` | An Iceberg table in the data lake |
+| `landing_zone` | `landing:{namespace}.{name}` | A landing zone for file uploads |
+
+### Pipeline Node Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | Node identifier |
+| `type` | `string` | Always `pipeline` |
+| `namespace` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Pipeline name |
+| `latest_run` | `object\|null` | Most recent run summary |
+| `latest_run.id` | `string` | Run UUID |
+| `latest_run.status` | `string` | Run status |
+| `latest_run.started_at` | `string` | ISO 8601 start timestamp |
+| `latest_run.duration_ms` | `integer` | Execution duration in milliseconds |
+| `quality` | `object\|null` | Quality test summary |
+| `quality.total` | `integer` | Total number of quality tests |
+| `quality.passed` | `integer` | Number of passing tests |
+| `quality.failed` | `integer` | Number of failing tests |
+| `quality.warned` | `integer` | Number of tests with warnings |
+
+### Table Node Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | Node identifier |
+| `type` | `string` | Always `table` |
+| `namespace` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Table name |
+| `table_stats` | `object\|null` | Table statistics |
+| `table_stats.row_count` | `integer` | Number of rows |
+| `table_stats.size_bytes` | `integer` | Table size in bytes |
+
+### Landing Zone Node Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | Node identifier |
+| `type` | `string` | Always `landing_zone` |
+| `namespace` | `string` | Namespace |
+| `name` | `string` | Zone name |
+| `landing_info` | `object` | Landing zone stats |
+| `landing_info.file_count` | `integer` | Number of files in the zone |
+
+---
+
+## Edge Types
+
+| Type | Source | Target | Description |
+|---|---|---|---|
+| `ref` | `table` | `pipeline` | Table is read by a pipeline (via `ref()` in SQL/Python) |
+| `produces` | `pipeline` | `table` | Pipeline writes to a table (convention: same ns.layer.name) |
+| `landing_input` | `landing_zone` | `pipeline` | Landing zone feeds a pipeline (via `landing_zone()` in SQL/Python) |
+
+### Edge Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | `string` | Source node ID |
+| `target` | `string` | Target node ID |
+| `type` | `string` | Edge type: `ref`, `produces`, or `landing_input` |
+
+---
+
+## Orphan Nodes
+
+Orphan tables (not produced by any pipeline) and orphan landing zones (not referenced by any pipeline) are included as disconnected nodes in the graph. These appear as isolated nodes in the portal's DAG visualization.
+
+<Callout type="info">
+The lineage graph is computed on-the-fly from the current state of pipelines and their source files. It is not cached — each request reads all pipeline files and constructs the graph from scratch. For large deployments, the `namespace` filter can significantly reduce response time by limiting the scope of the graph.
+</Callout>
+
+---
+
+## How Dependencies Are Detected
+
+Dependencies are extracted by parsing pipeline source files:
+
+| Function | Creates Edge | Example |
+|---|---|---|
+| `ref('layer.name')` | `ref` edge from `table:{ns}.{layer}.{name}` to the pipeline | `{{ ref('bronze.raw_orders') }}` |
+| `ref('ns.layer.name')` | `ref` edge from `table:{ns}.{layer}.{name}` to the pipeline | `{{ ref('shared.silver.customers') }}` |
+| `landing_zone('name')` | `landing_input` edge from `landing:{ns}.{name}` to the pipeline | `{{ landing_zone('raw-uploads') }}` |
+| _(implicit)_ | `produces` edge from the pipeline to `table:{ns}.{layer}.{pipeline_name}` | Every pipeline produces a table with the same name |
+
+<Callout type="info">
+Cross-namespace references (3-part `ref()`) create edges that span namespaces, even when the lineage is filtered to a single namespace. The portal renders these as cross-boundary connections.
+</Callout>

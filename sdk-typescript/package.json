@@ -1,0 +1,47 @@
+{
+  "name": "@squat-collective/rat-client",
+  "version": "2.0.0",
+  "description": "TypeScript client SDK for the RAT data platform API",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/squat-collective/ratatouille.git",
+    "directory": "sdk-typescript"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "check": "tsc --noEmit && vitest run"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  },
+  "keywords": [
+    "rat",
+    "data",
+    "client",
+    "sdk",
+    "api"
+  ],
+  "license": "AGPL-3.0-only"
+}

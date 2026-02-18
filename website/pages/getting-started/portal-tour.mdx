@@ -1,0 +1,380 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Portal Tour
+
+The RAT Portal is a web-based IDE where you do everything — write pipelines, run them,
+query data, explore tables, and monitor your platform. This page walks through every
+section of the interface.
+
+**Open the Portal:** [http://localhost:3000](http://localhost:3000)
+
+---
+
+## Dashboard (Home)
+
+The dashboard is the first thing you see when you open the Portal. It gives you a
+high-level overview of your platform's health and activity.
+
+### What you will see
+
+- **Stats cards** — Total pipelines, total runs (today), success rate, and active
+  schedules. These give you an at-a-glance summary of platform activity.
+- **Pipeline breakdown by layer** — A chart showing how many pipelines exist in each
+  layer (Bronze, Silver, Gold). Helps you understand the shape of your data platform.
+- **Recent runs** — A list of the most recent pipeline runs with status badges
+  (success, failed, running, cancelled). Click any run to jump to its detail page.
+
+<Callout type="info">
+The dashboard auto-refreshes periodically, so you can leave it open as a monitoring
+screen while pipelines are running.
+</Callout>
+
+---
+
+## Pipelines
+
+The Pipelines page lists every pipeline in your platform. This is your main workspace
+for managing data transformations.
+
+### List view
+
+- Each pipeline is shown as a row with its **namespace**, **layer** (color-coded badge),
+  **name**, **type** (SQL or Python), **last run status**, and **last modified** time.
+- Use the **search bar** to filter by name.
+- Use the **layer filter** buttons (Bronze / Silver / Gold) to show only pipelines in a
+  specific layer.
+- Use the **namespace dropdown** to scope the view to a single namespace.
+
+### Create dialog
+
+Click **+ New Pipeline** to open the creation dialog:
+
+| Field | Description |
+|---|---|
+| **Namespace** | Select an existing namespace or type a new one |
+| **Layer** | Choose Bronze, Silver, or Gold |
+| **Name** | Pipeline name (lowercase, underscores, no spaces) |
+| **Type** | SQL or Python |
+
+<Callout type="info">
+Pipeline names must be unique within a namespace + layer combination. For example, you
+can have `default.bronze.orders` and `default.silver.orders`, but not two pipelines
+called `default.bronze.orders`.
+</Callout>
+
+---
+
+## Pipeline Detail
+
+Clicking on a pipeline takes you to its detail page. This is where you write code, manage
+quality tests, configure settings, and view version history. The page has **four tabs**.
+
+### Overview tab
+
+The Overview tab shows the pipeline's metadata and version history.
+
+- **Version history** — A timeline of all published versions with timestamps and
+  change indicators. Each publish creates a numbered snapshot.
+- **Rollback** — Click on any previous version to preview it, then click **Rollback**
+  to restore that version as the active code. The current version is preserved in
+  history so you can always undo a rollback.
+- **Run history** — A compact list of recent runs directly on this page, showing status
+  and duration for quick reference.
+
+### Code tab
+
+This is the IDE — where you spend most of your time.
+
+- **File tree** (left panel) — Shows the pipeline's files. SQL pipelines have a single
+  `pipeline.sql` file. Python pipelines may have multiple files including
+  `pipeline.py` and supporting modules.
+- **CodeMirror editor** (center) — Full-featured code editor with syntax highlighting,
+  autocomplete, bracket matching, and keyboard shortcuts. Supports SQL and Python.
+- **Preview panel** (bottom) — Shows query results when you run a preview
+  (`Ctrl+Shift+Enter`). Displays as a data table with sortable columns.
+- **Toolbar** — Save, Preview, Publish, and Run buttons across the top.
+
+**Keyboard shortcuts in the editor:**
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+S` / `Cmd+S` | Save |
+| `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Preview output |
+| `Ctrl+/` / `Cmd+/` | Toggle line comment |
+| `Ctrl+D` / `Cmd+D` | Select next occurrence |
+| `Ctrl+F` / `Cmd+F` | Find |
+| `Ctrl+H` / `Cmd+H` | Find and replace |
+
+### Quality tab
+
+Manage quality tests that run after every pipeline execution.
+
+- **Test list** — Shows all quality tests attached to this pipeline, with their
+  severity (error or warn) and last result (pass/fail).
+- **Add test** — Click to create a new quality test. Each test is a SQL query that
+  should return **zero rows** to pass. Any rows returned indicate a quality failure.
+- **Severity levels:**
+  - **Error** — Blocks the merge. If this test fails, the pipeline run fails and data
+    is not written to the main catalog.
+  - **Warn** — The run succeeds but a warning is logged. Use for non-critical checks.
+
+Example quality test:
+
+```sql filename="Quality test: no_null_order_ids"
+-- Returns rows where order_id is null (should be zero)
+SELECT * FROM {{ this }} WHERE order_id IS NULL
+```
+
+<Callout type="info">
+In quality tests, `{{ this }}` refers to the output table of the current pipeline run
+(on the isolated Nessie branch, before merge). This lets you validate data before it
+reaches production.
+</Callout>
+
+### Settings tab
+
+Configure pipeline behavior and metadata.
+
+- **Metadata** — Description, tags, and owner (Community Edition shows a single user).
+- **Merge strategy** — How the pipeline output is merged into the target table:
+  - `full_refresh` — Drop and recreate the table every run
+  - `incremental` — Upsert based on unique key and watermark
+  - `append_only` — Insert new rows without deduplication
+  - `delete_insert` — Delete matching rows, then insert
+  - `scd2` — Slowly Changing Dimension Type 2 (track historical changes)
+  - `snapshot` — Periodic full snapshot with timestamp
+- **Unique key** — Column(s) used for deduplication (required for incremental and
+  delete_insert strategies).
+- **Watermark column** — Column used to detect new/changed rows in incremental mode.
+- **Triggers** — Configure what causes this pipeline to run automatically (cron
+  schedule, upstream pipeline success, landing zone upload, etc.).
+- **Retention** — How many historical run records and data snapshots to keep.
+- **Delete** — Permanently delete the pipeline and optionally its Iceberg table.
+
+<Callout type="warning">
+Deleting a pipeline is irreversible. The Iceberg table data in MinIO can optionally be
+retained even after pipeline deletion.
+</Callout>
+
+---
+
+## Query Console
+
+The Query Console is a split-pane interactive SQL environment for ad-hoc queries against
+your data.
+
+- **Schema sidebar** (left) — Browse all available tables grouped by namespace and
+  layer. Click a table to see its columns and types. Click a column name to insert it
+  into the editor.
+- **SQL editor** (center) — Write and execute SQL queries. Supports DuckDB SQL syntax
+  including window functions, CTEs, JSON operations, and more.
+- **Results table** (bottom) — Displays query results as a paginated, sortable table.
+  Columns are type-colored (numbers in green, strings in white, timestamps in purple).
+  Shows row count and execution time.
+
+**Run a query:** Press `Ctrl+Enter` / `Cmd+Enter` or click the **Run** button.
+
+<Callout type="info">
+The Query Console runs through **ratq** (the query service), which operates in
+**read-only mode**. You cannot modify data from the Query Console — only pipelines
+can write data. This is by design to keep production data safe from accidental mutations.
+</Callout>
+
+**Useful DuckDB features available in the Query Console:**
+
+```sql filename="Query Console"
+-- Describe a table's schema
+DESCRIBE "default"."bronze"."raw_orders";
+
+-- Show all tables
+SHOW TABLES;
+
+-- Export query results to CSV (downloads in browser)
+COPY (SELECT * FROM "default"."bronze"."raw_orders") TO '/dev/stdout' (FORMAT CSV);
+
+-- Use DuckDB's powerful SQL extensions
+SELECT
+    customer,
+    LIST(order_id) AS all_orders,
+    QUANTILE_CONT(amount, 0.5) AS median_amount
+FROM "default"."bronze"."raw_orders"
+GROUP BY customer;
+```
+
+---
+
+## Runs
+
+The Runs page shows all pipeline executions across the platform.
+
+### List view
+
+- **Auto-refresh** — The page polls for updates every few seconds. Running pipelines
+  update their status and duration in real-time.
+- **Status badges** — Color-coded indicators:
+  - **Pending** (gray) — Queued, waiting for a runner
+  - **Running** (blue, animated) — Currently executing
+  - **Success** (green) — Completed successfully, data merged
+  - **Failed** (red) — Execution or quality test failed, data not merged
+  - **Cancelled** (yellow) — Manually cancelled by the user
+- **Filters** — Filter by status, namespace, layer, or pipeline name.
+- **Columns** — Pipeline name, status, trigger type, duration, started at.
+
+### Run Detail
+
+Click any run to see its full detail page:
+
+- **Metadata panel** — Pipeline name, run ID, trigger type (manual, schedule, sensor),
+  start time, end time, duration, and merge strategy used.
+- **Live log stream** — Logs are streamed in real-time using Server-Sent Events (SSE).
+  Each log line is timestamped and color-coded by level (INFO, WARN, ERROR).
+  The log auto-scrolls to the latest entry while the run is active.
+- **Quality test results** — If the pipeline has quality tests, their results are shown
+  in a table: test name, severity, status (pass/fail), number of failing rows.
+- **Cancel button** — For running pipelines, a **Cancel** button sends a cancellation
+  signal to the runner. The run will transition to **cancelled** status.
+
+<Callout type="info">
+Logs are retained according to the platform's retention policy. By default, logs are
+kept for 30 days. You can configure this in Settings.
+</Callout>
+
+---
+
+## Lineage
+
+The Lineage page shows a directed acyclic graph (DAG) of how your pipelines and tables
+relate to each other.
+
+### DAG visualization
+
+The graph is rendered with ReactFlow and supports pan, zoom, and drag interactions.
+
+**Three node types:**
+
+| Node | Shape | Description |
+|---|---|---|
+| **Pipeline** | Rectangle with gear icon | A SQL or Python pipeline |
+| **Table** | Rectangle with table icon | An Iceberg table (output of a pipeline) |
+| **Landing Zone** | Rectangle with upload icon | A file upload area |
+
+**Edges** represent data flow:
+- A pipeline **reads from** a table when it uses `{{ ref('...') }}`
+- A pipeline **writes to** its output table
+- A pipeline **reads from** a landing zone when it uses `{{ landing_zone('...') }}`
+
+### Namespace filter
+
+Use the namespace dropdown at the top to scope the DAG to a specific namespace. With
+large platforms, this keeps the graph readable by showing only the relevant subgraph.
+
+<Callout type="info">
+The lineage graph is generated automatically from your pipeline code. Every time you use
+`ref()` or `landing_zone()` in your SQL, RAT parses these references and builds the
+dependency graph. No manual configuration is needed.
+</Callout>
+
+---
+
+## Explorer
+
+The Explorer is a catalog browser that shows all tables in your platform.
+
+### Table list
+
+Tables are grouped hierarchically:
+
+```
+namespace/
+  layer/
+    table_name (row count)
+```
+
+Each table shows its row count, last updated timestamp, and size on disk.
+
+### Table Detail
+
+Click a table to open its detail page with **three tabs**:
+
+- **Schema** — Column names, data types (INT, VARCHAR, TIMESTAMP, etc.), and
+  nullability. Useful for understanding the shape of your data.
+- **Docs** — An editable Markdown documentation area. Write descriptions for the table
+  and individual columns. This documentation is stored in `.meta.yaml` files alongside
+  the pipeline code.
+- **Preview** — A quick-look table showing sample data (first 100 rows). Equivalent to
+  running `SELECT * FROM table LIMIT 100` in the Query Console.
+
+---
+
+## Landing Zones
+
+Landing Zones are file upload areas for raw data ingestion. They are the entry point for
+getting external data into RAT.
+
+### What you can do
+
+- **Create a landing zone** — Give it a name and configure which namespace/layer to
+  target.
+- **Upload files** — Drag and drop CSV, Parquet, JSON, or other data files. Files are
+  stored in MinIO (S3).
+- **View samples** — After uploading, see a preview of the file contents so you can
+  verify the data looks correct before triggering a pipeline.
+- **Trigger configuration** — Set up a pipeline to automatically run whenever new files
+  land in this zone. This is the `landing_zone_upload` trigger type.
+
+<Callout type="info">
+Landing Zones are typically paired with Bronze pipelines that use the
+`{{ landing_zone('zone_name') }}` function to read uploaded files and write them as
+Iceberg tables.
+</Callout>
+
+---
+
+## Settings
+
+The Settings page configures platform-wide behavior.
+
+- **Edition info** — Shows whether you are running Community Edition or Pro Edition,
+  along with the current version number and build info.
+- **Retention configuration** — Set how long run records, logs, and data snapshots are
+  retained before the reaper daemon cleans them up:
+  - Run record retention (default: 30 days)
+  - Log retention (default: 30 days)
+  - Data snapshot retention (default: 90 days)
+- **Reaper status** — Shows whether the background reaper daemon is active and when it
+  last ran. The reaper prunes old run records, fails stuck runs, and cleans up orphaned
+  Nessie branches.
+
+<Callout type="info">
+Pro Edition adds additional settings sections for multi-user management, authentication
+providers, sharing permissions, and license management.
+</Callout>
+
+---
+
+## Navigation Summary
+
+| Sidebar Item | Purpose |
+|---|---|
+| **Dashboard** | Platform overview, stats, recent runs |
+| **Pipelines** | Create, edit, manage data pipelines |
+| **Runs** | Monitor pipeline executions |
+| **Query Console** | Interactive SQL against your data |
+| **Lineage** | DAG visualization of pipeline dependencies |
+| **Explorer** | Browse tables, schemas, and data |
+| **Landing Zones** | Upload and manage raw data files |
+| **Settings** | Platform configuration and administration |
+
+---
+
+## Next Steps
+
+<Cards>
+  <Card title="Your First Pipeline" href="/getting-started/first-pipeline">
+    Build a pipeline hands-on using the Portal
+  </Card>
+  <Card title="Core Concepts" href="/getting-started/concepts">
+    Understand the data model behind what you see in the Portal
+  </Card>
+</Cards>

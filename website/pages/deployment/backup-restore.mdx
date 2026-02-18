@@ -1,0 +1,328 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Backup & Restore
+
+RAT stores data in two places: **PostgreSQL** (platform state) and **MinIO** (data files). Both must be backed up together to ensure a consistent recovery.
+
+---
+
+## What Gets Backed Up
+
+<Mermaid chart={`
+flowchart LR
+    subgraph backup["Backup Contents"]
+        subgraph pg["Postgres (pg_dump)"]
+            pipelines["Pipeline metadata"]
+            runs["Run history"]
+            schedules["Schedules"]
+            triggers["Triggers"]
+            namespaces["Namespaces"]
+            quality["Quality test configs"]
+        end
+        subgraph s3["MinIO (mc mirror)"]
+            code["Pipeline code (.sql, .py)"]
+            landing["Landing zone files"]
+            iceberg["Iceberg data (Parquet)"]
+            metadata["Iceberg metadata"]
+        end
+    end
+`} />
+
+### PostgreSQL
+
+Contains all platform state:
+
+| Data | Description |
+|---|---|
+| Pipelines | Pipeline definitions, ownership, layer/namespace assignments |
+| Runs | Run history, status, duration, trigger source |
+| Schedules | Cron schedules and their state (last/next run) |
+| Triggers | Pipeline triggers (cron, event, dependency) |
+| Namespaces | Namespace definitions |
+| Quality tests | Quality test configurations and results |
+| Ownership | Resource ownership and sharing records |
+
+### MinIO (S3)
+
+Contains all data files:
+
+| Data | Description |
+|---|---|
+| Pipeline code | SQL and Python pipeline source files |
+| Landing zones | Uploaded CSV/JSON/Parquet files awaiting ingestion |
+| Iceberg data | Parquet data files produced by pipeline runs |
+| Iceberg metadata | Table metadata, snapshots, manifests |
+| Config files | `config.yaml` files for pipelines |
+
+---
+
+## Creating a Backup
+
+### Using make backup
+
+The simplest way to create a backup:
+
+```bash filename="Terminal"
+make backup
+```
+
+This creates a timestamped directory under `./backups/`:
+
+```
+./backups/20260216_093000/
+├── postgres/
+│   └── rat.dump           # pg_dump custom format
+└── minio/
+    └── rat/               # full mirror of the S3 bucket
+        ├── ecommerce/
+        │   ├── pipelines/
+        │   ├── landing/
+        │   └── ...
+        └── ...
+```
+
+### What Happens Internally
+
+<Steps>
+
+### PostgreSQL dump
+
+Runs `pg_dump` in custom format (`-Fc`) against the running Postgres container:
+
+```bash
+docker compose exec -T postgres pg_dump -U rat -Fc rat > backups/<timestamp>/postgres/rat.dump
+```
+
+Custom format supports parallel restore and selective table recovery.
+
+### MinIO mirror
+
+Runs `mc mirror` to copy all objects from the MinIO bucket to the local filesystem:
+
+```bash
+docker run --rm --network <compose-network> \
+  -v <backup-dir>/minio:/backup \
+  minio/mc mirror --overwrite local/ /backup/
+```
+
+This copies every object in every bucket, preserving the directory structure.
+
+</Steps>
+
+<Callout type="info">
+The backup runs while services are online. PostgreSQL's `pg_dump` creates a consistent snapshot using MVCC. MinIO mirror copies files as they exist at the time of mirroring — if a pipeline run is actively writing, some objects may be partially copied. For maximum consistency, consider stopping the runner before backing up.
+</Callout>
+
+### Backup Duration
+
+Backup time depends on data volume:
+
+| Data Size | Postgres Dump | MinIO Mirror | Total |
+|---|---|---|---|
+| Small (< 1 GB) | ~5 seconds | ~30 seconds | ~35 seconds |
+| Medium (1-10 GB) | ~15 seconds | ~5 minutes | ~5 minutes |
+| Large (10-100 GB) | ~30 seconds | ~30 minutes | ~30 minutes |
+
+---
+
+## Restoring from Backup
+
+### Using make restore
+
+```bash filename="Terminal"
+make restore BACKUP_DIR=./backups/20260216_093000
+```
+
+<Callout type="error">
+Restoring **replaces** all current data. Any changes made after the backup was created will be lost. Make sure you are restoring to the correct backup.
+</Callout>
+
+### What Happens Internally
+
+<Steps>
+
+### Verify backup files
+
+The restore command checks that both `postgres/rat.dump` and `minio/` exist in the backup directory.
+
+### Restore PostgreSQL
+
+Runs `pg_restore` with `--clean --if-exists --no-owner`:
+
+```bash
+docker compose exec -T postgres pg_restore -U rat -d rat \
+  --clean --if-exists --no-owner -Fc < backups/<timestamp>/postgres/rat.dump
+```
+
+- `--clean`: Drops existing objects before recreating them
+- `--if-exists`: Does not error if objects do not exist yet
+- `--no-owner`: Skips ownership commands (avoids errors with different usernames)
+
+### Restore MinIO
+
+Runs `mc mirror` in reverse to copy files back to MinIO:
+
+```bash
+docker run --rm --network <compose-network> \
+  -v <backup-dir>/minio:/backup:ro \
+  minio/mc mirror --overwrite /backup/ local/
+```
+
+</Steps>
+
+### Listing Available Backups
+
+If you run `make restore` without specifying `BACKUP_DIR`, it lists all available backups:
+
+```bash filename="Terminal"
+make restore
+# Output:
+# ❌ Usage: make restore BACKUP_DIR=./backups/<timestamp>
+#    Available backups:
+#    ./backups/20260214_120000/
+#    ./backups/20260215_060000/
+#    ./backups/20260216_093000/
+```
+
+---
+
+## Backup Scheduling
+
+RAT does not include a built-in backup scheduler. Use your system's cron to automate backups:
+
+### Linux Cron
+
+```bash filename="crontab -e"
+# Daily backup at 2:00 AM
+0 2 * * * cd /path/to/rat && make backup >> /var/log/rat-backup.log 2>&1
+
+# Weekly backup on Sunday at 3:00 AM
+0 3 * * 0 cd /path/to/rat && make backup >> /var/log/rat-backup.log 2>&1
+```
+
+### Retention
+
+Backups accumulate in the `./backups/` directory. Add a cleanup step to your cron job:
+
+```bash filename="crontab -e"
+# Daily backup + clean up backups older than 30 days
+0 2 * * * cd /path/to/rat && make backup && find ./backups -maxdepth 1 -type d -mtime +30 -exec rm -rf {} +
+```
+
+### Recommended Schedule
+
+| Environment | Frequency | Retention | Notes |
+|---|---|---|---|
+| Development | On-demand | Keep last 3 | Backup before risky changes |
+| Staging | Daily | Keep 7 days | Enough to catch issues |
+| Production | Every 6 hours | Keep 30 days | Minimize data loss window |
+| Production (critical) | Hourly | Keep 7 days + weekly for 90 days | Maximum protection |
+
+---
+
+## Off-Site Backup
+
+For disaster recovery, copy backups to an off-site location:
+
+### Copy to Remote Server
+
+```bash filename="Terminal"
+rsync -avz ./backups/20260216_093000/ user@backup-server:/backups/rat/20260216_093000/
+```
+
+### Copy to Cloud Storage (AWS S3)
+
+```bash filename="Terminal"
+aws s3 sync ./backups/20260216_093000/ s3://your-backup-bucket/rat/20260216_093000/
+```
+
+### Copy to Cloud Storage (GCP)
+
+```bash filename="Terminal"
+gsutil -m rsync -r ./backups/20260216_093000/ gs://your-backup-bucket/rat/20260216_093000/
+```
+
+---
+
+## Point-in-Time Recovery Considerations
+
+RAT's backup mechanism creates **full snapshots** at a point in time. It does not support point-in-time recovery (PITR) out of the box.
+
+### For PostgreSQL PITR
+
+If you need the ability to recover to any arbitrary point in time:
+
+1. Enable PostgreSQL WAL (Write-Ahead Log) archiving
+2. Ship WAL segments to a backup location
+3. Use `pg_basebackup` + WAL replay for recovery
+
+This requires replacing the stock Postgres container with a custom configuration. Consider using a managed PostgreSQL service (AWS RDS, GCP Cloud SQL) for production deployments with PITR requirements.
+
+### For MinIO PITR
+
+MinIO has bucket versioning enabled by default (configured by `minio-init`). This means:
+
+- Overwritten objects retain previous versions for 7 days (lifecycle rule)
+- Deleted objects can be recovered within the 7-day retention window
+- Use `mc ls --versions local/rat/path/to/object` to see all versions
+
+<Callout type="info">
+MinIO's built-in versioning provides a limited form of point-in-time recovery for individual objects. For full PITR of the entire data lake, use MinIO's site replication feature or a dedicated backup tool like [MinIO SUBNET](https://min.io/pricing).
+</Callout>
+
+---
+
+## Disaster Recovery Runbook
+
+<Steps>
+
+### Assess the situation
+
+Determine what was lost: only Postgres? Only MinIO? Both? The recovery procedure depends on this.
+
+### Stop all services
+
+```bash filename="Terminal"
+make down
+```
+
+### Start infrastructure only
+
+```bash filename="Terminal"
+docker compose -f infra/docker-compose.yml up -d postgres minio nessie
+# Wait for health checks
+docker compose -f infra/docker-compose.yml ps
+```
+
+### Restore from the latest backup
+
+```bash filename="Terminal"
+make restore BACKUP_DIR=./backups/<latest-timestamp>
+```
+
+### Start application services
+
+```bash filename="Terminal"
+make up
+```
+
+### Verify recovery
+
+```bash filename="Terminal"
+# Check API health
+curl http://localhost:8080/health
+
+# Check that pipelines are listed
+curl http://localhost:8080/api/v1/pipelines
+
+# Open the portal and verify data
+open http://localhost:3000
+```
+
+### Document the incident
+
+Record what happened, what was lost, and what was recovered. Update your backup schedule if the data loss window was too large.
+
+</Steps>

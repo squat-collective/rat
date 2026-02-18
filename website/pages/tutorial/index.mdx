@@ -1,0 +1,101 @@
+import { Callout } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Tutorial: Build a Space Launch Analytics Platform
+
+Welcome to the RAT tutorial! Over the next 8 parts, you will build a **complete data
+platform** that ingests, transforms, validates, and serves space launch data — covering
+every feature RAT has to offer.
+
+**What you will build:**
+
+- **Bronze pipelines** that ingest CSV data from landing zones
+- **Silver pipelines** that join and enrich data using `ref()`
+- **Gold pipelines** that produce analytics-ready aggregations
+- **Quality tests** that gate bad data before it reaches production
+- **Python pipelines** that use DuckDB + PyArrow for complex logic
+- **Triggers** that automate the entire pipeline chain
+- **Versioning** and **data retention** for production governance
+
+By the end, you will have a fully automated pipeline DAG that looks like this:
+
+```
+Landing Zones          Bronze              Silver                Gold
+┌─────────────┐    ┌──────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│ launch-data │───▶│ mission_log  │───▶│ enriched_launches│───▶│ launch_summary   │
+└─────────────┘    └──────────────┘    │                  │    └──────────────────┘
+┌─────────────┐    ┌──────────────┐    │                  │    ┌──────────────────┐
+│vehicle-ctlg │───▶│rocket_registr│───▶│                  │    │vehicle_stats (py)│
+└─────────────┘    └──────────────┘    └──────────────────┘    └──────────────────┘
+```
+
+---
+
+## Prerequisites
+
+| Requirement | Minimum Version | Check Command |
+|---|---|---|
+| **Docker** | 24.0+ | `docker --version` |
+| **Docker Compose** | 2.20+ (V2 plugin) | `docker compose version` |
+| **Make** | any | `make --version` |
+| **RAM** | 4 GB free | — |
+
+<Callout type="info">
+If you have not installed RAT yet, follow the [Installation](/getting-started/installation) guide first.
+It takes under 5 minutes.
+</Callout>
+
+---
+
+## Tutorial Parts
+
+Each part builds on the previous one. We recommend following them in order.
+
+<Cards>
+  <Card title="Part 1: Your First Pipeline" href="/tutorial/part1-first-pipeline">
+    Create a SQL pipeline, preview it, publish it, run it, and query the results. ~15 min
+  </Card>
+  <Card title="Part 2: Landing Zones" href="/tutorial/part2-landing-zones">
+    Upload real CSV data through landing zones and ingest it into Bronze pipelines. ~15 min
+  </Card>
+  <Card title="Part 3: Building Layers" href="/tutorial/part3-building-layers">
+    Create Silver pipelines that join Bronze tables using ref(). See the lineage DAG. ~10 min
+  </Card>
+  <Card title="Part 4: Merge Strategies" href="/tutorial/part4-merge-strategies">
+    Make pipelines incremental. Understand all 6 merge strategies. ~15 min
+  </Card>
+  <Card title="Part 5: Quality Tests" href="/tutorial/part5-quality-tests">
+    Gate pipeline merges with SQL quality tests. Catch bad data before it lands. ~10 min
+  </Card>
+  <Card title="Part 6: Python Pipelines" href="/tutorial/part6-python-pipelines">
+    Write Python pipelines using DuckDB and PyArrow for complex transformations. ~10 min
+  </Card>
+  <Card title="Part 7: Triggers & Automation" href="/tutorial/part7-triggers">
+    Automate pipeline execution with cron, webhooks, and event-driven triggers. ~15 min
+  </Card>
+  <Card title="Part 8: Complete Platform" href="/tutorial/part8-complete-platform">
+    Add a Gold layer, learn versioning and data retention. The full picture. ~15 min
+  </Card>
+</Cards>
+
+---
+
+## Data Theme: Space Launches
+
+Throughout this tutorial, you will work with real-world space launch data. The dataset
+includes **25 missions** launched between 2023–2024 and **11 launch vehicles** from
+agencies around the world — SpaceX, ESA, ISRO, JAXA, and Roscosmos.
+
+The CSV files are included in the repository at `docs/data/`:
+
+| File | Rows | Description |
+|---|---|---|
+| `space_launches.csv` | 25 | Missions with dates, vehicles, outcomes, orbits, payload masses |
+| `launch_vehicles.csv` | 11 | Rockets with specs (height, thrust, stages, manufacturer) |
+
+This data is small enough to run instantly, yet rich enough to demonstrate joins,
+incremental loading, quality validation, and aggregation patterns.
+
+---
+
+**Ready? Let's build something.**

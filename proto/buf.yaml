@@ -1,0 +1,18 @@
+version: v2
+modules:
+  - path: .
+    name: buf.build/rat/api
+lint:
+  use:
+    - DEFAULT
+  except:
+    # Package directory structure uses short paths (runner/v1/) — accepted convention
+    - PACKAGE_DIRECTORY_MATCH
+    # Shared request/response types across runner + executor services (intentional DRY — see P6-07)
+    - RPC_REQUEST_RESPONSE_UNIQUE
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+  enum_zero_value_suffix: _UNSPECIFIED
+breaking:
+  use:
+    - FILE

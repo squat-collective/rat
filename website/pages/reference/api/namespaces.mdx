@@ -1,0 +1,196 @@
+import { Callout } from 'nextra/components'
+
+# Namespaces
+
+Namespaces provide logical isolation for pipelines, tables, landing zones, and other resources. Every resource belongs to exactly one namespace. The `default` namespace always exists and cannot be deleted.
+
+In the Community Edition, namespaces are available but function as organizational groups (no access control). In the Pro Edition, namespaces integrate with the ACL system for multi-tenant access control.
+
+---
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/namespaces` | List all namespaces |
+| `POST` | `/api/v1/namespaces` | Create a namespace |
+| `PUT` | `/api/v1/namespaces/{name}` | Update a namespace |
+| `DELETE` | `/api/v1/namespaces/{name}` | Delete a namespace |
+
+---
+
+## List Namespaces
+
+```
+GET /api/v1/namespaces
+```
+
+Returns a list of all namespaces.
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/namespaces
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "namespaces": [
+    {
+      "name": "default",
+      "description": "",
+      "created_at": "2026-02-10T10:00:00Z"
+    },
+    {
+      "name": "analytics",
+      "description": "Analytics team namespace",
+      "created_at": "2026-02-12T10:00:00Z"
+    }
+  ],
+  "total": 2
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `namespaces` | `array` | List of namespace objects |
+| `namespaces[].name` | `string` | Namespace name |
+| `namespaces[].description` | `string` | Namespace description |
+| `namespaces[].created_at` | `string` | ISO 8601 creation timestamp |
+| `total` | `integer` | Total number of namespaces |
+
+---
+
+## Create Namespace
+
+```
+POST /api/v1/namespaces
+```
+
+Creates a new namespace.
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | `string` | Yes | Namespace name (lowercase, alphanumeric, hyphens) |
+| `description` | `string` | No | Human-readable description |
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/namespaces \
+  -H "Content-Type: application/json" \
+  -d '{"name": "analytics", "description": "Analytics team namespace"}'
+```
+
+### Response — `201 Created`
+
+```json
+{
+  "name": "analytics",
+  "description": "Analytics team namespace",
+  "created_at": "2026-02-12T10:00:00Z"
+}
+```
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Missing or invalid name |
+| `409` | `ALREADY_EXISTS` | Namespace already exists |
+
+---
+
+## Update Namespace
+
+```
+PUT /api/v1/namespaces/{name}
+```
+
+Updates a namespace's description.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `name` | `string` | Namespace name |
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `description` | `string` | Yes | Updated description |
+
+### Request
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/namespaces/analytics \
+  -H "Content-Type: application/json" \
+  -d '{"description": "Analytics team namespace — Q1 2026"}'
+```
+
+### Response — `204 No Content`
+
+No response body.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Invalid request body |
+| `404` | `NOT_FOUND` | Namespace not found |
+
+---
+
+## Delete Namespace
+
+```
+DELETE /api/v1/namespaces/{name}
+```
+
+Deletes a namespace. The `default` namespace is protected and cannot be deleted.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `name` | `string` | Namespace name |
+
+### Request
+
+```bash
+curl -X DELETE http://localhost:8080/api/v1/namespaces/analytics
+```
+
+### Response — `204 No Content`
+
+No response body.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `403` | `AUTHORIZATION` | Cannot delete the `default` namespace |
+| `404` | `NOT_FOUND` | Namespace not found |
+
+<Callout type="warning">
+Deleting a namespace does **not** automatically delete the pipelines, tables, landing zones, and other resources within it. You must delete those resources first, or they will become orphaned. In the Pro Edition, namespace deletion requires `admin` permission on the namespace.
+</Callout>
+
+---
+
+## Namespace Naming Rules
+
+| Rule | Valid | Invalid |
+|---|---|---|
+| Lowercase alphanumeric | `analytics` | `Analytics` |
+| Hyphens allowed | `my-team` | `my_team` |
+| Must start with a letter | `team1` | `1team` |
+| 3-63 characters | `dev` | `ab` |
+| No special characters | `data-team` | `data@team` |

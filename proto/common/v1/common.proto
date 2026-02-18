@@ -1,0 +1,141 @@
+syntax = "proto3";
+package ratatouille.common.v1;
+
+option go_package = "github.com/rat-data/rat/platform/gen/common/v1;commonv1";
+
+import "google/protobuf/timestamp.proto";
+
+// ============================================================================
+// FIELD RESERVATION POLICY
+// ============================================================================
+//
+// Protobuf field numbers are part of the wire format. Reusing a deleted field
+// number with a different type or semantic meaning causes silent data
+// corruption for any client still holding the old schema.
+//
+// Rules:
+//
+// 1. NEVER reuse a field number that was previously assigned to a different
+//    field, even if the old field has been removed.
+//
+// 2. When removing a field, add BOTH the field number AND the field name to a
+//    `reserved` declaration inside the message:
+//
+//      message Example {
+//        reserved 4, 7;
+//        reserved "old_field", "deprecated_field";
+//      }
+//
+//    Reserving the number prevents accidental reuse on the wire.
+//    Reserving the name prevents accidental reuse in source code.
+//
+// 3. New fields MUST use the next available number (no gaps). Do not
+//    "fill in" a gap left by a removed field — that number is retired.
+//
+// 4. For enums, reserve both the numeric value and the name:
+//
+//      enum Status {
+//        reserved 3;
+//        reserved "STATUS_DEPRECATED";
+//      }
+//
+// 5. These rules apply to ALL proto files in this repository:
+//    runner, query, plugin, auth, sharing, enforcement, executor, cloud.
+//
+// 6. The `buf breaking` CI check (configured in buf.yaml with FILE rules)
+//    catches most violations automatically, but reserved declarations provide
+//    an additional safety net and serve as documentation of schema history.
+//
+// Reference: https://protobuf.dev/programming-guides/proto3/#reserved
+// ============================================================================
+
+// Shared types used across runner and executor services.
+
+// Timestamp was a custom message replaced by google.protobuf.Timestamp.
+// Retained as reserved to prevent field number reuse — this is a concrete
+// example of the reservation policy in action. See FIELD RESERVATION POLICY above.
+message Timestamp {
+  reserved 1, 2;
+  reserved "seconds", "nanos";
+}
+
+// Layer represents the data lake processing tier (medallion architecture).
+enum Layer {
+  LAYER_UNSPECIFIED = 0;  // default / unknown layer
+  LAYER_BRONZE = 1;       // raw ingested data
+  LAYER_SILVER = 2;       // cleaned and conformed data
+  LAYER_GOLD = 3;         // business-level aggregates
+}
+
+// RunStatus tracks the lifecycle state of a pipeline run.
+enum RunStatus {
+  RUN_STATUS_UNSPECIFIED = 0;  // default / unknown status
+  RUN_STATUS_PENDING = 1;     // queued, waiting for executor capacity
+  RUN_STATUS_RUNNING = 2;     // actively executing
+  RUN_STATUS_SUCCESS = 3;     // completed successfully
+  RUN_STATUS_FAILED = 4;      // terminated with an error
+  RUN_STATUS_CANCELLED = 5;   // cancelled by user or system
+}
+
+// LogLevel enumerates severity levels for log entries.
+enum LogLevel {
+  LOG_LEVEL_UNSPECIFIED = 0;
+  LOG_LEVEL_DEBUG = 1;
+  LOG_LEVEL_INFO = 2;
+  LOG_LEVEL_WARN = 3;
+  LOG_LEVEL_ERROR = 4;
+}
+
+// --- Shared run-lifecycle messages ---
+// Used by both RunnerService and ExecutorService.
+
+// GetRunStatusRequest queries the current status of a run.
+message GetRunStatusRequest {
+  string run_id = 1;              // UUID of the run to query
+}
+
+// GetRunStatusResponse returns the current status and metrics of a run.
+message GetRunStatusResponse {
+  string run_id = 1;              // echoed back from the request
+  RunStatus status = 2;           // current status: PENDING, RUNNING, SUCCESS, FAILED, CANCELLED
+  int64 rows_written = 3;         // number of rows written by the pipeline (0 if not yet complete)
+  int64 duration_ms = 4;          // execution duration in milliseconds (0 if still running)
+  string error = 5;               // error message if status is FAILED, empty otherwise
+  repeated string archived_landing_zones = 6;  // "{ns}/{zone}" pairs archived by this run (runner only)
+}
+
+// StreamLogsRequest starts streaming log entries for a run.
+message StreamLogsRequest {
+  string run_id = 1;              // UUID of the run to stream logs from
+  bool follow = 2;                // if true, stream until the run completes; if false, return available logs and close
+}
+
+// LogEntry is a single log line emitted during pipeline execution.
+message LogEntry {
+  google.protobuf.Timestamp timestamp = 1;  // when the log line was emitted
+  string level = 2;               // log level: "info", "warn", "error", "debug", "stdout", "stderr"
+  string message = 3;             // log line content
+}
+
+// CancelRunRequest asks to cancel a running pipeline.
+message CancelRunRequest {
+  string run_id = 1;              // UUID of the run to cancel
+}
+
+// CancelRunResponse indicates whether the cancellation succeeded.
+message CancelRunResponse {
+  bool cancelled = 1;             // true if the run was successfully cancelled, false if already terminal
+}
+
+// S3Credentials holds typed S3-compatible storage connection parameters.
+// Used by runner and executor services to access object storage (MinIO, AWS S3, etc.).
+message S3Credentials {
+  string endpoint = 1;            // S3-compatible endpoint URL (e.g., "http://minio:9000")
+  string access_key_id = 2;       // AWS/MinIO access key ID
+  // SENSITIVE — must be redacted in logs and debug output.
+  // TODO: add [debug_redact = true] when upgrading to protobuf editions.
+  string secret_access_key = 3;   // AWS/MinIO secret access key
+  string region = 4;              // S3 region (e.g., "us-east-1")
+  string bucket = 5;              // target S3 bucket name
+  bool use_ssl = 6;               // whether to use HTTPS for S3 connections
+}

@@ -1,0 +1,20 @@
+# Git
+**/.git
+**/.gitignore
+
+# Secrets / env
+**/.env*
+
+# Docs
+**/README.md
+**/CLAUDE.md
+
+# Test files (excluded from prod image)
+**/*_test.go
+**/testdata/
+
+# Linter config
+.golangci.yml
+
+# Compiled binary (rebuild in Docker)
+ratd

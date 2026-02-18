@@ -1,0 +1,356 @@
+import { Callout } from 'nextra/components'
+
+# Runs
+
+A run represents a single execution of a pipeline. When you trigger a pipeline (manually, via schedule, or through a trigger), RAT creates a run, dispatches it to the runner, and tracks its lifecycle from `pending` through `success` or `failed`.
+
+---
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/runs` | List all runs |
+| `POST` | `/api/v1/runs` | Trigger a new pipeline run |
+| `GET` | `/api/v1/runs/{id}` | Get run details |
+| `POST` | `/api/v1/runs/{id}/cancel` | Cancel a running pipeline |
+| `GET` | `/api/v1/runs/{id}/logs` | Get run logs (SSE or JSON) |
+
+---
+
+## Run Statuses
+
+| Status | Description |
+|---|---|
+| `pending` | Run has been created and is queued for execution |
+| `running` | Pipeline is actively executing |
+| `success` | Pipeline completed successfully, branch merged |
+| `failed` | Pipeline failed (SQL error, quality test failure, etc.) |
+| `cancelled` | Run was manually cancelled |
+
+---
+
+## List Runs
+
+```
+GET /api/v1/runs
+```
+
+Returns a paginated list of runs, optionally filtered by pipeline, namespace, layer, status, or date range.
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `namespace` | `string` | — | Filter by namespace |
+| `layer` | `string` | — | Filter by layer |
+| `pipeline` | `string` | — | Filter by pipeline name |
+| `status` | `string` | — | Filter by status (`pending`, `running`, `success`, `failed`, `cancelled`) |
+| `from` | `string` | — | Filter runs created after this ISO 8601 timestamp |
+| `to` | `string` | — | Filter runs created before this ISO 8601 timestamp |
+| `sort` | `string` | `created_at` | Sort field |
+| `order` | `string` | `desc` | Sort direction (`asc`, `desc`) |
+| `limit` | `integer` | `50` | Items per page (max 200) |
+| `offset` | `integer` | `0` | Number of items to skip |
+
+### Request
+
+```bash
+curl "http://localhost:8080/api/v1/runs?namespace=default&layer=silver&pipeline=orders&status=running"
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "runs": [
+    {
+      "id": "run-uuid",
+      "namespace": "default",
+      "layer": "silver",
+      "pipeline": "orders",
+      "status": "success",
+      "trigger": "manual",
+      "started_at": "2026-02-12T14:00:00Z",
+      "finished_at": "2026-02-12T14:00:05Z",
+      "duration_ms": 4500,
+      "rows_written": 12340,
+      "created_at": "2026-02-12T14:00:00Z"
+    }
+  ],
+  "total": 42
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `runs` | `array` | List of run objects |
+| `runs[].id` | `string` | Run UUID |
+| `runs[].namespace` | `string` | Pipeline namespace |
+| `runs[].layer` | `string` | Pipeline layer |
+| `runs[].pipeline` | `string` | Pipeline name |
+| `runs[].status` | `string` | Current run status |
+| `runs[].trigger` | `string` | How the run was triggered: `manual`, `schedule:hourly`, `webhook`, etc. |
+| `runs[].started_at` | `string\|null` | ISO 8601 timestamp when execution began |
+| `runs[].finished_at` | `string\|null` | ISO 8601 timestamp when execution completed |
+| `runs[].duration_ms` | `integer\|null` | Total execution time in milliseconds |
+| `runs[].rows_written` | `integer\|null` | Number of rows written to the target table |
+| `runs[].created_at` | `string` | ISO 8601 creation timestamp |
+| `total` | `integer` | Total number of matching runs |
+
+---
+
+## Create Run
+
+```
+POST /api/v1/runs
+```
+
+Triggers a new pipeline run. The run is created in `pending` status and dispatched to the runner for execution.
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | `string` | Yes | Pipeline namespace |
+| `layer` | `string` | Yes | Pipeline layer |
+| `pipeline` | `string` | Yes | Pipeline name |
+| `trigger` | `string` | No | Trigger source (default: `manual`) |
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/runs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "namespace": "default",
+    "layer": "silver",
+    "pipeline": "orders",
+    "trigger": "manual"
+  }'
+```
+
+### Response — `202 Accepted`
+
+```json
+{
+  "run_id": "abc123",
+  "status": "pending"
+}
+```
+
+<Callout type="info">
+The response uses `202 Accepted` (not `201 Created`) because the run has been queued but not yet executed. Use `GET /api/v1/runs/{id}` or `GET /api/v1/runs/{id}/logs` (SSE) to track execution progress.
+</Callout>
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Missing required fields, invalid namespace/layer/name |
+| `404` | `NOT_FOUND` | Pipeline not found |
+
+---
+
+## Get Run
+
+```
+GET /api/v1/runs/{id}
+```
+
+Returns the full details for a single run.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | `string` | Run UUID |
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/runs/abc123
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "id": "abc123",
+  "namespace": "default",
+  "layer": "silver",
+  "pipeline": "orders",
+  "status": "success",
+  "trigger": "manual",
+  "started_at": "2026-02-12T14:00:00Z",
+  "finished_at": "2026-02-12T14:00:05Z",
+  "duration_ms": 4500,
+  "rows_written": 12340,
+  "error": null,
+  "created_at": "2026-02-12T14:00:00Z"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | Run UUID |
+| `namespace` | `string` | Pipeline namespace |
+| `layer` | `string` | Pipeline layer |
+| `pipeline` | `string` | Pipeline name |
+| `status` | `string` | Current run status |
+| `trigger` | `string` | Trigger source |
+| `started_at` | `string\|null` | Execution start timestamp |
+| `finished_at` | `string\|null` | Execution end timestamp |
+| `duration_ms` | `integer\|null` | Execution duration in milliseconds |
+| `rows_written` | `integer\|null` | Rows written to target table |
+| `error` | `string\|null` | Error message if the run failed |
+| `created_at` | `string` | Creation timestamp |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Run not found |
+
+---
+
+## Cancel Run
+
+```
+POST /api/v1/runs/{id}/cancel
+```
+
+Cancels a running pipeline. Only runs in `pending` or `running` status can be cancelled.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | `string` | Run UUID |
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/runs/abc123/cancel
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "run_id": "abc123",
+  "status": "cancelled"
+}
+```
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Run not found |
+| `409` | `ALREADY_EXISTS` | Run is not cancellable (already in a terminal state: `success`, `failed`, or `cancelled`) |
+
+---
+
+## Get Run Logs
+
+```
+GET /api/v1/runs/{id}/logs
+```
+
+Returns logs for a pipeline run. Supports two modes: **SSE streaming** for real-time log tailing, and **JSON** for fetching all available logs at once.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | `string` | Run UUID |
+
+### SSE Streaming Mode
+
+To receive logs in real-time via Server-Sent Events, set the `Accept` header:
+
+```bash
+curl -H "Accept: text/event-stream" http://localhost:8080/api/v1/runs/abc123/logs
+```
+
+#### SSE Event Types
+
+| Event | Data Shape | Description |
+|---|---|---|
+| `log` | `{"timestamp": "...", "level": "...", "message": "..."}` | A log line from execution |
+| `status` | `{"status": "...", "rows_written": N, "duration_ms": N}` | Run status change |
+| `error` | `{"message": "..."}` | An error occurred during execution |
+
+#### SSE Example
+
+```
+event: log
+data: {"timestamp": "2026-02-12T14:00:01Z", "level": "info", "message": "Starting pipeline silver.orders"}
+
+event: log
+data: {"timestamp": "2026-02-12T14:00:02Z", "level": "info", "message": "Executing SQL..."}
+
+event: log
+data: {"timestamp": "2026-02-12T14:00:04Z", "level": "info", "message": "Writing 12340 rows to Iceberg"}
+
+event: status
+data: {"status": "success", "rows_written": 12340, "duration_ms": 4500}
+```
+
+<Callout type="info">
+For active runs, the SSE stream keeps the connection open and polls for new logs every 2 seconds until the run reaches a terminal state (`success`, `failed`, or `cancelled`). For completed runs, all logs are sent immediately and the connection is closed.
+</Callout>
+
+### JSON Mode (Default)
+
+Without the `Accept: text/event-stream` header, the endpoint returns all available logs as JSON:
+
+```bash
+curl http://localhost:8080/api/v1/runs/abc123/logs
+```
+
+#### Response — `200 OK`
+
+```json
+{
+  "logs": [
+    {
+      "timestamp": "2026-02-12T14:00:01Z",
+      "level": "info",
+      "message": "Starting pipeline silver.orders"
+    },
+    {
+      "timestamp": "2026-02-12T14:00:02Z",
+      "level": "info",
+      "message": "Executing SQL..."
+    },
+    {
+      "timestamp": "2026-02-12T14:00:04Z",
+      "level": "info",
+      "message": "Writing 12340 rows to Iceberg"
+    }
+  ],
+  "status": "success"
+}
+```
+
+#### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `logs` | `array` | Array of log entries |
+| `logs[].timestamp` | `string` | ISO 8601 timestamp |
+| `logs[].level` | `string` | Log level: `debug`, `info`, `warn`, `error` |
+| `logs[].message` | `string` | Log message |
+| `status` | `string` | Current run status |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Run not found |

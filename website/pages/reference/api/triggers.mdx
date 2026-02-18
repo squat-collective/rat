@@ -1,0 +1,454 @@
+import { Callout } from 'nextra/components'
+
+# Triggers
+
+Triggers define automated conditions for running a pipeline. When a trigger's condition is met (file upload, cron schedule, upstream pipeline success, webhook call, file pattern match, or cron with dependencies), RAT automatically creates and dispatches a run.
+
+Triggers are nested under a pipeline resource and require the PipelineTriggerStore to be configured.
+
+---
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/pipelines/{ns}/{layer}/{name}/triggers` | List triggers for a pipeline |
+| `POST` | `/api/v1/pipelines/{ns}/{layer}/{name}/triggers` | Create a trigger |
+| `GET` | `/api/v1/pipelines/{ns}/{layer}/{name}/triggers/{id}` | Get trigger details |
+| `PUT` | `/api/v1/pipelines/{ns}/{layer}/{name}/triggers/{id}` | Update a trigger |
+| `DELETE` | `/api/v1/pipelines/{ns}/{layer}/{name}/triggers/{id}` | Delete a trigger |
+
+---
+
+## Trigger Types
+
+RAT supports 6 trigger types, each with its own configuration schema:
+
+### `landing_zone_upload`
+
+Fires when a file is uploaded to the specified landing zone.
+
+```json
+{
+  "type": "landing_zone_upload",
+  "config": {
+    "namespace": "default",
+    "zone_name": "raw-uploads"
+  }
+}
+```
+
+| Config Field | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | `string` | Yes | Namespace of the landing zone |
+| `zone_name` | `string` | Yes | Name of the landing zone to watch |
+
+### `cron`
+
+Fires on a cron schedule using 5-field cron expressions.
+
+```json
+{
+  "type": "cron",
+  "config": {
+    "cron_expr": "0 * * * *"
+  }
+}
+```
+
+| Config Field | Type | Required | Description |
+|---|---|---|---|
+| `cron_expr` | `string` | Yes | 5-field cron expression (minute, hour, day, month, weekday) |
+
+**Cron expression examples:**
+
+| Expression | Schedule |
+|---|---|
+| `* * * * *` | Every minute |
+| `0 * * * *` | Every hour |
+| `0 0 * * *` | Daily at midnight |
+| `0 6 * * 1-5` | Weekdays at 6 AM |
+| `*/15 * * * *` | Every 15 minutes |
+| `0 0 1 * *` | First day of every month |
+
+### `pipeline_success`
+
+Fires when a specified upstream pipeline completes successfully. This creates a dependency chain between pipelines.
+
+```json
+{
+  "type": "pipeline_success",
+  "config": {
+    "namespace": "default",
+    "layer": "bronze",
+    "pipeline": "raw_orders"
+  }
+}
+```
+
+| Config Field | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | `string` | Yes | Namespace of the upstream pipeline |
+| `layer` | `string` | Yes | Layer of the upstream pipeline |
+| `pipeline` | `string` | Yes | Name of the upstream pipeline |
+
+### `webhook`
+
+Fires when a webhook request is received with the correct token. The token is auto-generated at creation time and returned **once** in the response.
+
+```json
+{
+  "type": "webhook",
+  "config": {}
+}
+```
+
+No configuration is required — the token is auto-generated. See the creation response for the `webhook_token` field.
+
+<Callout type="warning">
+The plaintext webhook token is returned **only once** in the creation response. It is never stored or shown again. Save it immediately. If lost, delete the trigger and create a new one.
+</Callout>
+
+### `file_pattern`
+
+Fires when an uploaded file matches the specified glob pattern. Similar to `landing_zone_upload`, but with filename filtering.
+
+```json
+{
+  "type": "file_pattern",
+  "config": {
+    "namespace": "default",
+    "zone_name": "raw-uploads",
+    "pattern": "*.csv"
+  }
+}
+```
+
+| Config Field | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | `string` | Yes | Namespace of the landing zone |
+| `zone_name` | `string` | Yes | Name of the landing zone to watch |
+| `pattern` | `string` | Yes | Glob pattern to match filenames (e.g., `*.csv`, `orders_*.json`) |
+
+### `cron_dependency`
+
+Fires on a cron schedule, but only if all specified dependency pipelines have succeeded since the last trigger evaluation. Combines time-based scheduling with dependency awareness.
+
+```json
+{
+  "type": "cron_dependency",
+  "config": {
+    "cron_expr": "0 * * * *",
+    "dependencies": [
+      "default.bronze.raw_orders",
+      "default.bronze.raw_customers"
+    ]
+  }
+}
+```
+
+| Config Field | Type | Required | Description |
+|---|---|---|---|
+| `cron_expr` | `string` | Yes | 5-field cron expression |
+| `dependencies` | `array` | Yes | List of `namespace.layer.pipeline` identifiers that must have succeeded |
+
+---
+
+## List Triggers
+
+```
+GET /api/v1/pipelines/{ns}/{layer}/{name}/triggers
+```
+
+Returns all triggers for a pipeline.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Pipeline name |
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/pipelines/default/silver/orders/triggers
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "triggers": [
+    {
+      "id": "trigger-uuid",
+      "pipeline_id": "pipeline-uuid",
+      "type": "landing_zone_upload",
+      "config": {
+        "namespace": "default",
+        "zone_name": "raw-uploads"
+      },
+      "enabled": true,
+      "cooldown_seconds": 60,
+      "last_triggered_at": "2026-02-13T10:05:00Z",
+      "last_run_id": "run-uuid",
+      "created_at": "2026-02-12T10:00:00Z",
+      "updated_at": "2026-02-12T10:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `triggers` | `array` | List of trigger objects |
+| `triggers[].id` | `string` | Trigger UUID |
+| `triggers[].pipeline_id` | `string` | Parent pipeline UUID |
+| `triggers[].type` | `string` | Trigger type (see Trigger Types above) |
+| `triggers[].config` | `object` | Type-specific configuration |
+| `triggers[].enabled` | `boolean` | Whether the trigger is active |
+| `triggers[].cooldown_seconds` | `integer` | Minimum seconds between trigger firings |
+| `triggers[].last_triggered_at` | `string\|null` | ISO 8601 timestamp of last firing |
+| `triggers[].last_run_id` | `string\|null` | Run ID created by the last firing |
+| `triggers[].created_at` | `string` | ISO 8601 creation timestamp |
+| `triggers[].updated_at` | `string` | ISO 8601 last update timestamp |
+| `total` | `integer` | Total number of triggers |
+
+<Callout type="info">
+Webhook triggers include an additional `webhook_url` field in the response, pointing to `POST /api/v1/webhooks`. The plaintext token is never included in list or get responses.
+</Callout>
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Pipeline not found |
+
+---
+
+## Create Trigger
+
+```
+POST /api/v1/pipelines/{ns}/{layer}/{name}/triggers
+```
+
+Creates a new trigger for a pipeline.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Pipeline name |
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `type` | `string` | Yes | Trigger type: `landing_zone_upload`, `cron`, `pipeline_success`, `webhook`, `file_pattern`, `cron_dependency` |
+| `config` | `object` | Yes | Type-specific configuration (see Trigger Types above) |
+| `enabled` | `boolean` | No | Whether the trigger is active (default: `true`) |
+| `cooldown_seconds` | `integer` | No | Minimum seconds between firings (default: `0`) |
+
+### Request — Landing Zone Upload
+
+```bash
+curl -X POST http://localhost:8080/api/v1/pipelines/default/silver/orders/triggers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "landing_zone_upload",
+    "config": {
+      "namespace": "default",
+      "zone_name": "raw-uploads"
+    },
+    "enabled": true,
+    "cooldown_seconds": 60
+  }'
+```
+
+### Response — `201 Created`
+
+```json
+{
+  "id": "trigger-uuid",
+  "pipeline_id": "pipeline-uuid",
+  "type": "landing_zone_upload",
+  "config": {
+    "namespace": "default",
+    "zone_name": "raw-uploads"
+  },
+  "enabled": true,
+  "cooldown_seconds": 60,
+  "created_at": "2026-02-13T10:00:00Z",
+  "updated_at": "2026-02-13T10:00:00Z"
+}
+```
+
+### Webhook Creation Response
+
+When creating a `webhook` trigger, the response includes the plaintext token:
+
+```json
+{
+  "id": "trigger-uuid",
+  "pipeline_id": "pipeline-uuid",
+  "type": "webhook",
+  "config": {
+    "token_hash": "sha256hex..."
+  },
+  "webhook_url": "http://localhost:8080/api/v1/webhooks",
+  "webhook_token": "64-char-hex-plaintext-shown-once",
+  "enabled": true,
+  "cooldown_seconds": 0,
+  "created_at": "2026-02-13T10:00:00Z",
+  "updated_at": "2026-02-13T10:00:00Z"
+}
+```
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Missing or invalid type, invalid config, invalid cron expression, invalid glob pattern |
+| `404` | `NOT_FOUND` | Pipeline not found, or referenced landing zone / upstream pipeline not found |
+
+---
+
+## Get Trigger
+
+```
+GET /api/v1/pipelines/{ns}/{layer}/{name}/triggers/{id}
+```
+
+Returns details for a single trigger.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Pipeline name |
+| `id` | `string` | Trigger UUID |
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/pipelines/default/silver/orders/triggers/trigger-uuid
+```
+
+### Response — `200 OK`
+
+Returns the full trigger object.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Pipeline or trigger not found |
+
+---
+
+## Update Trigger
+
+```
+PUT /api/v1/pipelines/{ns}/{layer}/{name}/triggers/{id}
+```
+
+Updates a trigger's configuration, enabled state, or cooldown. This is a partial update.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Pipeline name |
+| `id` | `string` | Trigger UUID |
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `config` | `object` | No | Updated type-specific configuration |
+| `enabled` | `boolean` | No | Enable or disable the trigger |
+| `cooldown_seconds` | `integer` | No | Updated cooldown period |
+
+### Request
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/pipelines/default/silver/orders/triggers/trigger-uuid \
+  -H "Content-Type: application/json" \
+  -d '{
+    "config": { "namespace": "default", "zone_name": "new-zone" },
+    "enabled": false,
+    "cooldown_seconds": 120
+  }'
+```
+
+### Response — `200 OK`
+
+Returns the full trigger object with updated fields.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Invalid config or cooldown value |
+| `404` | `NOT_FOUND` | Pipeline or trigger not found |
+
+---
+
+## Delete Trigger
+
+```
+DELETE /api/v1/pipelines/{ns}/{layer}/{name}/triggers/{id}
+```
+
+Deletes a trigger.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Pipeline name |
+| `id` | `string` | Trigger UUID |
+
+### Request
+
+```bash
+curl -X DELETE http://localhost:8080/api/v1/pipelines/default/silver/orders/triggers/trigger-uuid
+```
+
+### Response — `204 No Content`
+
+No response body.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Pipeline or trigger not found |
+
+---
+
+## Cooldown Behavior
+
+The `cooldown_seconds` field prevents a trigger from firing too frequently. When a trigger fires, subsequent events within the cooldown window are ignored.
+
+For example, with `cooldown_seconds: 60`:
+
+1. File uploaded at 10:00:00 -- trigger fires, run created
+2. File uploaded at 10:00:30 -- ignored (within cooldown)
+3. File uploaded at 10:01:01 -- trigger fires, run created
+
+<Callout type="info">
+The cooldown is per-trigger, not per-pipeline. If a pipeline has multiple triggers, each maintains its own cooldown timer independently.
+</Callout>

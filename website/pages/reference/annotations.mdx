@@ -1,0 +1,423 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Annotations
+
+Annotations are metadata directives embedded in SQL or Python comments at the top of pipeline and quality test files. They configure how RAT processes the pipeline output — merge strategy, deduplication keys, watermark tracking, retry behavior, and more.
+
+---
+
+## Syntax
+
+Annotations use the `@key: value` format inside comments:
+
+```sql filename="SQL pipeline (-- prefix)"
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+-- @watermark_column: updated_at
+-- @description: Deduplicated orders from the raw feed
+```
+
+```python filename="Python pipeline (# prefix)"
+# @merge_strategy: full_refresh
+# @description: Fetch and materialize exchange rates from API
+# @max_retries: 3
+# @retry_delay_seconds: 30
+```
+
+---
+
+## Parsing Rules
+
+1. **Comment prefix**: SQL files use `--`, Python files use `#`.
+2. **Top of file**: Annotations must appear at the very top of the file, before any code.
+3. **First non-comment line stops parsing**: Once the parser encounters a line that is not a comment or is blank after annotations, it stops looking for more annotations.
+4. **One per line**: Each annotation must be on its own line.
+5. **Whitespace is trimmed**: Leading/trailing spaces around values are stripped.
+6. **Keys are case-insensitive**: `@Merge_Strategy` and `@merge_strategy` are equivalent (normalized to lowercase internally).
+7. **Order does not matter**: Annotations can appear in any order, though by convention they follow the order listed in this reference.
+
+### What Stops Parsing
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: incremental    ← PARSED
+-- @unique_key: order_id           ← PARSED
+--                                 ← skipped (blank comment)
+-- @watermark_column: updated_at   ← PARSED (blank comments don't stop parsing)
+
+SELECT * FROM {{ ref('bronze.data') }}   ← parsing stops here (non-comment line)
+
+-- @description: too late          ← NOT PARSED (after SQL)
+```
+
+<Callout type="warning">
+A common mistake is placing a regular SQL comment between annotations and code. Regular comments (without `@`) **stop** the annotation parser:
+
+```sql
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+-- This pipeline cleans raw data     ← stops parsing (no @key pattern)
+-- @watermark_column: updated_at     ← NOT PARSED
+
+SELECT ...
+```
+
+To avoid this, place all annotations together in an uninterrupted block, and put regular comments after them.
+</Callout>
+
+---
+
+## Pipeline Annotations
+
+These annotations configure how a pipeline processes and writes data.
+
+### @description
+
+Human-readable description of what the pipeline does. Displayed in the portal's pipeline list and detail views.
+
+| Property | Value |
+|---|---|
+| **Type** | string |
+| **Default** | `""` (empty) |
+| **Required** | No |
+
+```sql
+-- @description: Daily revenue aggregation by currency and region
+```
+
+### @materialized
+
+Controls how the pipeline output is materialized. Currently only `table` is supported.
+
+| Property | Value |
+|---|---|
+| **Type** | enum: `table`, `view` |
+| **Default** | `table` |
+| **Required** | No |
+
+```sql
+-- @materialized: table
+```
+
+<Callout type="info">
+View materialization (`@materialized: view`) is planned for a future release. Currently all pipelines produce Iceberg tables.
+</Callout>
+
+### @merge_strategy
+
+Defines how new data is merged with existing data in the target table.
+
+| Property | Value |
+|---|---|
+| **Type** | enum: `full_refresh`, `incremental`, `append_only`, `delete_insert`, `scd2`, `snapshot` |
+| **Default** | `full_refresh` |
+| **Required** | No |
+
+```sql
+-- @merge_strategy: incremental
+```
+
+**Strategy behaviors:**
+
+| Strategy | Behavior | Requires |
+|---|---|---|
+| `full_refresh` | Drop and recreate the table on every run | Nothing |
+| `incremental` | Merge new rows by unique key, using watermark to select only new data | `@unique_key`, `@watermark_column` |
+| `append_only` | Append all rows without deduplication | Nothing |
+| `delete_insert` | Delete matching rows by unique key, then insert new rows | `@unique_key` |
+| `scd2` | Slowly Changing Dimension Type 2 — track historical changes | `@unique_key` |
+| `snapshot` | Partition-based snapshots — each run writes to a new partition | `@partition_column` |
+
+### @unique_key
+
+The column(s) used as the primary key for deduplication. Required for `incremental`, `delete_insert`, and `scd2` strategies.
+
+| Property | Value |
+|---|---|
+| **Type** | string (comma-separated for composite keys) |
+| **Default** | — (none) |
+| **Required** | For `incremental`, `delete_insert`, `scd2` |
+
+```sql
+-- Single key
+-- @unique_key: order_id
+
+-- Composite key
+-- @unique_key: customer_id, product_id, order_date
+```
+
+For composite keys, separate column names with commas. Whitespace around column names is trimmed.
+
+### @watermark_column
+
+The column used to track incremental progress. RAT computes `MAX(watermark_column)` from the existing table to determine which rows are new.
+
+| Property | Value |
+|---|---|
+| **Type** | string (column name) |
+| **Default** | — (none) |
+| **Required** | For `incremental` |
+
+```sql
+-- @watermark_column: updated_at
+```
+
+The watermark column should be a monotonically increasing value — typically a timestamp (`updated_at`, `created_at`) or a sequential integer (`id`, `version`).
+
+### @partition_column
+
+The column used for partitioning in `snapshot` strategy. Each run writes a new partition value.
+
+| Property | Value |
+|---|---|
+| **Type** | string (column name) |
+| **Default** | — (none) |
+| **Required** | For `snapshot` |
+
+```sql
+-- @merge_strategy: snapshot
+-- @partition_column: snapshot_date
+```
+
+### @scd_valid_from
+
+The column name for the SCD2 record validity start date.
+
+| Property | Value |
+|---|---|
+| **Type** | string (column name) |
+| **Default** | `valid_from` |
+| **Required** | No (only relevant for `scd2`) |
+
+```sql
+-- @scd_valid_from: effective_date
+```
+
+### @scd_valid_to
+
+The column name for the SCD2 record validity end date.
+
+| Property | Value |
+|---|---|
+| **Type** | string (column name) |
+| **Default** | `valid_to` |
+| **Required** | No (only relevant for `scd2`) |
+
+```sql
+-- @scd_valid_to: expiry_date
+```
+
+### @archive_landing_zones
+
+When set to `true`, RAT moves landing zone files to a `_processed/` subdirectory after a successful run. This prevents reprocessing the same files on the next run.
+
+| Property | Value |
+|---|---|
+| **Type** | boolean (`true` or `false`) |
+| **Default** | `false` |
+| **Required** | No |
+
+```sql
+-- @archive_landing_zones: true
+```
+
+<Callout type="warning">
+Archiving is a **move** operation, not a copy. The original files are removed from the landing zone after the run succeeds. If the run fails, files are left in place.
+</Callout>
+
+### @max_retries
+
+Maximum number of retry attempts if the pipeline run fails. Applies to transient errors (network timeouts, temporary S3 unavailability).
+
+| Property | Value |
+|---|---|
+| **Type** | integer |
+| **Default** | `0` (no retries) |
+| **Required** | No |
+
+```sql
+-- @max_retries: 3
+```
+
+### @retry_delay_seconds
+
+Delay in seconds between retry attempts. Uses a fixed delay (not exponential backoff).
+
+| Property | Value |
+|---|---|
+| **Type** | integer |
+| **Default** | `0` |
+| **Required** | No |
+
+```sql
+-- @retry_delay_seconds: 30
+```
+
+---
+
+## Pipeline Annotations Summary
+
+| Annotation | Type | Default | Required For | Description |
+|---|---|---|---|---|
+| `@description` | string | `""` | — | Human-readable description |
+| `@materialized` | enum | `table` | — | Materialization type |
+| `@merge_strategy` | enum | `full_refresh` | — | Data merge strategy |
+| `@unique_key` | string | — | incremental, delete_insert, scd2 | Dedup column(s), comma-separated |
+| `@watermark_column` | string | — | incremental | Incremental progress tracking column |
+| `@partition_column` | string | — | snapshot | Snapshot partition column |
+| `@scd_valid_from` | string | `valid_from` | — | SCD2 validity start column |
+| `@scd_valid_to` | string | `valid_to` | — | SCD2 validity end column |
+| `@archive_landing_zones` | boolean | `false` | — | Move landing files after success |
+| `@max_retries` | integer | `0` | — | Retry attempts on failure |
+| `@retry_delay_seconds` | integer | `0` | — | Delay between retries |
+
+---
+
+## Quality Test Annotations
+
+Quality tests are SQL files in the pipeline's `tests/quality/` directory. They use the same annotation syntax but with a different set of keys.
+
+### @severity
+
+Determines what happens when the quality test fails.
+
+| Property | Value |
+|---|---|
+| **Type** | enum: `error`, `warn` |
+| **Default** | `error` |
+| **Required** | No |
+
+```sql
+-- @severity: error
+```
+
+- **`error`**: The run fails and the ephemeral Nessie branch is deleted. Bad data never reaches production.
+- **`warn`**: The run succeeds with a warning. The branch is merged despite the quality issue. The warning is visible in the portal and run logs.
+
+### @description
+
+Human-readable description of what the quality test checks. Displayed in the portal's quality test results.
+
+| Property | Value |
+|---|---|
+| **Type** | string |
+| **Default** | `""` (empty) |
+| **Required** | No |
+
+```sql
+-- @description: Ensure no orders have negative total amounts
+```
+
+### @tags
+
+Comma-separated tags for organizing and filtering quality tests.
+
+| Property | Value |
+|---|---|
+| **Type** | string (comma-separated) |
+| **Default** | `""` (empty) |
+| **Required** | No |
+
+```sql
+-- @tags: finance, critical, orders
+```
+
+### @remediation
+
+Instructions for how to fix the issue when this quality test fails. Shown in the portal alongside the failure.
+
+| Property | Value |
+|---|---|
+| **Type** | string |
+| **Default** | `""` (empty) |
+| **Required** | No |
+
+```sql
+-- @remediation: Check the source system for orders with negative amounts. These are usually refunds that should have status='refunded'.
+```
+
+### Quality Test Example
+
+```sql filename="ecommerce/pipelines/silver/clean_orders/tests/quality/no_negative_amounts.sql"
+-- @severity: error
+-- @description: Orders must not have negative total amounts
+-- @tags: finance, data-integrity
+-- @remediation: Negative amounts indicate refunds — filter them out or set status to 'refunded'
+
+SELECT *
+FROM {{ this }}
+WHERE total_amount < 0
+```
+
+A quality test **passes** when it returns **zero rows**. If the query returns any rows, those rows represent violations and the test fails.
+
+### Quality Test Annotations Summary
+
+| Annotation | Type | Default | Description |
+|---|---|---|---|
+| `@severity` | enum | `error` | `error` = block merge, `warn` = allow with warning |
+| `@description` | string | `""` | What the test checks |
+| `@tags` | string | `""` | Comma-separated categorization tags |
+| `@remediation` | string | `""` | How to fix failures |
+
+---
+
+## Annotations vs config.yaml
+
+Pipeline configuration can be defined in two places:
+
+1. **Annotations** in the pipeline file (`pipeline.sql` or `pipeline.py`)
+2. **config.yaml** in the pipeline directory
+
+When both exist, **annotations take precedence**. The resolution order is:
+
+```
+Annotations (highest priority)
+    ↓
+config.yaml
+    ↓
+Default values (lowest priority)
+```
+
+### config.yaml Format
+
+```yaml filename="ecommerce/pipelines/silver/clean_orders/config.yaml"
+merge_strategy: incremental
+unique_key: order_id
+watermark_column: updated_at
+description: Deduplicated orders with latest status
+max_retries: 2
+retry_delay_seconds: 15
+```
+
+### When to Use Which
+
+<Cards>
+  <Card title="Use Annotations When">
+    The configuration is tightly coupled to the SQL logic (merge strategy, watermark, unique key). Keeping it in the same file makes the pipeline self-documenting.
+  </Card>
+  <Card title="Use config.yaml When">
+    The configuration is operational (retries, descriptions) and you want to change it without modifying the SQL file. Useful for separating concerns.
+  </Card>
+</Cards>
+
+<Callout type="warning">
+Pick one approach per pipeline and stick with it. Mixing annotations and `config.yaml` for the same key is confusing — if `config.yaml` says `full_refresh` but the annotation says `incremental`, the annotation wins silently.
+</Callout>
+
+---
+
+## Annotation Validation
+
+RAT validates annotations at pipeline registration time and again at the start of each run:
+
+| Validation | Error |
+|---|---|
+| Unknown annotation key | Warning (logged, not blocking) |
+| Missing `@unique_key` for `incremental` strategy | Error (run fails) |
+| Missing `@watermark_column` for `incremental` strategy | Error (run fails) |
+| Missing `@partition_column` for `snapshot` strategy | Error (run fails) |
+| Invalid `@merge_strategy` value | Error (run fails) |
+| Invalid `@severity` value in quality test | Error (defaults to `error`) |
+| `@max_retries` is not a positive integer | Error (run fails) |
+| `@retry_delay_seconds` is not a positive integer | Error (run fails) |

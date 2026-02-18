@@ -1,0 +1,15 @@
+export default {
+  "sql-pipelines": "SQL Pipelines",
+  "python-pipelines": "Python Pipelines",
+  "merge-strategies": "Merge Strategies",
+  "incremental-pipelines": "Incremental Pipelines",
+  "quality-tests": "Quality Tests",
+  "landing-zones": "Landing Zones",
+  scheduling: "Scheduling",
+  "pipeline-triggers": "Pipeline Triggers",
+  versioning: "Versioning",
+  "query-console": "Query Console",
+  lineage: "Lineage",
+  "data-retention": "Data Retention",
+  "table-metadata": "Table Metadata",
+};

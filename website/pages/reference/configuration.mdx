@@ -1,0 +1,345 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Configuration
+
+RAT is configured through a combination of a YAML configuration file (`rat.yaml`), environment variables, and Docker Compose settings. This page covers every configuration option across all services.
+
+---
+
+## rat.yaml
+
+The `rat.yaml` file is the primary configuration file for the `ratd` platform service. It defines plugin configurations, feature flags, and platform-level settings. The file location is controlled by the `RAT_CONFIG` environment variable (default: `rat.yaml` in the working directory).
+
+```yaml filename="rat.yaml"
+# RAT Platform Configuration
+# This file configures plugins and platform behavior.
+
+# Plugin configuration — Pro Edition only
+plugins: []
+  # - name: auth-keycloak
+  #   path: /plugins/auth-keycloak
+  #   config:
+  #     issuer_url: https://keycloak.example.com/realms/rat
+  #     client_id: rat-platform
+  #     audience: rat-api
+
+  # - name: acl
+  #   path: /plugins/acl
+  #   config:
+  #     default_policy: deny
+  #     admin_users:
+  #       - admin@example.com
+```
+
+### Plugin Configuration Fields
+
+Each plugin entry in the `plugins` array supports these fields:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | Unique plugin identifier (e.g., `auth-keycloak`, `acl`) |
+| `path` | string | Yes | Filesystem path to the plugin binary |
+| `config` | object | No | Plugin-specific configuration (passed as-is to the plugin) |
+
+<Callout type="info">
+In the Community Edition, the `plugins` array is empty. Plugins are a Pro Edition feature. The `rat.yaml` file is still loaded — it just has no plugin entries.
+</Callout>
+
+### Path Resolution
+
+Paths in `rat.yaml` are resolved relative to the `rat.yaml` file location. If `RAT_CONFIG=/etc/rat/rat.yaml` and a plugin path is `./plugins/auth`, it resolves to `/etc/rat/plugins/auth`.
+
+---
+
+## Environment Variables
+
+RAT services are configured primarily through environment variables. Each service has its own set of variables. In Docker Compose, these are set in the `environment` section of each service.
+
+### ratd (Go Platform)
+
+The `ratd` service is the central API server, scheduler, and plugin host.
+
+#### Server
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAT_LISTEN_ADDR` | `127.0.0.1:8080` | Address and port the HTTP server binds to |
+| `PORT` | — | Alternative to `RAT_LISTEN_ADDR` (sets port only, binds to `0.0.0.0`) |
+| `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated list of allowed CORS origins |
+| `RATE_LIMIT` | `50` | Maximum requests per second per client. Set to `"0"` to disable |
+| `RAT_CONFIG` | `rat.yaml` | Path to the `rat.yaml` configuration file |
+| `EDITION` | `community` | Platform edition (`community` or `pro`) |
+
+#### Authentication
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAT_API_KEY` | — | Static API key for simple auth. When set, all requests must include `Authorization: Bearer <key>` |
+| `RAT_LICENSE_KEY` | — | Pro Edition license key for plugin activation |
+
+#### Database
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | — | PostgreSQL connection string. Format: `postgres://user:password@host:port/dbname?sslmode=disable` |
+
+#### S3 (MinIO)
+
+| Variable | Default | Description |
+|---|---|---|
+| `S3_ENDPOINT` | — | MinIO/S3 endpoint (e.g., `minio:9000`) |
+| `S3_ACCESS_KEY` | — | S3 access key ID |
+| `S3_SECRET_KEY` | — | S3 secret access key |
+| `S3_BUCKET` | `rat` | S3 bucket name for all data storage |
+| `S3_USE_SSL` | `false` | Enable TLS for S3 connections |
+| `S3_METADATA_TIMEOUT` | `10s` | Timeout for S3 metadata operations (list, head) |
+| `S3_DATA_TIMEOUT` | `60s` | Timeout for S3 data operations (get, put) |
+
+#### Service Discovery
+
+| Variable | Default | Description |
+|---|---|---|
+| `RUNNER_ADDR` | — | Runner gRPC address (e.g., `http://runner:50052`) |
+| `RATQ_ADDR` | — | Query service gRPC address (e.g., `http://ratq:50051`) |
+| `NESSIE_URL` | — | Nessie REST catalog URL (e.g., `http://nessie:19120/api/v1`) |
+
+#### Scheduler
+
+| Variable | Default | Description |
+|---|---|---|
+| `SCHEDULER_ENABLED` | `true` | Enable the built-in cron scheduler. Set to `false` to disable scheduling entirely |
+
+#### TLS
+
+| Variable | Default | Description |
+|---|---|---|
+| `TLS_CERT_FILE` | — | Path to TLS certificate file for HTTPS |
+| `TLS_KEY_FILE` | — | Path to TLS private key file for HTTPS |
+| `GRPC_TLS_CA` | — | Path to CA certificate for verifying gRPC client connections to runner/ratq |
+
+### runner (Python Pipeline Executor)
+
+The runner service executes pipelines, writes to Iceberg, and runs quality tests.
+
+#### S3 (MinIO)
+
+| Variable | Default | Description |
+|---|---|---|
+| `S3_ENDPOINT` | `minio:9000` | MinIO/S3 endpoint |
+| `S3_ACCESS_KEY` | — | S3 access key ID |
+| `S3_SECRET_KEY` | — | S3 secret access key |
+| `S3_BUCKET` | `rat` | S3 bucket name |
+| `S3_USE_SSL` | `false` | Enable TLS for S3 connections |
+| `S3_SESSION_TOKEN` | — | Optional session token for temporary S3 credentials |
+| `S3_REGION` | `us-east-1` | S3 region (required by some S3-compatible stores) |
+
+#### DuckDB
+
+| Variable | Default | Description |
+|---|---|---|
+| `DUCKDB_MEMORY_LIMIT` | `2GB` | Maximum memory DuckDB can use per connection |
+| `DUCKDB_THREADS` | `4` | Number of CPU threads DuckDB uses for query execution |
+
+#### Nessie
+
+| Variable | Default | Description |
+|---|---|---|
+| `NESSIE_URL` | `http://nessie:19120/api/v1` | Nessie REST catalog endpoint |
+
+#### gRPC
+
+| Variable | Default | Description |
+|---|---|---|
+| `GRPC_PORT` | `50052` | Port the gRPC server listens on |
+| `GRPC_TLS_CERT` | — | Path to TLS certificate for gRPC server |
+| `GRPC_TLS_KEY` | — | Path to TLS private key for gRPC server |
+
+#### Execution
+
+| Variable | Default | Description |
+|---|---|---|
+| `RUN_TTL_SECONDS` | `3600` | Time-to-live for completed run state (seconds). After this, the run is cleaned up |
+| `RUNNER_MAX_CONCURRENT` | `10` | Maximum number of pipelines executing simultaneously |
+| `RUNNER_MAX_WORKERS` | `10` | Maximum worker threads in the execution pool |
+| `RUNNER_STATE_DIR` | `/tmp/rat-runner-state` | Directory for temporary run state files |
+| `RATD_CALLBACK_URL` | — | URL for push-based status callbacks to ratd (e.g., `http://ratd:8080`) |
+
+### ratq (Python Query Service)
+
+The ratq service handles interactive DuckDB queries (read-only) and schema introspection.
+
+#### S3 (MinIO)
+
+Same as the runner service:
+
+| Variable | Default | Description |
+|---|---|---|
+| `S3_ENDPOINT` | `minio:9000` | MinIO/S3 endpoint |
+| `S3_ACCESS_KEY` | — | S3 access key ID |
+| `S3_SECRET_KEY` | — | S3 secret access key |
+| `S3_BUCKET` | `rat` | S3 bucket name |
+| `S3_USE_SSL` | `false` | Enable TLS for S3 connections |
+| `S3_REGION` | `us-east-1` | S3 region |
+
+#### DuckDB
+
+| Variable | Default | Description |
+|---|---|---|
+| `DUCKDB_MEMORY_LIMIT` | `2GB` | Maximum memory DuckDB can use per connection |
+| `DUCKDB_THREADS` | `4` | Number of CPU threads DuckDB uses for query execution |
+
+#### Nessie
+
+| Variable | Default | Description |
+|---|---|---|
+| `NESSIE_URL` | `http://nessie:19120/api/v1` | Nessie REST catalog endpoint |
+
+#### gRPC
+
+| Variable | Default | Description |
+|---|---|---|
+| `GRPC_PORT` | `50051` | Port the gRPC server listens on |
+| `GRPC_TLS_CERT` | — | Path to TLS certificate for gRPC server |
+| `GRPC_TLS_KEY` | — | Path to TLS private key for gRPC server |
+
+### portal (Next.js Web IDE)
+
+The portal is the web-based user interface for RAT.
+
+| Variable | Default | Description |
+|---|---|---|
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8080` | Public API URL used by the browser (client-side requests) |
+| `API_URL` | `http://ratd:8080` | Internal API URL used by Next.js server-side rendering |
+
+<Callout type="warning">
+`NEXT_PUBLIC_API_URL` is embedded at **build time** for Next.js client components. If you change this value, you must rebuild the portal image. `API_URL` is read at runtime and can be changed without rebuilding.
+</Callout>
+
+---
+
+## Docker Compose Configuration
+
+The default Docker Compose file is located at `infra/docker-compose.yml`. It defines all 7 services plus the `minio-init` bootstrap container.
+
+### Shared Configuration Anchors
+
+The compose file uses YAML anchors to avoid repeating S3 credentials:
+
+```yaml filename="infra/docker-compose.yml"
+x-s3-credentials: &s3-credentials
+  S3_ENDPOINT: minio:9000
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+  S3_BUCKET: rat
+  S3_USE_SSL: "false"
+  S3_REGION: us-east-1
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+### Overriding Defaults
+
+Environment variables in `docker-compose.yml` use the `${VAR:-default}` syntax. You can override them in three ways:
+
+<Tabs items={['Shell environment', '.env file', 'Compose override']}>
+<Tabs.Tab>
+```bash filename="Terminal"
+# Export variables before running compose
+export S3_ACCESS_KEY=my-production-key
+export S3_SECRET_KEY=my-production-secret
+export POSTGRES_USER=ratprod
+export POSTGRES_PASSWORD=strong-password-here
+make up
+```
+</Tabs.Tab>
+<Tabs.Tab>
+Create a file at `infra/.env`:
+
+```env filename="infra/.env"
+S3_ACCESS_KEY=my-production-key
+S3_SECRET_KEY=my-production-secret
+POSTGRES_USER=ratprod
+POSTGRES_PASSWORD=strong-password-here
+```
+
+Docker Compose automatically loads `.env` from the compose file directory.
+</Tabs.Tab>
+<Tabs.Tab>
+Create a `docker-compose.override.yml` for local customizations:
+
+```yaml filename="infra/docker-compose.override.yml"
+services:
+  ratd:
+    environment:
+      RATE_LIMIT: "0"  # disable rate limiting for local dev
+      CORS_ORIGINS: "http://localhost:3000,http://localhost:3001"
+```
+</Tabs.Tab>
+</Tabs>
+
+<Callout type="info">
+The `.env` file at `infra/.env` is gitignored. Use `infra/.env.example` as a template for production deployments.
+</Callout>
+
+### Resource Limits
+
+Each service has CPU and memory limits defined in the compose file:
+
+| Service | Memory Limit | CPU Limit | Notes |
+|---|---|---|---|
+| **ratd** | 512 MB | 1.0 | Lightweight Go binary |
+| **ratq** | 1 GB | 1.0 | DuckDB needs memory for queries |
+| **runner** | 2 GB | 2.0 | Largest — DuckDB + PyArrow + Iceberg writes |
+| **portal** | 512 MB | 1.0 | Next.js standalone server |
+| **postgres** | 1 GB | 1.0 | Database engine |
+| **minio** | 1 GB | 1.0 | Object storage |
+| **nessie** | 512 MB | 1.0 | Quarkus-based catalog |
+| **minio-init** | 256 MB | 0.5 | Bootstrap only — exits after setup |
+
+### Networks
+
+| Network | Name | Services | Purpose |
+|---|---|---|---|
+| `frontend` | `rat_frontend` | portal, ratd | Browser-accessible services |
+| `backend` | `infra_default` | all services | Internal service communication |
+
+### Volumes
+
+| Volume | Service | Mount Point | Purpose |
+|---|---|---|---|
+| `postgres_data` | postgres | `/var/lib/postgresql/data` | Database persistence |
+| `minio_data` | minio | `/data` | Object storage persistence |
+
+---
+
+## Default Values Summary
+
+Here is a quick reference of all default values across the platform:
+
+| Variable | Default | Service |
+|---|---|---|
+| `RAT_LISTEN_ADDR` | `127.0.0.1:8080` | ratd |
+| `CORS_ORIGINS` | `http://localhost:3000` | ratd |
+| `RATE_LIMIT` | `50` req/s | ratd |
+| `SCHEDULER_ENABLED` | `true` | ratd |
+| `S3_BUCKET` | `rat` | all |
+| `S3_USE_SSL` | `false` | all |
+| `S3_REGION` | `us-east-1` | runner, ratq |
+| `S3_METADATA_TIMEOUT` | `10s` | ratd |
+| `S3_DATA_TIMEOUT` | `60s` | ratd |
+| `DUCKDB_MEMORY_LIMIT` | `2GB` | runner, ratq |
+| `DUCKDB_THREADS` | `4` | runner, ratq |
+| `GRPC_PORT` | `50051` (ratq), `50052` (runner) | ratq, runner |
+| `RUN_TTL_SECONDS` | `3600` | runner |
+| `RUNNER_MAX_CONCURRENT` | `10` | runner |
+| `RUNNER_MAX_WORKERS` | `10` | runner |
+| `RUNNER_STATE_DIR` | `/tmp/rat-runner-state` | runner |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8080` | portal |
+| `API_URL` | `http://ratd:8080` | portal |
+| `POSTGRES_USER` | `rat` | postgres |
+| `POSTGRES_PASSWORD` | `rat` | postgres |

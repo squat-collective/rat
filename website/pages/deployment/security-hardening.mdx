@@ -1,0 +1,402 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Security Hardening
+
+RAT ships with strong security defaults for a containerized deployment. This guide covers how to further harden your production setup with TLS, authentication, rate limiting, network segmentation, and container security.
+
+---
+
+## TLS Configuration
+
+### HTTPS for the API (ratd)
+
+To enable HTTPS on the `ratd` API server, mount TLS certificate files and set the corresponding environment variables:
+
+```yaml filename="infra/docker-compose.override.yml"
+services:
+  ratd:
+    environment:
+      TLS_CERT_FILE: /certs/ratd.crt
+      TLS_KEY_FILE: /certs/ratd.key
+    volumes:
+      - ./certs:/certs:ro
+```
+
+When both `TLS_CERT_FILE` and `TLS_KEY_FILE` are set, `ratd` serves HTTPS instead of HTTP. Update the portal's `NEXT_PUBLIC_API_URL` accordingly:
+
+```yaml
+portal:
+  environment:
+    NEXT_PUBLIC_API_URL: https://api.yourdomain.com
+    API_URL: http://ratd:8080  # internal traffic can remain HTTP
+```
+
+<Callout type="info">
+For most production deployments, it is simpler to terminate TLS at a reverse proxy (nginx, Traefik, Caddy) in front of the Docker Compose stack, rather than configuring TLS on each service individually. This centralizes certificate management.
+</Callout>
+
+### gRPC TLS (runner + ratq)
+
+To encrypt gRPC traffic between `ratd` and the Python services:
+
+**On the Python services (runner, ratq):**
+
+```yaml filename="infra/docker-compose.override.yml"
+services:
+  runner:
+    environment:
+      GRPC_TLS_CERT: /certs/runner.crt
+      GRPC_TLS_KEY: /certs/runner.key
+    volumes:
+      - ./certs:/certs:ro
+
+  ratq:
+    environment:
+      GRPC_TLS_CERT: /certs/ratq.crt
+      GRPC_TLS_KEY: /certs/ratq.key
+    volumes:
+      - ./certs:/certs:ro
+```
+
+**On ratd (the gRPC client):**
+
+```yaml filename="infra/docker-compose.override.yml"
+services:
+  ratd:
+    environment:
+      GRPC_TLS_CA: /certs/ca.crt
+    volumes:
+      - ./certs:/certs:ro
+```
+
+The `GRPC_TLS_CA` variable points to the CA certificate that signed the runner and ratq certificates. This enables `ratd` to verify the identity of the services it connects to.
+
+### Certificate Generation
+
+For self-signed certificates (development/internal use):
+
+```bash filename="Terminal"
+# Generate CA
+openssl req -x509 -newkey rsa:4096 -days 365 -nodes \
+  -keyout certs/ca.key -out certs/ca.crt \
+  -subj "/CN=RAT Internal CA"
+
+# Generate ratd certificate
+openssl req -newkey rsa:4096 -nodes \
+  -keyout certs/ratd.key -out certs/ratd.csr \
+  -subj "/CN=ratd"
+openssl x509 -req -in certs/ratd.csr -CA certs/ca.crt -CAkey certs/ca.key \
+  -CAcreateserial -out certs/ratd.crt -days 365
+
+# Generate runner certificate
+openssl req -newkey rsa:4096 -nodes \
+  -keyout certs/runner.key -out certs/runner.csr \
+  -subj "/CN=runner"
+openssl x509 -req -in certs/runner.csr -CA certs/ca.crt -CAkey certs/ca.key \
+  -CAcreateserial -out certs/runner.crt -days 365
+
+# Generate ratq certificate
+openssl req -newkey rsa:4096 -nodes \
+  -keyout certs/ratq.key -out certs/ratq.csr \
+  -subj "/CN=ratq"
+openssl x509 -req -in certs/ratq.csr -CA certs/ca.crt -CAkey certs/ca.key \
+  -CAcreateserial -out certs/ratq.crt -days 365
+```
+
+<Callout type="warning">
+Self-signed certificates are suitable for internal communication between containers. For the public-facing API and portal, use certificates from a trusted CA (e.g., Let's Encrypt).
+</Callout>
+
+---
+
+## Authentication
+
+### API Key Authentication
+
+The simplest authentication method. Set `RAT_API_KEY` and all requests must include the key:
+
+```yaml filename="infra/docker-compose.override.yml"
+services:
+  ratd:
+    environment:
+      RAT_API_KEY: "your-strong-api-key-here"
+```
+
+Clients send the key in the `Authorization` header:
+
+```bash filename="Terminal"
+curl -H "Authorization: Bearer your-strong-api-key-here" \
+  http://localhost:8080/api/v1/pipelines
+```
+
+The portal sends this header automatically when configured with the same key.
+
+<Callout type="info">
+Generate a strong API key using `openssl rand -hex 32` (produces a 64-character hex string).
+</Callout>
+
+### Plugin Authentication (Pro Edition)
+
+The Pro Edition supports plugin-based authentication via the `auth` plugin slot. The most common plugin is `auth-keycloak`, which validates JWT tokens against a Keycloak instance:
+
+```yaml filename="rat.yaml"
+plugins:
+  - name: auth-keycloak
+    path: /plugins/auth-keycloak
+    config:
+      issuer_url: https://keycloak.example.com/realms/rat
+      client_id: rat-platform
+      audience: rat-api
+```
+
+When the auth plugin is active:
+1. Every request must include a valid JWT in the `Authorization: Bearer <token>` header
+2. The plugin validates the token signature, expiry, and audience
+3. User identity is extracted from token claims and injected into the request context
+4. The `RAT_API_KEY` setting is ignored (plugin auth takes precedence)
+
+---
+
+## CORS Configuration
+
+Cross-Origin Resource Sharing (CORS) controls which domains can make browser requests to the API.
+
+```yaml filename="Environment"
+CORS_ORIGINS: "https://rat.yourdomain.com"
+```
+
+**Rules:**
+- Comma-separated list of allowed origins
+- Must include the protocol (`https://`)
+- Must match the portal's URL exactly
+- No trailing slash
+
+**Examples:**
+
+```bash
+# Single origin (production)
+CORS_ORIGINS=https://rat.yourdomain.com
+
+# Multiple origins (staging + production)
+CORS_ORIGINS=https://rat.yourdomain.com,https://staging.rat.yourdomain.com
+
+# Development (default)
+CORS_ORIGINS=http://localhost:3000
+```
+
+<Callout type="error">
+Never use `CORS_ORIGINS=*` in production. This allows any website to make authenticated API requests on behalf of your users.
+</Callout>
+
+---
+
+## Rate Limiting
+
+`ratd` includes a built-in rate limiter that limits requests per client IP address.
+
+| Variable | Default | Description |
+|---|---|---|
+| `RATE_LIMIT` | `50` | Maximum requests per second per client IP |
+
+### Tuning
+
+```bash
+# Production — moderate rate limiting
+RATE_LIMIT=100
+
+# High-traffic — increase limit
+RATE_LIMIT=500
+
+# Behind a reverse proxy — disable (let the proxy handle it)
+RATE_LIMIT=0
+```
+
+<Callout type="warning">
+When running behind a reverse proxy, the rate limiter sees the proxy's IP address, not the client's. Either disable it (`RATE_LIMIT=0`) and configure rate limiting at the proxy level, or ensure the proxy forwards the client IP via `X-Forwarded-For` and ratd is configured to trust it.
+</Callout>
+
+---
+
+## Container Hardening
+
+RAT's Docker Compose file ships with these security measures already applied to every service:
+
+### Read-Only Filesystem
+
+```yaml
+read_only: true
+tmpfs: [/tmp]
+```
+
+Containers cannot write to their filesystem except `/tmp` (mounted as tmpfs). This prevents attackers from modifying binaries or writing persistent malware.
+
+**Exceptions**: Postgres and MinIO need writable filesystems for their data directories and are not marked `read_only`.
+
+### Dropped Capabilities
+
+```yaml
+cap_drop: [ALL]
+```
+
+All Linux capabilities are dropped. Containers run with the absolute minimum privileges needed.
+
+### No New Privileges
+
+```yaml
+security_opt: [no-new-privileges:true]
+```
+
+Prevents processes inside the container from gaining additional privileges via `setuid`, `setgid`, or filesystem capabilities.
+
+### PID Limits
+
+```yaml
+pids_limit: 100
+```
+
+Each container is limited to 100 processes. This prevents fork bombs and runaway process creation.
+
+### Init Process
+
+```yaml
+init: true
+```
+
+Runs `tini` as PID 1 to properly handle signals and reap zombie processes. Ensures graceful shutdown.
+
+### Resource Limits
+
+Every service has CPU and memory limits to prevent resource exhaustion:
+
+```yaml
+deploy:
+  resources:
+    limits:
+      memory: 512M
+      cpus: '1.0'
+```
+
+---
+
+## Network Segmentation
+
+RAT uses two Docker networks to isolate traffic:
+
+<Mermaid chart={`
+flowchart TB
+    subgraph internet["Internet"]
+        browser["Browser"]
+    end
+
+    subgraph frontend["Frontend Network"]
+        portal["portal :3000"]
+        ratd["ratd :8080"]
+    end
+
+    subgraph backend["Backend Network"]
+        ratq["ratq :50051"]
+        runner["runner :50052"]
+        postgres["postgres :5432"]
+        minio["minio :9000"]
+        nessie["nessie :19120"]
+    end
+
+    browser --> portal
+    browser --> ratd
+    portal --> ratd
+    ratd --> ratq
+    ratd --> runner
+    ratd --> postgres
+    ratd --> minio
+    ratd --> nessie
+`} />
+
+- **Frontend network**: Only `portal` and `ratd` are accessible from the browser
+- **Backend network**: Database, storage, and internal services are isolated
+
+Infrastructure services (Postgres, MinIO, Nessie) bind to `127.0.0.1` on the host, preventing external access:
+
+```yaml
+postgres:
+  ports:
+    - "127.0.0.1:5432:5432"  # localhost only
+```
+
+### Production Recommendation
+
+For production, remove all host port bindings for infrastructure services:
+
+```yaml filename="infra/docker-compose.override.yml"
+services:
+  postgres:
+    ports: []  # no host access
+  minio:
+    ports: []  # no host access
+  nessie:
+    ports: []  # no host access
+```
+
+---
+
+## Secret Management
+
+### Environment Variables
+
+The simplest approach — suitable for single-server deployments:
+
+```env filename="infra/.env"
+POSTGRES_PASSWORD=<generated-password>
+S3_ACCESS_KEY=<generated-key>
+S3_SECRET_KEY=<generated-secret>
+RAT_API_KEY=<generated-api-key>
+```
+
+<Callout type="warning">
+The `infra/.env` file is gitignored by default. Never commit secrets to version control.
+</Callout>
+
+### Docker Secrets
+
+For Docker Swarm or more secure setups, use Docker secrets:
+
+```yaml filename="infra/docker-compose.override.yml"
+services:
+  ratd:
+    secrets:
+      - db_password
+      - s3_key
+      - s3_secret
+    environment:
+      DATABASE_URL: postgres://rat:$(cat /run/secrets/db_password)@postgres:5432/rat
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  s3_key:
+    file: ./secrets/s3_key.txt
+  s3_secret:
+    file: ./secrets/s3_secret.txt
+```
+
+### External Secret Managers
+
+For cloud deployments, integrate with your cloud provider's secret manager (AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault) by injecting secrets as environment variables at container startup.
+
+---
+
+## Security Checklist
+
+Use this checklist before going to production:
+
+- [ ] Default credentials changed (Postgres, MinIO)
+- [ ] API key or auth plugin configured
+- [ ] CORS restricted to your domain(s)
+- [ ] TLS enabled for public-facing services
+- [ ] Infrastructure ports not exposed to the internet
+- [ ] Rate limiting configured appropriately
+- [ ] Log rotation enabled (default: 10 MB x 3 files)
+- [ ] Backup schedule configured
+- [ ] No secrets in version control
+- [ ] Container images pinned to specific versions

@@ -1,0 +1,94 @@
+syntax = "proto3";
+package ratatouille.sharing.v1;
+
+option go_package = "github.com/rat-data/rat/platform/gen/sharing/v1;sharingv1";
+
+import "google/protobuf/timestamp.proto";
+
+// Field reservation policy: see common/v1/common.proto.
+// When removing fields, always add `reserved` for both the number and name.
+
+// SharingService manages resource access grants between users.
+// Implemented by the sharing plugin container.
+// Called by ratd when users share pipelines, namespaces, or other resources.
+service SharingService {
+  // Grant access to a resource.
+  rpc ShareResource(ShareResourceRequest) returns (ShareResourceResponse);
+
+  // Revoke a previously granted access.
+  rpc RevokeAccess(RevokeAccessRequest) returns (RevokeAccessResponse);
+
+  // List all access grants for a resource.
+  rpc ListAccess(ListAccessRequest) returns (ListAccessResponse);
+
+  // Transfer ownership of a resource to another user.
+  rpc TransferOwnership(TransferOwnershipRequest) returns (TransferOwnershipResponse);
+}
+
+// ShareResourceRequest grants a specific permission to a user on a resource.
+message ShareResourceRequest {
+  string grantor_id = 1;          // user ID of the person granting access
+  string grantee_id = 2;         // user ID of the person receiving access
+  string resource_type = 3;       // type of resource being shared: "pipeline", "namespace"
+  string resource_id = 4;         // unique identifier of the resource being shared
+  Permission permission = 5;      // level of access to grant
+}
+
+// ShareResourceResponse returns the newly created access grant.
+message ShareResourceResponse {
+  AccessGrant grant = 1;           // the created access grant
+}
+
+// RevokeAccessRequest removes a previously granted access.
+message RevokeAccessRequest {
+  string grant_id = 1;            // ID of the grant to revoke
+  string revoked_by = 2;          // user ID of the person revoking access
+}
+
+// RevokeAccessResponse indicates whether the revocation succeeded.
+message RevokeAccessResponse {
+  bool revoked = 1;                // true if the grant was successfully revoked
+}
+
+// ListAccessRequest queries all access grants for a resource.
+message ListAccessRequest {
+  string resource_type = 1;        // resource type to query ("pipeline", "namespace")
+  string resource_id = 2;          // ID of the resource
+}
+
+// ListAccessResponse returns all active grants for the requested resource.
+message ListAccessResponse {
+  repeated AccessGrant grants = 1; // active access grants
+}
+
+// TransferOwnershipRequest moves resource ownership between users.
+message TransferOwnershipRequest {
+  string resource_type = 1;        // type of resource to transfer ("pipeline", "namespace")
+  string resource_id = 2;          // ID of the resource to transfer
+  string from_user_id = 3;         // current owner's user ID
+  string to_user_id = 4;           // new owner's user ID
+}
+
+// TransferOwnershipResponse indicates whether the transfer succeeded.
+message TransferOwnershipResponse {
+  bool transferred = 1;            // true if ownership was successfully transferred
+}
+
+// AccessGrant represents a permission granted to a user on a resource.
+message AccessGrant {
+  string grant_id = 1;             // unique identifier for this grant (UUID)
+  string grantee_id = 2;          // user ID of the person who has access
+  string resource_type = 3;       // type of resource: "pipeline", "namespace"
+  string resource_id = 4;         // unique identifier of the resource
+  Permission permission = 5;      // level of access granted
+  string granted_by = 6;          // user ID of the person who granted access
+  google.protobuf.Timestamp granted_at = 7;  // when the grant was created
+}
+
+// Permission levels for resource access.
+enum Permission {
+  PERMISSION_UNSPECIFIED = 0;
+  PERMISSION_READ = 1;
+  PERMISSION_WRITE = 2;
+  PERMISSION_ADMIN = 3;
+}

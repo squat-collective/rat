@@ -1,0 +1,392 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Nessie Branching
+
+RAT uses [Nessie](https://projectnessie.org/) as a git-like catalog for Apache Iceberg. Every pipeline run gets its own isolated branch, ensuring that bad data never reaches production. This page explains the branching model, lifecycle, concurrency handling, and failure modes.
+
+---
+
+## What Is Nessie and Why?
+
+Nessie is an open-source transactional catalog for data lakes. Think of it as **git for your data catalog** --- it provides branches, commits, and merges for Iceberg table metadata.
+
+### The Problem Without Nessie
+
+Without branch isolation, a pipeline run writes directly to the production catalog. If the run fails halfway through, you get:
+
+- **Partial writes** --- some rows written, others missing
+- **Corrupted metadata** --- Iceberg snapshot pointing to incomplete Parquet files
+- **No rollback** --- manual cleanup required, risk of data loss
+- **No quality gate** --- bad data lands in production before anyone can validate it
+
+### The Solution With Nessie
+
+With Nessie, every pipeline run writes to an isolated branch:
+
+- **Zero risk to production** --- the `main` branch is untouched until quality tests pass
+- **Atomic merges** --- either all changes land or none do
+- **Automatic rollback** --- a failed run simply deletes its branch, leaving zero trace
+- **Quality gating** --- quality tests run against branch data before merge
+- **Concurrent safety** --- multiple runs execute simultaneously on separate branches
+
+---
+
+## Branch Lifecycle
+
+Every pipeline run follows this branch lifecycle:
+
+<Mermaid chart={`
+gitGraph
+    commit id: "main (production)"
+    branch run-abc123
+    commit id: "Phase 0: create branch"
+    commit id: "Phase 3: write Iceberg"
+    commit id: "Phase 4: quality pass"
+    checkout main
+    merge run-abc123 id: "Phase 5: merge"
+`} />
+
+### Lifecycle Stages
+
+<Steps>
+
+### Create Branch
+
+At the start of Phase 0, the runner creates a Nessie branch from `main`:
+
+```
+POST /api/v2/trees
+{
+  "type": "BRANCH",
+  "name": "run-{run_id}",
+  "hash": "{main_head_hash}"
+}
+```
+
+The branch is named `run-{run_id}` where `run_id` is a UUID. The branch starts as an exact copy of `main` at the current commit hash.
+
+### Write on Branch
+
+During Phase 3, all Iceberg writes (Parquet files + metadata commits) happen on this branch. The runner's PyIceberg client is configured to use the branch ref:
+
+```python filename="Branch-aware Iceberg writes"
+catalog = load_catalog(
+    "nessie",
+    uri=nessie_url,
+    ref=f"run-{run_id}",   # Write to the run branch
+    warehouse=warehouse_location,
+)
+table = catalog.load_table(f"{namespace}.{layer}.{name}")
+table.overwrite(arrow_table)
+```
+
+### Quality Gate
+
+During Phase 4, quality tests execute against the branch data. The DuckDB queries in quality tests read from the branch (not `main`), so they validate the exact data that would be merged.
+
+### Merge or Delete
+
+Based on quality test results:
+
+- **All pass** (or warn-only) --- merge the branch to `main`, then delete the branch
+- **Any error-severity failure** --- delete the branch without merging. Production data is untouched.
+
+### Cleanup
+
+The branch is always deleted after the run, regardless of outcome. If the runner crashes before cleanup, the reaper daemon cleans up orphaned branches after 6 hours.
+
+</Steps>
+
+---
+
+## Branch Flow Diagram
+
+This diagram shows multiple concurrent pipeline runs and how their branches interact with `main`:
+
+<Mermaid chart={`
+sequenceDiagram
+    participant Main as main (production)
+    participant B1 as run-aaa
+    participant B2 as run-bbb
+    participant B3 as run-ccc
+
+    Note over Main: Pipeline A starts
+    Main->>B1: Create branch (hash: h1)
+    Note over B1: Write Iceberg data
+    Note over B1: Quality tests pass ✓
+
+    Note over Main: Pipeline B starts (concurrent)
+    Main->>B2: Create branch (hash: h1)
+
+    B1->>Main: Merge (h1 → h2)
+    Note over B1: Branch deleted
+
+    Note over B2: Write Iceberg data
+    Note over B2: Quality test FAILS ✗
+    Note over B2: Branch deleted (no merge)
+
+    Note over Main: Pipeline C starts
+    Main->>B3: Create branch (hash: h2)
+    Note over B3: Write Iceberg data
+    Note over B3: Quality tests pass ✓
+    B3->>Main: Merge (h2 → h3)
+    Note over B3: Branch deleted
+`} />
+
+Key observations:
+
+- **Pipeline B** fails its quality tests. Its branch is deleted and `main` is unaffected. No bad data reaches production.
+- **Pipeline C** starts after Pipeline A merged. It gets the latest state of `main` (hash `h2`), which includes Pipeline A's changes.
+- **Pipeline A and B** run concurrently on separate branches. They never interfere with each other.
+
+---
+
+## Optimistic Concurrency
+
+Nessie uses **hash-based optimistic concurrency control**. Every operation includes the expected commit hash. If the hash does not match (someone else committed in between), the operation fails with a conflict.
+
+### How It Works
+
+<Mermaid chart={`
+sequenceDiagram
+    participant R1 as Runner 1
+    participant Nessie
+    participant R2 as Runner 2
+
+    R1->>Nessie: Create branch from main (hash: h1)
+    R2->>Nessie: Create branch from main (hash: h1)
+
+    Note over R1: Write table A on branch
+    Note over R2: Write table B on branch
+
+    R1->>Nessie: Merge to main (expected: h1)
+    Nessie-->>R1: OK, main now at h2
+
+    R2->>Nessie: Merge to main (expected: h1)
+    Nessie-->>R2: CONFLICT (main is at h2, not h1)
+
+    Note over R2: Retry merge with updated hash
+    R2->>Nessie: Merge to main (expected: h2)
+    Nessie-->>R2: OK, main now at h3
+`} />
+
+### When Conflicts Occur
+
+Conflicts in RAT are rare because:
+
+1. **Different tables** --- most pipelines write to different tables. Nessie resolves these automatically (no conflict).
+2. **Different namespaces** --- tables in different namespaces never conflict.
+3. **Sequential scheduling** --- the scheduler can be configured to avoid concurrent runs on the same pipeline.
+
+Genuine conflicts occur when two concurrent runs write to the **same Iceberg table**. This is unusual because each pipeline produces a unique table (`{namespace}.{layer}.{pipeline_name}`).
+
+### When Conflicts Are Real
+
+The only scenario for a real conflict is two runs of the **same pipeline** writing concurrently. This can happen if:
+
+- A manual run is triggered while a scheduled run is already executing
+- A trigger fires while the previous run is still in progress
+
+In these cases, Nessie rejects the merge and the runner retries.
+
+---
+
+## Retry Policy
+
+When a merge conflict occurs, the runner retries with exponential backoff:
+
+| Attempt | Delay | Action |
+|---------|-------|--------|
+| 1st retry | 1 second | Re-read main hash, retry merge |
+| 2nd retry | 2 seconds | Re-read main hash, retry merge |
+| 3rd retry | 4 seconds | Re-read main hash, retry merge |
+| Exhausted | --- | Delete branch, fail the run |
+
+```python filename="Merge retry logic (simplified)"
+max_retries = 3
+for attempt in range(max_retries + 1):
+    try:
+        main_hash = nessie.get_ref("main").hash
+        nessie.merge(
+            from_ref=f"run-{run_id}",
+            to_ref="main",
+            expected_hash=main_hash,
+        )
+        return  # Success
+    except ConflictException:
+        if attempt == max_retries:
+            raise  # Give up
+        time.sleep(2 ** attempt)  # Exponential backoff
+```
+
+After 3 failed retries, the run is marked as failed and the branch is deleted. The user can manually re-run the pipeline.
+
+---
+
+## How Quality Tests Gate Merges
+
+Quality tests are the gate between branch and production. The merge only happens if the data on the branch passes validation.
+
+<Mermaid chart={`
+flowchart TD
+    A["Data written on branch"] --> B["Run quality tests"]
+    B --> C{Results?}
+    C -->|All passed| D["Merge to main ✓"]
+    C -->|Warn only| E["Merge to main ✓\n(with warnings)"]
+    C -->|Any error| F["Delete branch ✗\nRun fails"]
+    D --> G["Production updated"]
+    E --> G
+    F --> H["Production unchanged"]
+`} />
+
+### Test Execution on Branch
+
+Quality tests are SQL queries that run against the **branch data**, not `main`. The DuckDB connection for quality tests is configured to read from the run's Nessie branch:
+
+```python filename="Quality test context (simplified)"
+# DuckDB reads from the branch, not main
+conn.execute(f"""
+    SELECT * FROM iceberg_scan(
+        '{table_path}',
+        allow_moved_paths = true
+    )
+""")
+```
+
+This means quality tests validate the exact data that would be merged. They see:
+
+- New rows written in Phase 3
+- Updated rows (for incremental/upsert strategies)
+- The full table as it would look after merge
+
+### Test Severity Behavior
+
+| Severity | Test Passes | Test Fails |
+|----------|------------|------------|
+| `error` | Continue | Block merge, delete branch, fail run |
+| `warn` | Continue | Log warning, continue to merge |
+
+You set severity in the `quality_tests` table. The default is `error` --- fail-safe by default.
+
+---
+
+## Fallback: Direct Main Writes
+
+If Nessie is unavailable when the run starts, the runner falls back to writing directly to `main`. This is a degraded mode with the following implications:
+
+| Feature | With Branching | Without Branching |
+|---------|---------------|-------------------|
+| Isolation | Full | None |
+| Quality gating | Merge blocked on failure | Data already on main |
+| Concurrent safety | Full | Risk of conflicts |
+| Rollback on failure | Automatic (delete branch) | Manual cleanup needed |
+| Data integrity | Guaranteed | Best-effort |
+
+<Callout type="error">
+Direct-main writes are a last resort. In this mode, a quality test failure means bad data has already been written to production. The run will still be marked as failed, but the data is not rolled back. Monitor Nessie health to avoid this scenario.
+</Callout>
+
+### When Fallback Activates
+
+The fallback activates only when:
+
+1. The branch creation API call to Nessie fails (network error, Nessie down)
+2. The runner logs a `WARN` level message: `"Nessie unavailable, falling back to direct main writes"`
+3. The run continues with all other phases executing normally
+
+### Recovering from Fallback
+
+Once Nessie is back up, subsequent runs will use branches again automatically. No manual intervention is needed. However, any data written during fallback mode should be manually validated.
+
+---
+
+## Orphan Branch Cleanup
+
+If the runner crashes mid-execution, a branch may be left behind without a corresponding active run. The **reaper** daemon in ratd handles this:
+
+### Detection
+
+The reaper queries Nessie for all branches matching the pattern `run-*`:
+
+```
+GET /api/v2/trees?filter=name.startsWith('run-')
+```
+
+It then checks each branch against the `runs` table:
+
+- If the run exists and is still `running` --- skip (run is in progress)
+- If the run exists and is terminal (`success`, `failed`, `cancelled`) --- delete the branch (missed cleanup)
+- If the run does not exist --- branch is orphaned, delete it
+- If the branch is older than 6 hours --- delete regardless (safety net)
+
+### Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `nessie_orphan_branch_max_age_hours` | 6 | Maximum age for a run branch before forced cleanup |
+| `reaper_interval_minutes` | 60 | How often the reaper runs |
+
+---
+
+## Nessie API Usage
+
+The runner and ratd interact with Nessie via its v2 REST API. Here are the key operations:
+
+### Create Branch
+
+```http
+POST /api/v2/trees
+Content-Type: application/json
+
+{
+  "type": "BRANCH",
+  "name": "run-550e8400-e29b-41d4-a716-446655440000",
+  "hash": "abc123def456..."
+}
+```
+
+### Commit on Branch
+
+Commits happen implicitly through PyIceberg when writing table data. PyIceberg talks to Nessie's Iceberg REST catalog endpoint.
+
+### Merge Branch
+
+```http
+POST /api/v2/trees/main/history/merge
+Content-Type: application/json
+
+{
+  "fromRefName": "run-550e8400-e29b-41d4-a716-446655440000",
+  "fromHash": "def456ghi789..."
+}
+```
+
+### Delete Branch
+
+```http
+DELETE /api/v2/trees/run-550e8400-e29b-41d4-a716-446655440000
+Expected-Hash: def456ghi789...
+```
+
+### List Branches
+
+```http
+GET /api/v2/trees?filter=refType == 'BRANCH'
+```
+
+---
+
+## Summary
+
+| Aspect | Detail |
+|--------|--------|
+| **Branch name format** | `run-{uuid}` |
+| **Parent branch** | Always `main` |
+| **Concurrency model** | Optimistic (hash-based) |
+| **Retry policy** | 3 retries, exponential backoff (1s, 2s, 4s) |
+| **Quality gating** | Error-severity tests block merge |
+| **Fallback** | Direct main writes when Nessie is unavailable |
+| **Orphan cleanup** | Reaper deletes branches older than 6 hours |
+| **Conflict resolution** | Automatic for different tables; retry for same table |

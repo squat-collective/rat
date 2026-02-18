@@ -1,0 +1,220 @@
+# RAT v2 — Continuous Integration
+# Runs on every push and on all pull requests.
+# Jobs run in parallel; each sets up its own language toolchain
+# for speed and proper GitHub Actions caching.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Go Tests (platform/) ──────────────────────────────────────
+  test-go:
+    name: Go Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: platform/go.sum
+
+      - name: Run tests
+        run: go test -v -race -count=1 ./...
+
+  # ── Python Tests (runner/) ────────────────────────────────────
+  test-py-runner:
+    name: Python Tests (runner)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv pip install --system -e '.[dev]'
+
+      - name: Run tests
+        run: pytest -v
+
+  # ── Python Tests (query/) ─────────────────────────────────────
+  test-py-query:
+    name: Python Tests (query)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: query
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv pip install --system -e '.[dev]'
+
+      - name: Run tests
+        run: pytest -v
+
+  # ── TypeScript Tests (sdk-typescript/ + portal/) ──────────────
+  test-ts:
+    name: TypeScript Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            sdk-typescript/package-lock.json
+            portal/package-lock.json
+
+      # Build + test SDK first (portal depends on it)
+      - name: Install SDK dependencies
+        working-directory: sdk-typescript
+        run: npm ci
+
+      - name: Build SDK
+        working-directory: sdk-typescript
+        run: npm run build
+
+      - name: Test SDK
+        working-directory: sdk-typescript
+        run: npm test
+
+      # Then test portal
+      - name: Install portal dependencies
+        working-directory: portal
+        run: npm ci
+
+      - name: Test portal
+        working-directory: portal
+        run: npm test
+
+      - name: Typecheck portal
+        working-directory: portal
+        run: npx tsc --noEmit
+
+  # ── Lint (Go + Python + Proto) ────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # — Go lint —
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: platform/go.sum
+
+      - name: Go vet
+        working-directory: platform
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: platform
+          args: --timeout=3m
+
+      # — Python lint —
+      - name: Install ruff
+        run: pipx install ruff
+
+      - name: Ruff check (runner)
+        working-directory: runner
+        run: ruff check . && ruff format --check .
+
+      - name: Ruff check (query)
+        working-directory: query
+        run: ruff check . && ruff format --check .
+
+      # — Proto lint —
+      - uses: bufbuild/buf-action@v1
+        with:
+          input: proto
+          setup_only: true
+
+      - name: Buf lint
+        working-directory: proto
+        run: buf lint
+
+      - name: Buf breaking change detection
+        if: github.event_name == 'pull_request'
+        working-directory: proto
+        run: buf breaking --against "https://github.com/${{ github.repository }}.git#branch=${{ github.base_ref }},subdir=proto"
+
+  # ── Docker Build (verify all images compile) ──────────────────
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build all four service images in parallel using Buildx bake.
+      # We only verify they compile — images are not pushed.
+      - name: Build ratd (platform)
+        uses: docker/build-push-action@v6
+        with:
+          context: platform
+          file: platform/Dockerfile
+          push: false
+          cache-from: type=gha,scope=ratd
+          cache-to: type=gha,mode=max,scope=ratd
+
+      - name: Build runner
+        uses: docker/build-push-action@v6
+        with:
+          context: runner
+          file: runner/Dockerfile
+          push: false
+          cache-from: type=gha,scope=runner
+          cache-to: type=gha,mode=max,scope=runner
+
+      - name: Build query
+        uses: docker/build-push-action@v6
+        with:
+          context: query
+          file: query/Dockerfile
+          push: false
+          cache-from: type=gha,scope=query
+          cache-to: type=gha,mode=max,scope=query
+
+      - name: Build portal
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: portal/Dockerfile
+          push: false
+          cache-from: type=gha,scope=portal
+          cache-to: type=gha,mode=max,scope=portal

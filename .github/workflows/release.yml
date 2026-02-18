@@ -1,0 +1,195 @@
+# RAT v2 — Release Pipeline
+# Triggered by pushing a version tag (v*). Builds and publishes:
+#   - Docker images to GHCR (4 services, multi-arch)
+#   - TypeScript SDK to GitHub Packages (npm)
+#   - Python packages to PyPI (runner + query)
+#   - GitHub Release with changelog
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  # ── Extract version from tag ─────────────────────────────────
+  meta:
+    name: Extract Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+  # ── Docker Images → GHCR ────────────────────────────────────
+  docker-images:
+    name: Docker — ${{ matrix.image }}
+    needs: meta
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: ratd
+            context: platform
+            file: platform/Dockerfile
+          - image: rat-runner
+            context: runner
+            file: runner/Dockerfile
+          - image: rat-query
+            context: query
+            file: query/Dockerfile
+          - image: rat-portal
+            context: .
+            file: portal/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: docker-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.docker-meta.outputs.tags }}
+          labels: ${{ steps.docker-meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  # ── TypeScript SDK → GitHub Packages (npm) ───────────────────
+  publish-ts-sdk:
+    name: Publish TS SDK
+    needs: meta
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk-typescript
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://npm.pkg.github.com"
+          cache: npm
+          cache-dependency-path: sdk-typescript/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Set version
+        run: npm version ${{ needs.meta.outputs.version }} --no-git-tag-version
+
+      - name: Publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Python Packages → PyPI ──────────────────────────────────
+  publish-python:
+    name: Publish Python — ${{ matrix.package }}
+    needs: meta
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - package: rat-runner
+            directory: runner
+          - package: rat-query
+            directory: query
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install --no-cache-dir build twine
+
+      - name: Set version
+        run: sed -i "s/version = \".*\"/version = \"${{ needs.meta.outputs.version }}\"/" pyproject.toml
+
+      - name: Build package
+        run: python -m build
+
+      - name: Publish to PyPI
+        run: twine upload dist/*
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+
+  # ── GitHub Release ───────────────────────────────────────────
+  github-release:
+    name: GitHub Release
+    needs: [meta, docker-images, publish-ts-sdk]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## 🐀 RAT v${{ needs.meta.outputs.version }}
+
+            ### Docker Images
+            ```bash
+            docker pull ghcr.io/squat-collective/ratd:${{ needs.meta.outputs.version }}
+            docker pull ghcr.io/squat-collective/rat-runner:${{ needs.meta.outputs.version }}
+            docker pull ghcr.io/squat-collective/rat-query:${{ needs.meta.outputs.version }}
+            docker pull ghcr.io/squat-collective/rat-portal:${{ needs.meta.outputs.version }}
+            ```
+
+            ### TypeScript SDK
+            ```bash
+            npm install @squat-collective/rat-client@${{ needs.meta.outputs.version }}
+            ```
+
+            ### Python Packages
+            ```bash
+            pip install rat-runner==${{ needs.meta.outputs.version }}
+            pip install rat-query==${{ needs.meta.outputs.version }}
+            ```
+
+            ### License
+            RAT is licensed under [AGPL-3.0](https://github.com/squat-collective/ratatouille/blob/main/LICENSE).
+            Third-party license notices are available in the
+            [Licenses workflow](https://github.com/squat-collective/ratatouille/actions/workflows/licenses.yml).

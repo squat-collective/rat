@@ -1,0 +1,152 @@
+# golangci-lint configuration for RAT platform (ratd)
+# https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 3m
+
+linters:
+  enable:
+    # Default-ish linters (high value, low noise)
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - gosimple
+    - ineffassign
+    - typecheck
+
+    # Additional quality linters
+    - gocritic      # opinionated but useful code patterns
+    - revive        # extensible Go linter (replaces golint)
+    - misspell      # catches common typos in comments/strings
+    - prealloc      # suggests slice pre-allocation
+
+  disable:
+    # Too noisy / too opinionated for our codebase
+    - gochecknoglobals  # we use package-level vars for configs/registries
+    - wrapcheck         # wrapping every error is excessive
+    - exhaustruct       # requiring all struct fields is impractical
+    - varnamelen        # short var names are idiomatic Go
+
+linters-settings:
+  errcheck:
+    # Don't flag unchecked errors in test files -- test error handling
+    # is often intentionally ignored (e.g., cleanup, setup helpers).
+    exclude-functions:
+      - (io.Closer).Close
+      - fmt.Fprintf
+      - fmt.Fprintln
+
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment  # micro-optimization, not worth the noise
+      - shadow          # too noisy — Go idiom of re-declaring err in nested scopes
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+    disabled-tags:
+      - style           # style checks are too noisy for CI — enforce in reviews instead
+    disabled-checks:
+      - hugeParam       # flagging large structs by value is noisy with proto types
+      - rangeValCopy    # same -- proto messages are often iterated by value
+
+  revive:
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+        disabled: true   # godoc enforcement -- enable later
+      - name: increment-decrement
+      - name: var-naming
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+      - name: empty-block
+      - name: superfluous-else
+      - name: unused-parameter
+      - name: unreachable-code
+      - name: redefines-builtin-id
+
+  misspell:
+    locale: US
+    # "cancelled" is used as a domain value in our API (run status).
+    # Both spellings are valid; we use British English for this term.
+    ignore-words:
+      - cancelled
+      - recognised
+
+  prealloc:
+    simple: true
+    range-loops: true
+    for-loops: false  # for-loops are harder to analyze accurately
+
+issues:
+  # Skip generated protobuf and connect code
+  exclude-dirs:
+    - gen
+
+  # Don't limit the number of issues reported per linter
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # Exclude errcheck in test files -- test error handling is often intentional
+    - path: _test\.go
+      linters:
+        - errcheck
+
+    # Exclude prealloc in test files -- test clarity > performance
+    - path: _test\.go
+      linters:
+        - prealloc
+
+    # Mock implementations in tests often have unused params (interface compliance)
+    - path: _test\.go
+      linters:
+        - revive
+      text: "unused-parameter"
+
+    # Deprecated API usage in tests — will fix separately
+    - path: _test\.go
+      linters:
+        - staticcheck
+      text: "SA1019"
+
+    # nil context in test setup is fine
+    - path: _test\.go
+      linters:
+        - staticcheck
+      text: "SA1012"
+
+    # Generated code should not be linted
+    - path: gen/
+      linters:
+        - gocritic
+        - revive
+        - misspell
+        - govet
+        - errcheck
+        - staticcheck
+        - unused
+        - gosimple
+        - ineffassign
+        - prealloc
+
+output:
+  formats:
+    - format: colored-line-number
+  sort-results: true
+  sort-order:
+    - linter
+    - file

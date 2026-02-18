@@ -1,0 +1,562 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Security
+
+RAT implements defense-in-depth security across every layer: network, transport, authentication, authorization, input validation, SQL injection prevention, Python sandboxing, query enforcement, container hardening, and webhook security.
+
+---
+
+## Security Architecture
+
+<Mermaid chart={`
+flowchart TD
+    subgraph Network ["Network Layer"]
+        FW["Docker Network Segmentation"]
+        CORS["CORS Policy"]
+    end
+
+    subgraph Transport ["Transport Layer"]
+        TLS["TLS (production)"]
+        Headers["Security Headers"]
+        RateLimit["Rate Limiting"]
+    end
+
+    subgraph Auth ["Authentication Layer"]
+        AuthPlugin["Plugin Auth (JWT)"]
+        APIKey["API Key Auth"]
+        Noop["Noop Auth"]
+    end
+
+    subgraph Authz ["Authorization Layer"]
+        Enforce["Enforcement Plugin"]
+        Audit["Audit Logging"]
+    end
+
+    subgraph Input ["Input Validation"]
+        PathVal["Path Validation"]
+        FileVal["File Path Validation"]
+        BodyLimit["Body Size Limit"]
+    end
+
+    subgraph Data ["Data Security"]
+        SQLSafe["SQL Injection Prevention"]
+        PySandbox["Python Sandbox"]
+        QueryRO["Query Read-Only"]
+    end
+
+    subgraph Container ["Container Security"]
+        ReadOnly["Read-Only FS"]
+        CapDrop["Cap Drop ALL"]
+        PIDLimit["PID Limits"]
+        NonRoot["Non-Root User"]
+    end
+
+    Network --> Transport --> Auth --> Authz --> Input --> Data --> Container
+`} />
+
+---
+
+## Authentication
+
+RAT supports three authentication modes, selected based on configuration:
+
+### Mode 1: Plugin Auth (Pro)
+
+When the `auth` plugin is configured in `rat.yaml`, all incoming requests are authenticated via the plugin's `Authenticate` gRPC call.
+
+<Mermaid chart={`
+sequenceDiagram
+    actor User
+    participant Portal
+    participant ratd
+    participant AuthPlugin as auth-keycloak
+
+    User->>Portal: Login via Keycloak
+    Portal-->>User: Bearer token (JWT)
+
+    User->>Portal: Click "Run Pipeline"
+    Portal->>ratd: POST /api/v1/runs<br/>Authorization: Bearer eyJhbG...
+    ratd->>AuthPlugin: gRPC Authenticate(token)
+    AuthPlugin->>AuthPlugin: Validate JWT signature (JWKS)
+    AuthPlugin->>AuthPlugin: Check token expiry
+    AuthPlugin->>AuthPlugin: Extract claims (user, roles)
+    AuthPlugin-->>ratd: AuthenticateResponse(user_id, email, roles)
+    ratd->>ratd: Inject user into context
+    ratd->>ratd: Continue to handler
+`} />
+
+**JWT validation details**:
+- Signature verified against Keycloak's JWKS endpoint
+- Token expiry checked (clock skew tolerance: 30 seconds)
+- Required claims: `sub` (user ID), `email`, `realm_access.roles`
+- Invalid or expired tokens return `401 Unauthorized`
+
+### Mode 2: API Key Auth
+
+When `RAT_API_KEY` environment variable is set, ratd validates the `X-API-Key` header against it:
+
+```
+X-API-Key: {RAT_API_KEY value}
+```
+
+This is a simple shared-secret model suitable for single-user or CI/CD integrations. The API key is compared using constant-time comparison to prevent timing attacks.
+
+### Mode 3: Noop Auth (Community Default)
+
+When no auth plugin is configured and no API key is set, all requests pass through without authentication. This is the default for the Community Edition --- a single-user, self-hosted platform.
+
+### Auth Mode Resolution
+
+```
+1. If auth plugin configured in rat.yaml → Plugin Auth (JWT)
+2. Else if RAT_API_KEY env var is set   → API Key Auth
+3. Else                                 → Noop Auth (pass-through)
+```
+
+---
+
+## Rate Limiting
+
+ratd implements per-IP token bucket rate limiting to prevent abuse and denial-of-service.
+
+### Default Limits
+
+| Setting | Value | Description |
+|---------|-------|-------------|
+| **Rate** | 50 requests/second | Sustained request rate per IP |
+| **Burst** | 100 requests | Maximum burst above the sustained rate |
+
+### How It Works
+
+The rate limiter uses a **token bucket algorithm**:
+
+- Each IP address gets a bucket with 100 tokens (burst capacity)
+- Tokens refill at 50 per second (sustained rate)
+- Each request consumes 1 token
+- When the bucket is empty, requests are rejected with `429 Too Many Requests`
+
+### Per-Endpoint Overrides
+
+Certain endpoints have custom rate limits:
+
+| Endpoint Pattern | Rate Limit | Reason |
+|-----------------|------------|--------|
+| `POST /api/v1/webhooks/*` | 100 requests/minute | Webhook endpoints receive external traffic |
+| `GET /health` | Unlimited | Health checks should never be rate-limited |
+
+### Rate Limit Headers
+
+Rate-limited responses include standard headers:
+
+```http
+HTTP/1.1 429 Too Many Requests
+X-RateLimit-Limit: 50
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1708099200
+Retry-After: 1
+```
+
+---
+
+## Input Validation
+
+### Path Parameter Validation
+
+All path parameters (namespace, layer, pipeline name) are validated against strict patterns:
+
+| Parameter | Pattern | Max Length | Examples |
+|-----------|---------|------------|----------|
+| Namespace | `[a-z][a-z0-9_-]*` | 128 chars | `default`, `ecommerce`, `my-project` |
+| Layer | `bronze`, `silver`, `gold` | exact match | `bronze` |
+| Pipeline name | `[a-z][a-z0-9_-]*` | 128 chars | `clean_orders`, `daily-revenue` |
+| Run ID | UUID format | 36 chars | `550e8400-e29b-41d4-a716-446655440000` |
+
+Invalid path parameters return `400 Bad Request` with a descriptive error message. The path validation middleware (layer 11 in the chain) runs before any handler logic.
+
+### File Path Validation
+
+File paths submitted via the storage API are validated to prevent directory traversal:
+
+| Check | Rule | Blocked Example |
+|-------|------|----------------|
+| No parent traversal | Reject `..` anywhere in path | `../../etc/passwd` |
+| No absolute paths | Reject paths starting with `/` | `/etc/shadow` |
+| No null bytes | Reject `\0` in path | `file.txt\0.jpg` |
+| Allowed characters | `[a-zA-Z0-9._-/]` only | `file;rm -rf /` |
+
+```go filename="File path validation (simplified)"
+func validateFilePath(path string) error {
+    if strings.Contains(path, "..") {
+        return errors.New("path traversal not allowed")
+    }
+    if filepath.IsAbs(path) {
+        return errors.New("absolute paths not allowed")
+    }
+    if strings.ContainsRune(path, 0) {
+        return errors.New("null bytes not allowed")
+    }
+    return nil
+}
+```
+
+### JSON Body Size Limit
+
+The JSON body limiter middleware (layer 7) caps request bodies at **1 MB**. Requests exceeding this limit receive `413 Payload Too Large`. This prevents:
+
+- Memory exhaustion from large JSON payloads
+- Slow request processing
+- Denial-of-service via large uploads (file uploads use a separate multipart endpoint with its own limits)
+
+---
+
+## SQL Injection Prevention
+
+RAT prevents SQL injection at multiple levels:
+
+### Go (ratd) --- sqlc
+
+All database queries in ratd use **sqlc**, which generates type-safe Go code from SQL. Queries are parameterized at compile time:
+
+```sql filename="queries/pipelines.sql"
+-- name: GetPipeline :one
+SELECT * FROM pipelines
+WHERE namespace = $1 AND layer = $2 AND name = $3;
+```
+
+```go filename="Generated Go code (sqlc)"
+func (q *Queries) GetPipeline(ctx context.Context, arg GetPipelineParams) (Pipeline, error) {
+    row := q.db.QueryRow(ctx, getPipeline, arg.Namespace, arg.Layer, arg.Name)
+    // ... type-safe scanning
+}
+```
+
+There is **zero string interpolation** in any SQL query. All parameters are bound via `$1`, `$2`, etc.
+
+### Python (runner) --- Parameterized DuckDB
+
+The runner uses parameterized queries for any user-influenced SQL:
+
+```python filename="Parameterized DuckDB query"
+# NEVER this:
+# conn.execute(f"SELECT * FROM {table_name}")  ← SQL injection risk
+
+# ALWAYS this:
+conn.execute("SELECT * FROM iceberg_scan(?)", [table_path])
+```
+
+### Python (ratq) --- Read-Only + Blocked Patterns
+
+The query service adds a third layer: even if SQL injection were possible, the query would be blocked by the read-only enforcement (see below).
+
+---
+
+## Python Sandbox
+
+The runner executes Python pipelines (`pipeline.py`) using `exec()` with a **4-layer sandbox**:
+
+### Layer 1: Blocked Builtins (26)
+
+The following built-in functions are removed from the execution namespace:
+
+```python filename="Blocked builtins"
+BLOCKED_BUILTINS = {
+    'exec', 'eval', 'compile',           # Code execution
+    '__import__', 'importlib',            # Import system
+    'open', 'input', 'print',            # I/O
+    'globals', 'locals', 'vars', 'dir',  # Introspection
+    'getattr', 'setattr', 'delattr',     # Attribute manipulation
+    'type', 'super', 'classmethod',      # Class system
+    'staticmethod', 'property',
+    'breakpoint', 'exit', 'quit',        # Debugger/exit
+    'help', 'license', 'credits',        # Interactive
+    'memoryview', 'bytearray',           # Raw memory
+}
+```
+
+### Layer 2: Blocked Imports (30+)
+
+Imports are intercepted and blocked for dangerous modules:
+
+```python filename="Blocked imports (selection)"
+BLOCKED_IMPORTS = {
+    'os', 'sys', 'subprocess',           # System access
+    'socket', 'http', 'urllib',          # Network access
+    'shutil', 'pathlib', 'glob',         # Filesystem access
+    'pickle', 'shelve', 'marshal',       # Deserialization
+    'ctypes', 'cffi',                    # Native code
+    'threading', 'multiprocessing',      # Concurrency
+    'signal', 'resource',               # System resources
+    'importlib', 'pkgutil',             # Import manipulation
+    'code', 'codeop', 'compileall',     # Code compilation
+    'ast',                               # AST manipulation
+    'inspect', 'dis',                    # Code inspection
+    # ... and more
+}
+```
+
+### Layer 3: AST Validation
+
+Before execution, the Python code is parsed into an Abstract Syntax Tree (AST) and validated:
+
+- No `import os`, `import sys`, etc. (catches static imports that bypass the import hook)
+- No `__builtins__` access (prevents sandbox escape via `__builtins__.__import__`)
+- No `__class__`, `__subclasses__`, `__globals__` access (prevents class hierarchy traversal)
+- No `exec()`, `eval()`, `compile()` calls (prevents nested code execution)
+
+### Layer 4: SQL Filtering
+
+Any SQL strings constructed inside the Python pipeline are filtered through the same safety checks used by the query service. This prevents a Python pipeline from executing dangerous SQL via DuckDB.
+
+<Callout type="warning">
+The Python sandbox is designed for defense-in-depth, not as a complete security boundary. In multi-tenant environments, use the Pro container-executor plugin, which runs each pipeline in an isolated container with its own network namespace and filesystem.
+</Callout>
+
+---
+
+## Query Service Read-Only Enforcement
+
+The query service (ratq) enforces strict read-only access. Before executing any SQL, it scans for blocked patterns:
+
+### Blocked SQL Statements (25+)
+
+```sql
+-- Data Definition Language (DDL)
+CREATE, ALTER, DROP, TRUNCATE, COMMENT, RENAME
+
+-- Data Manipulation Language (DML)
+INSERT, UPDATE, DELETE, MERGE, UPSERT
+
+-- Data Control Language (DCL)
+GRANT, REVOKE
+
+-- Transaction Control
+BEGIN, COMMIT, ROLLBACK, SAVEPOINT
+
+-- System Commands
+SET, PRAGMA, LOAD, INSTALL, ATTACH, DETACH,
+COPY, EXPORT, IMPORT, VACUUM, CHECKPOINT, CALL
+```
+
+### Blocked Functions (20+)
+
+```sql
+-- File I/O
+read_csv, read_csv_auto, read_json, read_json_auto,
+read_parquet, write_csv, write_parquet, write_json
+
+-- System functions
+read_blob, write_blob
+
+-- HTTP functions
+http_get, http_post
+
+-- Extension management
+install_extension, load_extension
+```
+
+### Query Limits
+
+| Limit | Value | Purpose |
+|-------|-------|---------|
+| Max query size | 100 KB | Prevent memory exhaustion from huge queries |
+| Query timeout | 30 seconds | Prevent long-running queries from blocking |
+| Result set limit | Configurable | Cap the number of returned rows |
+
+### Enforcement Order
+
+```
+1. Size check (< 100 KB)
+2. Statement blocklist scan
+3. Function blocklist scan
+4. Execute with 30s timeout
+5. Return results
+```
+
+If any check fails, the query is rejected immediately with a descriptive error.
+
+---
+
+## Container Hardening
+
+Every container in the RAT stack is hardened with the following Docker security features:
+
+### Security Features by Container
+
+| Feature | ratd | runner | ratq | portal | postgres | minio | nessie |
+|---------|------|--------|------|--------|----------|-------|--------|
+| Read-only filesystem | Yes | Yes | Yes | Yes | No | No | No |
+| tmpfs /tmp | Yes | Yes | Yes | Yes | --- | --- | --- |
+| cap_drop ALL | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| no-new-privileges | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| pids_limit 100 | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Non-root user | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Memory limits | 512M | 2G | 1G | 512M | 1G | 1G | 512M |
+| CPU limits | 1.0 | 2.0 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
+
+<Callout type="info">
+Postgres, MinIO, and Nessie cannot use read-only filesystems because they need to write data to disk. They use Docker volumes for persistent storage, and all other filesystem paths are ephemeral.
+</Callout>
+
+### Explanation of Each Feature
+
+| Feature | What It Prevents |
+|---------|-----------------|
+| **Read-only filesystem** | Writing to the container filesystem (malware persistence, config tampering) |
+| **tmpfs /tmp** | Provides a writable /tmp in RAM only (wiped on restart) |
+| **cap_drop ALL** | Drops all Linux capabilities (no raw sockets, no chown, no mount, etc.) |
+| **no-new-privileges** | Prevents privilege escalation via setuid/setgid binaries |
+| **pids_limit 100** | Prevents fork bombs (max 100 processes per container) |
+| **Non-root user** | Containers run as unprivileged users (ratd: scratch, runner: appuser, etc.) |
+| **Memory limits** | Prevents runaway memory consumption (OOM killer triggers at limit) |
+| **CPU limits** | Prevents CPU monopolization by a single container |
+
+### Logging
+
+All containers use the `json-file` logging driver with rotation:
+
+```yaml filename="Logging configuration"
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+This caps log storage at 30 MB per container (3 files x 10 MB), preventing disk exhaustion from verbose logging.
+
+---
+
+## Webhook Security
+
+RAT supports webhook triggers (e.g., trigger a pipeline run via an external HTTP call). Webhook security follows these principles:
+
+### Token Handling
+
+- Webhook tokens are stored as **SHA-256 hashes** in the database (never plaintext)
+- Token comparison uses **constant-time comparison** (prevents timing attacks)
+- Tokens are transmitted in the `X-Webhook-Token` **header only** (never in the URL query string)
+
+```go filename="Constant-time token comparison"
+expectedHash := sha256.Sum256([]byte(storedToken))
+receivedHash := sha256.Sum256([]byte(receivedToken))
+if !hmac.Equal(expectedHash[:], receivedHash[:]) {
+    return errors.New("invalid webhook token")
+}
+```
+
+### Why Header-Only?
+
+Tokens in URL query strings:
+- Appear in server access logs
+- Appear in browser history
+- Appear in HTTP referer headers
+- May be cached by proxies
+
+By requiring tokens in the `X-Webhook-Token` header, these exposure vectors are eliminated.
+
+### Rate Limiting
+
+Webhook endpoints have a stricter rate limit: **100 requests/minute** (vs. 50 requests/second for normal API calls). This prevents abuse from external callers while still allowing reasonable trigger frequency.
+
+---
+
+## Network Segmentation
+
+<Mermaid chart={`
+flowchart TB
+    subgraph Internet ["External (Host Machine)"]
+        Browser["Browser"]
+        CLI["curl / API clients"]
+    end
+
+    subgraph Frontend ["Frontend Network (rat_frontend)"]
+        Portal["Portal :3000"]
+        ratd_fe["ratd :8080"]
+    end
+
+    subgraph Backend ["Backend Network (infra_default)"]
+        ratd_be["ratd"]
+        Runner["Runner :50052"]
+        Ratq["ratq :50051"]
+        Postgres["Postgres :5432"]
+        MinIO["MinIO :9000"]
+        Nessie["Nessie :19120"]
+    end
+
+    Browser -->|HTTP| Portal
+    CLI -->|HTTP| ratd_fe
+    Portal --> ratd_be
+    ratd_be --> Runner
+    ratd_be --> Ratq
+    ratd_be --> Postgres
+    ratd_be --> MinIO
+    ratd_be --> Nessie
+`} />
+
+### Network Rules
+
+| Source | Can Reach | Cannot Reach |
+|--------|-----------|-------------|
+| Browser/External | Portal (3000), ratd (8080) | runner, ratq, postgres, minio, nessie |
+| Portal | ratd (internal) | runner, ratq (goes through ratd) |
+| ratd | All backend services | N/A (has full access) |
+| runner | MinIO, Nessie, ratd (callback) | Postgres, ratq, portal |
+| ratq | MinIO, Nessie | Postgres, runner, portal, ratd |
+| postgres | None (accepts connections only) | All outbound |
+
+<Callout type="warning">
+In development mode, Postgres (5432), MinIO (9000, 9001), and Nessie (19120) bind to **localhost only** (`127.0.0.1:port:port`). These ports are accessible from the host machine for debugging but not from external networks. In production, remove these localhost port bindings entirely.
+</Callout>
+
+---
+
+## Security Headers
+
+ratd sets the following security headers on all responses:
+
+| Header | Value | Purpose |
+|--------|-------|---------|
+| `X-Content-Type-Options` | `nosniff` | Prevents MIME type sniffing |
+| `X-Frame-Options` | `DENY` | Prevents clickjacking |
+| `X-XSS-Protection` | `1; mode=block` | Enables browser XSS filter |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Controls referrer information |
+| `X-Request-Id` | `{uuid}` | Unique request identifier for tracing |
+
+---
+
+## Audit Logging
+
+All state-changing operations (POST, PUT, DELETE) are logged to the `audit_log` table:
+
+```sql filename="audit_log schema"
+CREATE TABLE audit_log (
+    id          UUID PRIMARY KEY,
+    actor       VARCHAR(255) NOT NULL,  -- username or "anonymous"
+    action      VARCHAR(100) NOT NULL,  -- "pipeline.create", "run.trigger"
+    object_type VARCHAR(20),            -- "pipeline", "run", "schedule"
+    object_id   UUID,
+    details     JSONB,                  -- request body, response code, etc.
+    timestamp   TIMESTAMPTZ NOT NULL
+);
+```
+
+### Audit Events
+
+| Action | Trigger |
+|--------|---------|
+| `pipeline.create` | New pipeline created |
+| `pipeline.update` | Pipeline code or config modified |
+| `pipeline.delete` | Pipeline soft-deleted |
+| `run.trigger` | Pipeline run started (manual, scheduled, triggered) |
+| `run.cancel` | Pipeline run cancelled |
+| `schedule.create` | New schedule created |
+| `schedule.update` | Schedule modified |
+| `schedule.delete` | Schedule deleted |
+| `namespace.create` | New namespace created |
+| `storage.upload` | File uploaded to landing zone |
+
+### Audit Log Retention
+
+The reaper prunes audit log entries older than **365 days** (configurable via `audit_log_max_age_days` in platform settings).

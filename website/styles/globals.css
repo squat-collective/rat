@@ -1,0 +1,250 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 96%;
+    --foreground: 0 0% 6%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 6%;
+    --primary: 142 72% 45%;
+    --primary-foreground: 0 0% 2%;
+    --secondary: 0 0% 90%;
+    --secondary-foreground: 0 0% 10%;
+    --muted: 0 0% 92%;
+    --muted-foreground: 0 0% 40%;
+    --accent: 280 100% 65%;
+    --accent-foreground: 0 0% 100%;
+    --border: 0 0% 82%;
+    --input: 0 0% 82%;
+    --ring: 142 72% 45%;
+    --radius: 0px;
+    --neon: 142 72% 45%;
+    --neon-alt: 280 100% 65%;
+    --neon-cyan: 180 100% 50%;
+  }
+
+  .dark {
+    --background: 0 0% 4%;
+    --foreground: 0 0% 90%;
+    --card: 0 0% 7%;
+    --card-foreground: 0 0% 90%;
+    --primary: 142 72% 45%;
+    --primary-foreground: 0 0% 2%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 90%;
+    --muted: 0 0% 14%;
+    --muted-foreground: 0 0% 50%;
+    --accent: 280 100% 65%;
+    --accent-foreground: 0 0% 100%;
+    --border: 0 0% 16%;
+    --input: 0 0% 16%;
+    --ring: 142 72% 45%;
+    --neon: 142 72% 45%;
+    --neon-alt: 280 100% 65%;
+    --neon-cyan: 180 100% 50%;
+  }
+}
+
+/* Layer colors */
+:root {
+  --layer-bronze: #d97706;
+  --layer-bronze-dim: rgba(217, 119, 6, 0.08);
+  --layer-silver: #94a3b8;
+  --layer-silver-dim: rgba(148, 163, 184, 0.08);
+  --layer-gold: #eab308;
+  --layer-gold-dim: rgba(234, 179, 8, 0.08);
+}
+
+/* Override Nextra theme with RAT brutalist style */
+:root {
+  --nextra-primary-hue: 142deg;
+  --nextra-primary-saturation: 72%;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    border-radius: 0 !important;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: "JetBrains Mono", monospace;
+  }
+}
+
+/* Neon text effects */
+.neon-text {
+  text-shadow: 0 0 7px hsl(var(--neon) / 0.6), 0 0 20px hsl(var(--neon) / 0.4), 0 0 40px hsl(var(--neon) / 0.2);
+}
+
+.neon-text-alt {
+  text-shadow: 0 0 7px hsl(var(--neon-alt) / 0.6), 0 0 20px hsl(var(--neon-alt) / 0.4);
+}
+
+.neon-text-cyan {
+  text-shadow: 0 0 7px hsl(var(--neon-cyan) / 0.6), 0 0 20px hsl(var(--neon-cyan) / 0.4);
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, hsl(var(--neon)) 0%, hsl(var(--neon-cyan)) 50%, hsl(var(--neon-alt)) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Brutal cards */
+.brutal-card {
+  border: 2px solid hsl(var(--border));
+  transition: all 0.2s ease;
+}
+
+.brutal-card:hover {
+  border-color: hsl(var(--neon));
+  box-shadow: 4px 4px 0 0 hsl(var(--neon) / 0.3);
+  transform: translate(-2px, -2px);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(var(--background));
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--neon) / 0.3);
+  border-radius: 0;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--neon) / 0.6);
+}
+
+/* Selection */
+::selection {
+  background: hsl(var(--neon) / 0.3);
+  color: hsl(var(--foreground));
+}
+
+/* Nextra overrides — brutalist sharp corners everywhere */
+.nextra-nav-container,
+.nextra-sidebar-container,
+.nextra-toc,
+article,
+pre,
+code,
+button,
+input,
+[class*="nextra"] {
+  border-radius: 0 !important;
+}
+
+/* Code blocks — RAT themed */
+pre {
+  border: 1px solid hsl(var(--border)) !important;
+}
+
+pre:hover {
+  border-color: hsl(var(--neon) / 0.5) !important;
+}
+
+/* Sidebar active link glow */
+.nextra-sidebar-container a[aria-current="page"],
+.nextra-sidebar-container a.nx-text-primary-600,
+.nextra-sidebar-container li.active > a {
+  text-shadow: 0 0 5px hsl(var(--neon) / 0.4);
+}
+
+/* Callout styling */
+.nextra-callout {
+  border-radius: 0 !important;
+  border-left: 3px solid hsl(var(--neon));
+}
+
+/* Tables */
+table {
+  font-size: 0.875rem;
+}
+
+th {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+}
+
+/* Layer badges */
+.layer-bronze { color: var(--layer-bronze); }
+.layer-silver { color: var(--layer-silver); }
+.layer-gold { color: var(--layer-gold); }
+
+/* Mermaid diagram container */
+.mermaid-wrapper {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+  overflow-x: auto;
+}
+
+.mermaid-wrapper:hover {
+  border-color: hsl(var(--neon) / 0.5);
+}
+
+/* Cards grid */
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cards-cols, 3), 1fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+@media (max-width: 768px) {
+  .cards-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Card components */
+.brutal-card.card-link,
+.brutal-card.card-static {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  text-decoration: none;
+  color: inherit;
+}
+
+.brutal-card .card-body {
+  padding: 1rem 1rem 0;
+  font-size: 0.875rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.brutal-card .card-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: hsl(var(--foreground));
+}
+
+.brutal-card.card-link .card-title {
+  color: hsl(var(--primary));
+}
+
+.brutal-card .card-arrow {
+  transition: transform 0.15s ease;
+}
+
+.brutal-card.card-link:hover .card-arrow {
+  transform: translateX(3px);
+}

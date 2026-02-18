@@ -1,0 +1,354 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Testing
+
+RAT follows Test-Driven Development (TDD). Tests are written **before** the implementation, not after. This page covers the TDD workflow, test structure for each language, naming conventions, coverage targets, and how to run tests.
+
+---
+
+## TDD Workflow
+
+Every code change follows the Red-Green-Refactor cycle:
+
+<Mermaid chart={`
+flowchart LR
+    RED["RED\nWrite a failing test"] --> GREEN["GREEN\nMinimum code to pass"]
+    GREEN --> REFACTOR["REFACTOR\nClean up, tests stay green"]
+    REFACTOR --> RED
+`} />
+
+<Steps>
+
+### RED — Write a failing test
+
+Write a test that defines the desired behavior. Run it. It must fail. If it passes, the test is not testing anything new.
+
+```bash filename="Terminal"
+make test-go    # see the test fail
+```
+
+### GREEN — Write the minimum code to make it pass
+
+Write the simplest implementation that makes the test pass. Do not optimize, do not handle edge cases, do not refactor — just make it green.
+
+```bash filename="Terminal"
+make test-go    # see the test pass
+```
+
+### REFACTOR — Clean up while keeping tests green
+
+Now improve the code: extract functions, improve names, remove duplication. Run tests after every change to ensure they stay green.
+
+```bash filename="Terminal"
+make test-go    # still green after refactoring
+make lint       # code is clean
+```
+
+</Steps>
+
+### Rules
+
+- **Write the test FIRST** — no exceptions. If you cannot test it, rethink the design.
+- **One assertion per test** (where reasonable) — tests should fail for exactly one reason.
+- **Tests are documentation** — test names describe behavior, not implementation.
+- **No mocks unless necessary** — prefer real dependencies (test containers, in-memory stores). Mock external services only.
+
+<Callout type="info">
+A test written after the code is a verification test. A test written before the code is a **design tool** — it forces you to think about the API, inputs, outputs, and error cases before writing any implementation.
+</Callout>
+
+---
+
+## Test Structure
+
+### Go (platform/)
+
+Tests live next to the code they test. Each `.go` file has a corresponding `_test.go` file:
+
+```
+platform/
+├── internal/api/
+│   ├── router.go
+│   ├── router_test.go
+│   ├── pipelines.go
+│   ├── pipelines_test.go
+│   ├── runs.go
+│   ├── runs_test.go
+│   └── testhelpers_test.go    # shared test utilities
+├── internal/executor/
+│   ├── warmpool.go
+│   └── warmpool_test.go
+├── internal/scheduler/
+│   ├── scheduler.go
+│   └── scheduler_test.go
+├── internal/config/
+│   ├── config.go
+│   └── config_test.go
+└── integration_test/          # cross-package integration tests
+    └── api_integration_test.go
+```
+
+**Test file naming**: `{source_file}_test.go`
+
+### Python (runner/, query/)
+
+Tests live in a separate `tests/` directory, organized by type:
+
+```
+runner/
+├── src/rat_runner/
+│   ├── engine.py
+│   ├── executor.py
+│   ├── templating.py
+│   └── ...
+└── tests/
+    ├── conftest.py            # shared fixtures
+    └── unit/
+        ├── test_engine.py
+        ├── test_executor.py
+        ├── test_templating.py
+        ├── test_iceberg.py
+        ├── test_server.py
+        ├── test_nessie.py
+        ├── test_python_exec.py
+        ├── test_quality.py
+        ├── test_log.py
+        ├── test_config.py
+        ├── test_models.py
+        └── test_cleanup.py
+```
+
+**Test file naming**: `test_{module_name}.py`
+
+### TypeScript (portal/, sdk-typescript/)
+
+Tests can be colocated or in a separate `tests/` directory:
+
+```
+portal/
+├── src/
+│   ├── components/
+│   └── hooks/
+└── tests/
+    ├── components/
+    └── hooks/
+
+sdk-typescript/
+├── src/
+│   └── index.ts
+└── tests/
+    └── client.test.ts
+```
+
+**Test file naming**: `{module_name}.test.ts`
+
+---
+
+## Naming Conventions
+
+Good test names read like sentences describing behavior. They answer: "What does this thing do in this situation?"
+
+### Go
+
+Pattern: `TestFunction_Scenario_ExpectedBehavior`
+
+```go filename="platform/internal/api/pipelines_test.go"
+func TestCreatePipeline_ValidSpec_ReturnsCreatedPipeline(t *testing.T) { ... }
+func TestCreatePipeline_DuplicateName_ReturnsConflictError(t *testing.T) { ... }
+func TestCreatePipeline_InvalidLayer_ReturnsValidationError(t *testing.T) { ... }
+func TestCreatePipeline_EmptyName_ReturnsValidationError(t *testing.T) { ... }
+func TestGetPipeline_ExistingPipeline_ReturnsPipeline(t *testing.T) { ... }
+func TestGetPipeline_NonExistent_ReturnsNotFoundError(t *testing.T) { ... }
+```
+
+For table-driven tests (Go's preferred pattern):
+
+```go filename="platform/internal/config/config_test.go"
+func TestResolvePath(t *testing.T) {
+    tests := []struct {
+        name     string
+        base     string
+        path     string
+        expected string
+    }{
+        {"absolute path unchanged", "/etc", "/tmp/file", "/tmp/file"},
+        {"relative resolved from base", "/etc/rat", "./plugins/auth", "/etc/rat/plugins/auth"},
+        {"empty path returns base", "/etc/rat", "", "/etc/rat"},
+    }
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            result := ResolvePath(tt.base, tt.path)
+            assert.Equal(t, tt.expected, result)
+        })
+    }
+}
+```
+
+### Python
+
+Pattern: `test_{what}_{scenario}_{expected}` — reads like a sentence.
+
+```python filename="runner/tests/unit/test_templating.py"
+def test_ref_resolution_returns_iceberg_scan_path():
+    ...
+
+def test_ref_resolution_raises_on_missing_table():
+    ...
+
+def test_ref_resolution_with_cross_namespace_uses_explicit_namespace():
+    ...
+
+def test_watermark_value_returns_max_of_column():
+    ...
+
+def test_is_incremental_returns_false_on_first_run():
+    ...
+
+def test_is_incremental_returns_true_when_table_exists():
+    ...
+```
+
+### TypeScript
+
+Pattern: `describe` / `it` blocks that read as sentences.
+
+```typescript filename="sdk-typescript/tests/client.test.ts"
+describe('createClient', () => {
+  it('creates a client with the given base URL', () => { ... })
+  it('throws if base URL is missing', () => { ... })
+})
+
+describe('pipelines', () => {
+  it('lists all pipelines', () => { ... })
+  it('returns empty array when no pipelines exist', () => { ... })
+  it('filters by namespace when provided', () => { ... })
+})
+
+describe('error handling', () => {
+  it('throws NotFoundError on 404', () => { ... })
+  it('throws ValidationError on 422', () => { ... })
+  it('retries GET requests on 503', () => { ... })
+  it('does not retry POST requests', () => { ... })
+})
+```
+
+---
+
+## Test at the Right Level
+
+<Cards>
+  <Card title="Unit Tests">
+    Test pure functions, business logic, parsers, validators. Fast, isolated, no external dependencies. This is the majority of tests.
+  </Card>
+  <Card title="Integration Tests">
+    Test API endpoints, gRPC services, database queries against real dependencies (Postgres, MinIO). Slower, but catch real issues.
+  </Card>
+  <Card title="E2E Tests">
+    Test full pipeline runs through all services. Fewest tests, slowest to run. Validate that the system works as a whole.
+  </Card>
+</Cards>
+
+The testing pyramid: many unit tests, some integration tests, few E2E tests.
+
+| Level | Count | Speed | Dependencies | Run With |
+|---|---|---|---|---|
+| Unit | 200+ | ~5 seconds | None (mocks if needed) | `make test-go`, `make test-py`, `make test-ts` |
+| Integration | ~20 | ~30 seconds | Postgres, MinIO | `make test-integration` |
+| E2E | ~5 | ~2 minutes | Full stack running | `make smoke-test` |
+
+---
+
+## Coverage
+
+### Targets
+
+| Scope | Target | Rationale |
+|---|---|---|
+| Core logic (executor, engine, API handlers, auth) | **80%+** | Critical paths must be well-tested |
+| Utility code (config loading, logging, models) | **60%+** | Important but less critical |
+| Generated code (proto stubs, sqlc output) | **0%** (excluded) | Auto-generated, do not test |
+| Overall | **80%+** | Weighted by code criticality |
+
+### What NOT to Test
+
+- Trivial getters and setters
+- Auto-generated code (proto stubs, sqlc)
+- Configuration boilerplate
+- Third-party library behavior (trust their tests)
+
+<Callout type="warning">
+Do not chase 100% coverage. A good integration test that exercises a real code path is worth more than 10 unit tests that mock everything. Focus on testing **behavior**, not lines of code.
+</Callout>
+
+### Checking Coverage
+
+```bash filename="Terminal"
+# Go coverage report
+docker run --rm -v $(pwd)/platform:/app -w /app golang:1.24 \
+  sh -c "go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out"
+
+# Python coverage report
+docker run --rm -v $(pwd)/runner:/app -w /app python:3.12-slim \
+  sh -c "pip install -q uv && uv pip install --system -q -e '.[dev]' && pytest --cov=rat_runner --cov-report=term-missing"
+```
+
+---
+
+## Running Tests
+
+### Quick Reference
+
+| Command | What It Runs | Duration |
+|---|---|---|
+| `make test` | All tests (Go + Python + TS), sequential | ~2 minutes |
+| `make test-all-parallel` | All tests in parallel | ~1 minute |
+| `make test-go` | Go platform tests with race detector | ~15 seconds |
+| `make test-py` | Python runner + query tests | ~30 seconds |
+| `make test-ts` | TypeScript SDK + portal tests | ~20 seconds |
+| `make test-integration` | Go integration tests with real DB | ~45 seconds |
+| `make smoke-test` | E2E smoke test against running stack | ~30 seconds |
+
+### Speeding Up Python Tests
+
+Build pre-cached test images so dependencies are not installed from scratch every time:
+
+```bash filename="Terminal"
+make test-images   # one-time build (~2 minutes)
+make test-py       # now runs in ~10 seconds instead of ~30 seconds
+```
+
+### Running a Specific Test (Go)
+
+```bash filename="Terminal"
+docker run --rm -v $(pwd)/platform:/app -w /app golang:1.24 \
+  go test -v -run TestCreatePipeline ./internal/api/...
+```
+
+### Running a Specific Test (Python)
+
+```bash filename="Terminal"
+docker run --rm -v $(pwd)/runner:/app -w /app python:3.12-slim \
+  sh -c "pip install -q uv && uv pip install --system -q -e '.[dev]' && pytest -v -k test_ref_resolution"
+```
+
+---
+
+## Writing Good Tests
+
+### Do
+
+- Test behavior, not implementation
+- Use descriptive names that read like sentences
+- Keep tests independent (no shared mutable state between tests)
+- Test error cases as thoroughly as success cases
+- Use test fixtures (`conftest.py` in Python, `testhelpers_test.go` in Go)
+
+### Do Not
+
+- Do not test private methods directly (test through the public API)
+- Do not use mocks when you can use a real dependency
+- Do not write tests that pass regardless of implementation (tautological tests)
+- Do not couple tests to implementation details (variable names, internal state)
+- Do not skip failing tests — fix them or remove the feature

@@ -1,0 +1,324 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+
+# Query Console
+
+The Query Console is RAT's built-in SQL workbench for exploring and analyzing your data. It connects to the **ratq** service, which runs a read-only DuckDB instance with access to all your Iceberg tables.
+
+---
+
+## Overview
+
+The Query Console lives in the Portal sidebar under **Query**. It provides:
+
+- A **SQL editor** with syntax highlighting (CodeMirror 6)
+- A **schema browser** showing all namespaces, layers, tables, and columns
+- A **results table** with typed cell rendering and pagination
+- **Read-only enforcement** — write operations are blocked before they reach DuckDB
+
+---
+
+## Using the Query Console
+
+<Steps>
+
+### Open the Query Console
+
+Click **Query** in the Portal sidebar. The console opens with a blank SQL editor on the right and the schema browser on the left.
+
+### Browse the schema
+
+The schema browser shows your data hierarchy:
+
+```
+default/                    ← namespace
+├── bronze/                 ← layer
+│   ├── raw_orders          ← table
+│   │   ├── order_id (INT)  ← columns with types
+│   │   ├── customer_id (INT)
+│   │   ├── total_amount (DECIMAL)
+│   │   └── created_at (TIMESTAMP)
+│   └── raw_customers
+├── silver/
+│   ├── clean_orders
+│   └── clean_customers
+└── gold/
+    └── daily_revenue
+```
+
+Click on a **table name** to insert its fully-qualified reference into the editor.
+
+### Write a query
+
+Type your SQL in the editor. Use three-part table names in the format `"namespace"."layer"."table"`:
+
+```sql filename="Query"
+SELECT *
+FROM "default"."silver"."clean_orders"
+WHERE total_amount > 100
+ORDER BY created_at DESC
+LIMIT 100
+```
+
+### Execute
+
+Press **Ctrl+Enter** (or **Cmd+Enter** on macOS) to run the query. Results appear in the DataTable below the editor.
+
+</Steps>
+
+---
+
+## Auto-Quoting
+
+When you reference tables in the Query Console, RAT automatically handles quoting for three-part names. If you click a table in the schema browser, it inserts the properly quoted identifier:
+
+```sql
+-- What you see in the schema browser:
+-- default > bronze > raw_orders
+
+-- What gets inserted when you click:
+"default"."bronze"."raw_orders"
+```
+
+You can also type unquoted names with dot notation and RAT will resolve them:
+
+```sql filename="Query"
+-- These are equivalent:
+SELECT * FROM "default"."bronze"."raw_orders"
+SELECT * FROM default.bronze.raw_orders
+```
+
+<Callout type="info">
+Quoting is required when table or namespace names contain special characters or match SQL reserved words. The auto-quoting in the schema browser always uses quoted identifiers to be safe.
+</Callout>
+
+---
+
+## Read-Only Enforcement
+
+The Query Console is **strictly read-only**. RAT validates every query before execution and blocks any statement that could modify data. The following statement types are blocked:
+
+| Blocked Statement | Example |
+|---|---|
+| `INSERT` | `INSERT INTO ... VALUES ...` |
+| `UPDATE` | `UPDATE ... SET ...` |
+| `DELETE` | `DELETE FROM ...` |
+| `DROP` | `DROP TABLE ...` |
+| `CREATE` | `CREATE TABLE ...` |
+| `ALTER` | `ALTER TABLE ...` |
+| `TRUNCATE` | `TRUNCATE TABLE ...` |
+| `COPY` | `COPY ... TO ...` |
+| `ATTACH` | `ATTACH DATABASE ...` |
+
+If you attempt a write operation, you will see an error:
+
+```
+Error: Write operations are not allowed in the Query Console.
+Use a pipeline to modify data.
+```
+
+<Callout type="warning">
+The read-only enforcement is implemented via SQL statement validation in the `ratq` service. It parses the query before execution and rejects any statement that is not a `SELECT`, `DESCRIBE`, `SHOW`, `EXPLAIN`, or `WITH` (CTE) statement.
+</Callout>
+
+---
+
+## Query Limits
+
+| Limit | Value | Description |
+|---|---|---|
+| **Max query length** | 100 KB | Queries exceeding this size are rejected |
+| **Execution timeout** | 30 seconds | Long-running queries are automatically cancelled |
+| **Result row limit** | Configurable | Default pagination returns results in pages |
+
+If your query times out, try:
+- Adding `LIMIT` to reduce result set size
+- Filtering with `WHERE` to reduce scanned data
+- Using `EXPLAIN` to understand the query plan
+
+---
+
+## Useful Query Patterns
+
+### Describe a table
+
+```sql filename="Query"
+DESCRIBE "default"."silver"."clean_orders"
+```
+
+Returns column names, types, and nullability.
+
+### Count rows
+
+```sql filename="Query"
+SELECT COUNT(*) AS row_count
+FROM "default"."silver"."clean_orders"
+```
+
+### Check for NULL values
+
+```sql filename="Query"
+SELECT
+    COUNT(*) AS total_rows,
+    COUNT(customer_email) AS non_null_emails,
+    COUNT(*) - COUNT(customer_email) AS null_emails
+FROM "default"."silver"."clean_customers"
+```
+
+### Sample random rows
+
+```sql filename="Query"
+SELECT *
+FROM "default"."bronze"."raw_orders"
+USING SAMPLE 100
+```
+
+### Column statistics
+
+```sql filename="Query"
+SELECT
+    MIN(total_amount) AS min_amount,
+    MAX(total_amount) AS max_amount,
+    AVG(total_amount) AS avg_amount,
+    MEDIAN(total_amount) AS median_amount,
+    STDDEV(total_amount) AS stddev_amount,
+    COUNT(DISTINCT customer_id) AS unique_customers
+FROM "default"."silver"."clean_orders"
+```
+
+### Value distribution
+
+```sql filename="Query"
+SELECT
+    status,
+    COUNT(*) AS count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage
+FROM "default"."silver"."clean_orders"
+GROUP BY status
+ORDER BY count DESC
+```
+
+### Recent data check (freshness)
+
+```sql filename="Query"
+SELECT
+    MAX(updated_at) AS latest_record,
+    NOW() - MAX(updated_at) AS age
+FROM "default"."silver"."clean_orders"
+```
+
+### Cross-table joins
+
+```sql filename="Query"
+SELECT
+    o.order_id,
+    c.customer_name,
+    o.total_amount,
+    o.status
+FROM "default"."silver"."clean_orders" o
+JOIN "default"."silver"."clean_customers" c
+    ON o.customer_id = c.customer_id
+WHERE o.created_at >= '2026-01-01'
+ORDER BY o.total_amount DESC
+LIMIT 50
+```
+
+### DuckDB-specific functions
+
+DuckDB provides powerful built-in functions that are particularly useful for data exploration:
+
+```sql filename="Query"
+-- Approximate distinct count (faster for large tables)
+SELECT APPROX_COUNT_DISTINCT(customer_id) FROM "default"."silver"."clean_orders"
+
+-- String aggregation
+SELECT
+    customer_id,
+    STRING_AGG(order_id::VARCHAR, ', ') AS order_ids
+FROM "default"."silver"."clean_orders"
+GROUP BY customer_id
+LIMIT 10
+
+-- Date binning
+SELECT
+    TIME_BUCKET(INTERVAL '1 day', created_at) AS day,
+    COUNT(*) AS order_count,
+    SUM(total_amount) AS revenue
+FROM "default"."silver"."clean_orders"
+GROUP BY day
+ORDER BY day DESC
+LIMIT 30
+
+-- List unique values in a column
+SELECT DISTINCT status
+FROM "default"."silver"."clean_orders"
+ORDER BY status
+```
+
+---
+
+## Results Table
+
+Query results are displayed in RAT's DataTable component with:
+
+- **Row numbers** — sequential numbering for easy reference
+- **Typed cell rendering** — numbers are right-aligned, dates are formatted, NULLs are displayed as a distinct gray badge
+- **Zebra striping** — alternating row colors for readability
+- **Column sorting** — click column headers to sort
+- **Pagination** — large result sets are paginated
+
+---
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+Enter` / `Cmd+Enter` | Execute query |
+| `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Execute selected text only |
+| `Ctrl+/` / `Cmd+/` | Toggle line comment |
+| `Ctrl+Space` | Trigger autocomplete |
+| `Tab` | Accept autocomplete suggestion |
+
+---
+
+## Querying via API
+
+You can also run queries programmatically through the ratd API, which proxies to ratq:
+
+```bash filename="Terminal"
+curl -X POST http://localhost:8080/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sql": "SELECT COUNT(*) FROM \"default\".\"silver\".\"clean_orders\""
+  }'
+```
+
+Response:
+
+```json filename="Response"
+{
+  "columns": ["count_star()"],
+  "types": ["BIGINT"],
+  "rows": [[42150]],
+  "row_count": 1,
+  "duration_ms": 23
+}
+```
+
+---
+
+## Troubleshooting
+
+### "Table not found" error
+
+The table may not exist yet (no successful pipeline run has written to it), or the namespace/layer/name is misspelled. Check the schema browser for the correct table path.
+
+### Query is slow
+
+- Add a `WHERE` clause to filter data
+- Use `LIMIT` to restrict results
+- Check if the table is very large with `SELECT COUNT(*)` first
+- DuckDB scans Iceberg data files in parallel, but very wide tables (100+ columns) can be slower
+
+### Schema browser is empty
+
+The schema browser populates from Nessie catalog metadata. If no pipelines have run yet, there are no tables to show. Run a pipeline first, then refresh the schema browser.

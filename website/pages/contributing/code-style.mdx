@@ -1,0 +1,449 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Code Style
+
+RAT is a polyglot project: Go for the platform, Python for the runner and query services, and TypeScript for the portal and SDK. Each language follows its own conventions, but some principles are universal: clarity over cleverness, explicit over implicit, and small functions that do one thing.
+
+---
+
+## Universal Principles
+
+These apply across all languages in the RAT codebase:
+
+1. **Functions should be short** — if a function is longer than 40 lines, split it
+2. **Names should be descriptive** — no single-letter variables outside of loop iterators and well-known conventions (`ctx`, `err`, `req`, `res`)
+3. **Errors are first-class** — always handle errors explicitly, never swallow them
+4. **No global mutable state** — pass dependencies through constructors or function arguments
+5. **Comments explain _why_, not _what_** — the code says what, the comment says why
+
+---
+
+## Go (platform/)
+
+### Tooling
+
+| Tool | Purpose |
+|---|---|
+| Go 1.22+ | Language version |
+| `chi` | HTTP router (stdlib-compatible) |
+| ConnectRPC | gRPC framework |
+| `pgx` + `sqlc` | Database (type-safe SQL) |
+| `slog` | Structured logging |
+| `testify` | Test assertions |
+| `golangci-lint` | Linting |
+| `goimports` | Formatting |
+
+### Function Style
+
+Short, focused functions. Each function does one thing.
+
+```go filename="Good"
+func (s *PipelineService) Create(ctx context.Context, req *CreatePipelineRequest) (*Pipeline, error) {
+    if err := req.Validate(); err != nil {
+        return nil, connect.NewError(connect.CodeInvalidArgument, err)
+    }
+
+    pipeline, err := s.store.CreatePipeline(ctx, req.toDomain())
+    if err != nil {
+        return nil, fmt.Errorf("create pipeline: %w", err)
+    }
+
+    return pipeline, nil
+}
+```
+
+```go filename="Bad — too many responsibilities"
+func (s *PipelineService) Create(ctx context.Context, req *CreatePipelineRequest) (*Pipeline, error) {
+    // validate
+    if req.Name == "" {
+        return nil, errors.New("name required")
+    }
+    if req.Layer != "bronze" && req.Layer != "silver" && req.Layer != "gold" {
+        return nil, errors.New("invalid layer")
+    }
+    // check existence
+    existing, _ := s.store.GetPipeline(ctx, req.Namespace, req.Layer, req.Name)
+    if existing != nil {
+        return nil, errors.New("already exists")
+    }
+    // create S3 directory
+    err := s.s3.CreateDirectory(ctx, req.Namespace+"/"+req.Layer+"/"+req.Name)
+    if err != nil {
+        return nil, err
+    }
+    // insert into DB
+    // ... 30 more lines
+}
+```
+
+### Error Handling
+
+Errors are values. Handle them explicitly. Wrap with context using `fmt.Errorf` and `%w`.
+
+```go filename="Do"
+result, err := s.store.GetPipeline(ctx, id)
+if err != nil {
+    return nil, fmt.Errorf("get pipeline %s: %w", id, err)
+}
+```
+
+```go filename="Don't"
+result, _ := s.store.GetPipeline(ctx, id)  // silent error
+```
+
+```go filename="Don't"
+if err != nil {
+    panic(err)  // never panic in library code
+}
+```
+
+### Context
+
+Use `context.Context` for cancellation and timeouts. Always pass it as the first argument.
+
+```go filename="Do"
+ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+defer cancel()
+
+result, err := s.client.SubmitPipeline(ctx, req)
+```
+
+### Interfaces
+
+Define interfaces where they are **consumed**, not where they are produced. Keep them small.
+
+```go filename="Do — consumer defines the interface"
+// In api/pipelines.go (consumer)
+type PipelineStore interface {
+    GetPipeline(ctx context.Context, ns, layer, name string) (*Pipeline, error)
+    CreatePipeline(ctx context.Context, p *Pipeline) error
+}
+```
+
+```go filename="Don't — producer defines a large interface"
+// In store/store.go (producer) — too many methods, consumers don't need all of them
+type Store interface {
+    GetPipeline(...)
+    CreatePipeline(...)
+    DeletePipeline(...)
+    ListPipelines(...)
+    GetRun(...)
+    CreateRun(...)
+    // ... 30 more methods
+}
+```
+
+### Package Layout
+
+```
+platform/
+├── cmd/ratd/
+│   └── main.go                # wiring only — no logic
+├── internal/
+│   ├── api/                   # HTTP handlers (chi routes)
+│   ├── auth/                  # auth middleware
+│   ├── config/                # configuration loading
+│   ├── executor/              # pipeline dispatch
+│   ├── scheduler/             # cron scheduler
+│   ├── reaper/                # data retention cleanup
+│   ├── plugins/               # plugin loader
+│   ├── catalog/               # Nessie client
+│   ├── ownership/             # ownership registry
+│   ├── storage/               # S3 operations
+│   └── domain/                # shared domain types
+├── go.mod
+└── go.sum
+```
+
+### What to Avoid
+
+- Naked returns
+- Global state and `init()` functions
+- Interface pollution (defining interfaces at the producer)
+- `panic` in library code (only in `main()` for truly unrecoverable situations)
+- Deeply nested if-else chains (use early returns)
+
+---
+
+## Python (runner/, query/)
+
+### Tooling
+
+| Tool | Purpose |
+|---|---|
+| Python 3.12+ | Language version |
+| `uv` | Package manager (replaces pip + venv) |
+| `ruff` | Linting + formatting (replaces black + isort + flake8) |
+| `pyright` | Type checking (strict mode) |
+| `pytest` | Testing |
+| `pyproject.toml` | Build configuration (PEP 621) |
+
+### Type Hints Everywhere
+
+Every function signature has type hints. No exceptions.
+
+```python filename="Do"
+def execute_pipeline(spec: PipelineSpec, conn: duckdb.DuckDBPyConnection) -> RunResult:
+    """Execute a pipeline and return the result."""
+    ...
+```
+
+```python filename="Don't"
+def execute_pipeline(spec, conn):
+    ...
+```
+
+### Explicit Error Handling
+
+No bare `except`. Always catch specific exceptions and re-raise with context.
+
+```python filename="Do"
+try:
+    result = conn.execute(sql).fetch_arrow_table()
+except duckdb.Error as e:
+    raise PipelineExecutionError(f"SQL execution failed: {e}") from e
+```
+
+```python filename="Don't"
+try:
+    result = conn.execute(sql).fetch_arrow_table()
+except:
+    print("something went wrong")
+    return None
+```
+
+### Data Classes
+
+Use `dataclass` or Pydantic for structured data. Prefer immutable (`frozen=True`).
+
+```python filename="Do"
+@dataclass(frozen=True)
+class PipelineSpec:
+    namespace: str
+    layer: str
+    name: str
+    sql: str
+    config: PipelineConfig
+```
+
+```python filename="Don't"
+# Raw dictionaries for structured data
+pipeline = {
+    "namespace": "ecommerce",
+    "layer": "silver",
+    "name": "clean_orders",
+}
+```
+
+### No Wildcard Imports
+
+```python filename="Do"
+from rat_runner.models import RunState, RunStatus, LogRecord
+```
+
+```python filename="Don't"
+from rat_runner.models import *
+```
+
+### Data Manipulation
+
+Use DuckDB SQL or PyArrow for data operations. Never Python loops over rows.
+
+```python filename="Do"
+# Let DuckDB do the heavy lifting
+result = conn.execute("""
+    SELECT customer_id, SUM(total) AS revenue
+    FROM orders
+    GROUP BY customer_id
+""").fetch_arrow_table()
+```
+
+```python filename="Don't"
+# Python loops over data — slow, memory-intensive
+revenues = {}
+for row in orders:
+    cid = row['customer_id']
+    revenues[cid] = revenues.get(cid, 0) + row['total']
+```
+
+### Package Layout
+
+```
+runner/
+├── src/rat_runner/
+│   ├── __init__.py
+│   ├── __main__.py        # entrypoint
+│   ├── server.py          # gRPC service
+│   ├── executor.py        # 5-phase pipeline execution
+│   ├── engine.py          # DuckDB engine
+│   ├── templating.py      # Jinja SQL templating
+│   ├── iceberg.py         # PyIceberg writes
+│   ├── nessie.py          # Nessie REST client
+│   ├── quality.py         # Quality test execution
+│   ├── config.py          # Configuration
+│   ├── models.py          # Domain models
+│   └── log.py             # Run logging
+├── tests/
+│   ├── conftest.py
+│   └── unit/
+├── pyproject.toml
+└── Dockerfile
+```
+
+### What to Avoid
+
+- `# type: ignore` comments (fix the type error instead)
+- Mutable global state
+- Wildcard imports (`from x import *`)
+- Python loops for data manipulation
+- Bare `except` clauses
+
+---
+
+## TypeScript (portal/, sdk-typescript/)
+
+### Tooling
+
+| Tool | Purpose |
+|---|---|
+| Node 20+ / TypeScript 5+ | Runtime and language |
+| Next.js 14+ (App Router) | Web framework |
+| shadcn/ui + Tailwind CSS | UI components + styling |
+| SWR | Data fetching |
+| CodeMirror 6 | Code editor |
+| Vitest + Testing Library | Testing |
+| ESLint + Prettier | Linting + formatting |
+| tsup | SDK bundling |
+
+### Strict Types, No `any`
+
+```typescript filename="Do"
+interface Pipeline {
+  namespace: string
+  layer: 'bronze' | 'silver' | 'gold'
+  name: string
+  owner: string | null
+}
+
+function getPipeline(ns: string, layer: string, name: string): Promise<Pipeline> {
+  ...
+}
+```
+
+```typescript filename="Don't"
+function getPipeline(ns: any, layer: any, name: any): Promise<any> {
+  ...
+}
+```
+
+### Server Components by Default
+
+In Next.js App Router, components are server components by default. Only add `"use client"` when you need browser interactivity (forms, state, effects).
+
+```typescript filename="Do — server component (default)"
+// app/pipelines/page.tsx
+export default async function PipelinesPage() {
+  const pipelines = await fetchPipelines()
+  return <PipelineList pipelines={pipelines} />
+}
+```
+
+```typescript filename="Do — client component (only when needed)"
+// components/pipeline-form.tsx
+"use client"
+
+import { useState } from 'react'
+
+export function PipelineForm() {
+  const [name, setName] = useState('')
+  // ... interactive form logic
+}
+```
+
+### Data Fetching with SWR
+
+Use SWR hooks for all client-side data fetching. Never fetch in `useEffect`.
+
+```typescript filename="Do"
+import useSWR from 'swr'
+
+function usePipelines(namespace: string) {
+  return useSWR(`/api/v1/pipelines?namespace=${namespace}`, fetcher)
+}
+```
+
+```typescript filename="Don't"
+function usePipelines(namespace: string) {
+  const [data, setData] = useState(null)
+  useEffect(() => {
+    fetch(`/api/v1/pipelines?namespace=${namespace}`)
+      .then(r => r.json())
+      .then(setData)
+  }, [namespace])
+  return data
+}
+```
+
+### Styling with Tailwind
+
+Use Tailwind utility classes. No inline styles.
+
+```tsx filename="Do"
+<div className="flex items-center gap-2 p-4 bg-neutral-900 border border-green-500">
+  <span className="text-green-400 font-mono">{pipeline.name}</span>
+</div>
+```
+
+```tsx filename="Don't"
+<div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '16px' }}>
+  <span style={{ color: '#22c55e', fontFamily: 'monospace' }}>{pipeline.name}</span>
+</div>
+```
+
+### UI Theme
+
+RAT uses an underground/squat-collective aesthetic:
+
+- Neon green (`#22c55e`) + purple (`#a855f7`)
+- No rounded corners (`--radius: 0px`)
+- CSS classes: `rat-bg`, `brick-texture`, `brutal-card`, `neon-text`, `gradient-text`
+- Dark backgrounds (`bg-neutral-900`, `bg-neutral-950`)
+- Monospace fonts for data and code
+- `useScreenGlitch()` hook for error feedback
+
+### What to Avoid
+
+- `any` types (use `unknown` + type narrowing if the type is truly unknown)
+- Inline styles (use Tailwind classes)
+- Prop drilling more than 2 levels (use context or composition)
+- Fetching in `useEffect` (use SWR hooks)
+- Large client components (split into server + client parts)
+
+---
+
+## Formatting and Linting
+
+All code is formatted and linted through `make`:
+
+```bash filename="Terminal"
+# Format all code
+make fmt
+
+# Lint all code
+make lint
+
+# Strict Go linting
+make lint-go-strict
+```
+
+| Language | Formatter | Linter |
+|---|---|---|
+| Go | `goimports` | `go vet` + `golangci-lint` |
+| Python | `ruff format` | `ruff check` |
+| TypeScript | Prettier | ESLint |
+| Protobuf | — | `buf lint` |
+
+<Callout type="info">
+Always run `make lint` before committing. CI will reject PRs that fail linting. Running `make fmt` first auto-fixes most formatting issues.
+</Callout>

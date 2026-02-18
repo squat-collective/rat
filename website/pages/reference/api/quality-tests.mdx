@@ -1,0 +1,310 @@
+import { Callout } from 'nextra/components'
+
+# Quality Tests
+
+Quality tests are SQL assertions that validate your data after each pipeline run. If a quality test with `error` severity fails, the pipeline run's ephemeral Nessie branch is deleted and the run fails — bad data never reaches production. Tests with `warn` severity log a warning but allow the branch to merge.
+
+---
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/pipelines/{ns}/{layer}/{name}/tests` | List quality tests for a pipeline |
+| `POST` | `/api/v1/pipelines/{ns}/{layer}/{name}/tests` | Create a quality test |
+| `DELETE` | `/api/v1/pipelines/{ns}/{layer}/{name}/tests/{testName}` | Delete a quality test |
+| `POST` | `/api/v1/pipelines/{ns}/{layer}/{name}/tests/run` | Run all quality tests |
+
+---
+
+## List Quality Tests
+
+```
+GET /api/v1/pipelines/{ns}/{layer}/{name}/tests
+```
+
+Returns all quality tests for a pipeline. Tests are annotated with `published` status based on the pipeline's published versions — a test is "published" if its SQL file was included in the last publish snapshot.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Pipeline name |
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/pipelines/default/silver/orders/tests
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "tests": [
+    {
+      "name": "no-null-ids",
+      "sql": "SELECT count(*) FROM {{ ref('silver.orders') }} WHERE id IS NULL",
+      "severity": "error",
+      "description": "IDs must not be null",
+      "published": true,
+      "tags": ["data-quality"],
+      "remediation": "Check upstream data source for missing IDs"
+    },
+    {
+      "name": "positive-amounts",
+      "sql": "SELECT count(*) FROM {{ ref('silver.orders') }} WHERE amount <= 0",
+      "severity": "warn",
+      "description": "Order amounts should be positive",
+      "published": true,
+      "tags": ["data-quality", "financial"],
+      "remediation": "Review orders with zero or negative amounts"
+    }
+  ],
+  "total": 2
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `tests` | `array` | List of quality test objects |
+| `tests[].name` | `string` | Test name (used as filename: `{name}.sql`) |
+| `tests[].sql` | `string` | SQL query that defines the assertion |
+| `tests[].severity` | `string` | Severity level: `error` or `warn` |
+| `tests[].description` | `string` | Human-readable description |
+| `tests[].published` | `boolean` | Whether this test is included in the published version |
+| `tests[].tags` | `array` | Tags for categorization |
+| `tests[].remediation` | `string` | Suggested fix when the test fails |
+| `total` | `integer` | Total number of tests |
+
+<Callout type="info">
+Quality test SQL files are stored in S3 at `{namespace}/pipelines/{layer}/{pipeline}/tests/quality/{testName}.sql`. The SQL should return a count of **failing** rows — if the count is greater than 0, the test fails.
+</Callout>
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Pipeline not found |
+
+---
+
+## Create Quality Test
+
+```
+POST /api/v1/pipelines/{ns}/{layer}/{name}/tests
+```
+
+Creates a new quality test by writing a SQL file to the pipeline's `tests/quality/` directory in S3.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Pipeline name |
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | `string` | Yes | Test name (lowercase, alphanumeric, hyphens; used as filename) |
+| `sql` | `string` | Yes | SQL assertion query (must return a count of failing rows) |
+| `severity` | `string` | Yes | Severity level: `error` or `warn` |
+| `description` | `string` | No | Human-readable description |
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/pipelines/default/silver/orders/tests \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "no-null-ids",
+    "sql": "SELECT count(*) FROM {{ ref('\''silver.orders'\'') }} WHERE id IS NULL",
+    "severity": "error",
+    "description": "IDs must not be null"
+  }'
+```
+
+### Response — `201 Created`
+
+```json
+{
+  "name": "no-null-ids",
+  "severity": "error",
+  "path": "default/pipelines/silver/orders/tests/quality/no-null-ids.sql"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `string` | Test name |
+| `severity` | `string` | Severity level |
+| `path` | `string` | S3 path where the test SQL file was written |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Missing `name` or `sql`, invalid test name |
+| `404` | `NOT_FOUND` | Pipeline not found |
+| `409` | `ALREADY_EXISTS` | A test with the same name already exists |
+
+---
+
+## Delete Quality Test
+
+```
+DELETE /api/v1/pipelines/{ns}/{layer}/{name}/tests/{testName}
+```
+
+Deletes a quality test by removing its SQL file from S3.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Pipeline name |
+| `testName` | `string` | Quality test name |
+
+### Request
+
+```bash
+curl -X DELETE http://localhost:8080/api/v1/pipelines/default/silver/orders/tests/no-null-ids
+```
+
+### Response — `204 No Content`
+
+No response body.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Pipeline or test not found |
+
+---
+
+## Run Quality Tests
+
+```
+POST /api/v1/pipelines/{ns}/{layer}/{name}/tests/run
+```
+
+Executes all quality tests for a pipeline against the current production data (main branch). Returns individual test results with pass/fail status, values, and execution times.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Pipeline name |
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/pipelines/default/silver/orders/tests/run
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "results": [
+    {
+      "name": "no-null-ids",
+      "status": "passed",
+      "severity": "error",
+      "value": 0,
+      "expected": 0,
+      "duration_ms": 120
+    },
+    {
+      "name": "positive-amounts",
+      "status": "failed",
+      "severity": "warn",
+      "value": 3,
+      "expected": 0,
+      "duration_ms": 85
+    }
+  ],
+  "passed": 1,
+  "failed": 1,
+  "total": 2
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `results` | `array` | Individual test results |
+| `results[].name` | `string` | Test name |
+| `results[].status` | `string` | Test result: `passed` or `failed` |
+| `results[].severity` | `string` | Severity level: `error` or `warn` |
+| `results[].value` | `integer` | Actual count returned by the test query |
+| `results[].expected` | `integer` | Expected count (always `0` — tests pass when no failing rows exist) |
+| `results[].duration_ms` | `integer` | Test execution time in milliseconds |
+| `passed` | `integer` | Number of tests that passed |
+| `failed` | `integer` | Number of tests that failed |
+| `total` | `integer` | Total number of tests executed |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Pipeline not found |
+| `503` | `UNAVAILABLE` | Executor (runner) not available |
+
+<Callout type="warning">
+Running quality tests via this endpoint executes against the **production data** on the main branch. This is different from the quality tests that run automatically during a pipeline run, which execute against the ephemeral branch data before it is merged.
+</Callout>
+
+---
+
+## How Quality Tests Work
+
+Quality test SQL must return a **count of failing rows**. If the count is `0`, the test passes. If the count is greater than `0`, the test fails.
+
+### Example: Assert No Nulls
+
+```sql filename="tests/quality/no-null-ids.sql"
+SELECT count(*)
+FROM {{ ref('silver.orders') }}
+WHERE id IS NULL
+```
+
+### Example: Assert Referential Integrity
+
+```sql filename="tests/quality/valid-customer-refs.sql"
+SELECT count(*)
+FROM {{ ref('silver.orders') }} o
+LEFT JOIN {{ ref('silver.customers') }} c ON o.customer_id = c.id
+WHERE c.id IS NULL
+  AND o.customer_id IS NOT NULL
+```
+
+### Example: Assert Value Ranges
+
+```sql filename="tests/quality/positive-amounts.sql"
+SELECT count(*)
+FROM {{ ref('silver.orders') }}
+WHERE amount <= 0
+```
+
+### Severity Levels
+
+| Severity | On Failure | Description |
+|---|---|---|
+| `error` | Run fails, branch deleted | Hard failure — bad data is blocked from production |
+| `warn` | Run succeeds with warning | Soft failure — data quality issue is logged but data proceeds |

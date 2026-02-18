@@ -1,0 +1,29 @@
+syntax = "proto3";
+package ratatouille.plugin.v1;
+
+option go_package = "github.com/rat-data/rat/platform/gen/plugin/v1;pluginv1";
+
+// Field reservation policy: see common/v1/common.proto.
+// When removing fields, always add `reserved` for both the number and name.
+
+// PluginService is the base service every plugin container must implement.
+// ratd calls HealthCheck on startup to determine plugin availability.
+service PluginService {
+  // Check if the plugin is healthy and ready to serve requests.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+message HealthCheckRequest {}
+
+// HealthCheckResponse indicates whether the plugin is ready to serve.
+message HealthCheckResponse {
+  Status status = 1;               // current serving status of the plugin
+  string message = 2;              // optional human-readable status detail
+}
+
+// Status indicates whether the plugin is serving requests.
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_SERVING = 1;
+  STATUS_NOT_SERVING = 2;
+}

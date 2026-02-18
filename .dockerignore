@@ -1,0 +1,41 @@
+# Root .dockerignore — applies to portal build (context: repo root)
+
+# Git
+**/.git
+**/.gitignore
+
+# Secrets / env
+**/.env*
+
+# Docs
+**/README.md
+**/CLAUDE.md
+docs/
+
+# Services not needed for portal build (portal only needs sdk-typescript/ and portal/)
+platform/
+runner/
+query/
+proto/
+infra/
+
+# Node
+**/node_modules/
+
+# Next.js build output (rebuild in Docker)
+portal/.next/
+portal/out/
+
+# Test / coverage
+**/coverage/
+**/.pytest_cache/
+**/__pycache__/
+**/*.pyc
+**/tests/
+
+# TypeScript build info
+**/*.tsbuildinfo
+
+# Misc
+Makefile
+.golangci.yml

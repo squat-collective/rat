@@ -1,0 +1,342 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Development Setup
+
+This guide walks you through setting up a local development environment for RAT. Everything runs in Docker containers — no language runtimes, databases, or tools need to be installed on your machine.
+
+---
+
+## Prerequisites
+
+You need exactly three tools installed on your machine:
+
+| Tool | Minimum Version | Check Command | Install |
+|---|---|---|---|
+| **Docker** | 24.0+ | `docker --version` | [docker.com](https://docs.docker.com/get-docker/) |
+| **Docker Compose** | V2 (2.20+) | `docker compose version` | Included with Docker Desktop |
+| **Git** | 2.30+ | `git --version` | [git-scm.com](https://git-scm.com/) |
+| **Make** | Any | `make --version` | Pre-installed on macOS/Linux |
+
+<Callout type="info">
+Docker Compose V2 (the `docker compose` plugin) is required. The legacy standalone `docker-compose` binary is not supported. Most modern Docker Desktop installations include V2 by default.
+</Callout>
+
+### Hardware Requirements
+
+| Resource | Minimum | Recommended |
+|---|---|---|
+| **RAM** | 4 GB free | 8 GB free |
+| **CPU** | 2 cores | 4+ cores |
+| **Disk** | 5 GB free | 10 GB free |
+| **Docker Memory** | 4 GB allocated | 6 GB allocated |
+
+RAT runs 7 containers simultaneously. On machines with limited RAM, the runner and ratq services (which load DuckDB and PyArrow) may be slow to start or experience OOM kills.
+
+---
+
+## Initial Setup
+
+<Steps>
+
+### Clone the repository
+
+```bash filename="Terminal"
+git clone https://github.com/squat-collective/rat.git
+cd rat
+```
+
+### Run first-time setup
+
+```bash filename="Terminal"
+make setup
+```
+
+This generates all code that is derived from source definitions:
+- **Protobuf stubs**: Go and Python gRPC code from `proto/` definitions
+- **sqlc**: Type-safe Go code from SQL queries in `platform/internal/postgres/`
+- **TypeScript SDK**: Built from `sdk-typescript/` (required by the portal)
+
+### Start all services
+
+```bash filename="Terminal"
+make up
+```
+
+The first start takes 2-5 minutes because Docker needs to pull base images and build application containers. Subsequent starts are much faster thanks to layer caching.
+
+### Verify everything is running
+
+```bash filename="Terminal"
+make status
+```
+
+All services should show `Up` and `(healthy)`:
+
+```
+NAME        STATUS                  PORTS
+postgres    Up 30s (healthy)        127.0.0.1:5432->5432/tcp
+minio       Up 30s (healthy)        127.0.0.1:9000->9000/tcp, 127.0.0.1:9001->9001/tcp
+nessie      Up 30s (healthy)        127.0.0.1:19120->19120/tcp
+ratd        Up 25s (healthy)        0.0.0.0:8080->8080/tcp
+runner      Up 20s (healthy)        50052/tcp
+ratq        Up 20s (healthy)        50051/tcp
+portal      Up 15s (healthy)        0.0.0.0:3000->3000/tcp
+```
+
+### Open the portal
+
+Navigate to **[http://localhost:3000](http://localhost:3000)** in your browser. You should see the RAT Portal dashboard.
+
+</Steps>
+
+---
+
+## Daily Development Workflow
+
+Once the initial setup is done, your daily workflow looks like this:
+
+```bash filename="Terminal"
+# Start services (if not already running)
+make up
+
+# Work on your feature...
+
+# Run tests for the component you changed
+make test-go       # if you changed Go code
+make test-py       # if you changed Python code
+make test-ts       # if you changed TypeScript code
+
+# Lint before committing
+make lint
+
+# Stop when done
+make down
+```
+
+---
+
+## Hot Reload
+
+RAT supports hot reload for the two services you are most likely to develop against: `ratd` (Go) and `portal` (Next.js).
+
+### Go Platform (ratd)
+
+Hot reload using [air](https://github.com/air-verse/air). The server automatically restarts when you save a `.go` file:
+
+```bash filename="Terminal"
+make dev-ratd
+```
+
+This runs `ratd` outside the compose stack but on the same Docker network, so it can reach Postgres, MinIO, and other services. It exposes:
+- Port **8080** (REST API)
+- Port **8081** (gRPC)
+
+<Callout type="warning">
+When using `make dev-ratd`, stop the `ratd` container in the compose stack first to avoid port conflicts:
+```bash
+docker compose -f infra/docker-compose.yml stop ratd
+```
+</Callout>
+
+### Next.js Portal
+
+Hot reload with Next.js dev mode. Pages refresh automatically when you save a file:
+
+```bash filename="Terminal"
+make dev-portal
+```
+
+This builds the SDK first (`make sdk-build`), then starts the Next.js dev server on port **3000**. It connects to the Docker network so server-side rendering can reach `ratd`.
+
+<Callout type="warning">
+Same as above — stop the `portal` container first:
+```bash
+docker compose -f infra/docker-compose.yml stop portal
+```
+</Callout>
+
+### SDK Development
+
+If you are working on the TypeScript SDK:
+
+```bash filename="Terminal"
+# Build the SDK (run after changes)
+make sdk-build
+
+# Build and run tests
+make sdk-test
+```
+
+The SDK must be rebuilt after changes for the portal to pick them up. In a development session where you are changing both SDK and portal code, run `make sdk-build` after each SDK change, then the portal dev server will pick up the new build.
+
+---
+
+## Running Tests
+
+### All Tests
+
+```bash filename="Terminal"
+# Sequential (safest)
+make test
+
+# Parallel (faster, requires more resources)
+make test-all-parallel
+```
+
+### By Language
+
+```bash filename="Terminal"
+make test-go       # Go platform tests (with race detector)
+make test-py       # Python runner + query tests
+make test-ts       # TypeScript SDK + portal tests
+```
+
+### Speeding Up Python Tests
+
+Python tests install dependencies from scratch on every run by default. Build pre-cached test images to speed this up:
+
+```bash filename="Terminal"
+# Build test images (one-time, ~2 minutes)
+make test-images
+
+# Now test-py uses pre-built images (much faster)
+make test-py
+```
+
+### Integration Tests
+
+Integration tests run against real Postgres and MinIO instances (not mocks):
+
+```bash filename="Terminal"
+make test-integration
+```
+
+This starts a separate test compose stack, runs the tests, and tears it down.
+
+---
+
+## Code Generation
+
+When you change source definitions, regenerate the derived code:
+
+| Changed File | Run |
+|---|---|
+| `proto/*.proto` | `make proto` |
+| `platform/internal/postgres/queries/*.sql` | `make sqlc` |
+| `sdk-typescript/src/*` | `make sdk-build` |
+
+---
+
+## Branch Workflow
+
+RAT uses GitHub Flow:
+
+```bash filename="Terminal"
+# Create a feature branch
+git checkout -b feat/ratd-new-endpoint
+
+# Make changes, write tests first (TDD)
+# ...
+
+# Run tests
+make test-go
+
+# Lint
+make lint
+
+# Commit
+git add platform/internal/api/new_endpoint.go platform/internal/api/new_endpoint_test.go
+git commit -m "feat(ratd): add new endpoint for widget management"
+
+# Push and create PR
+git push -u origin feat/ratd-new-endpoint
+```
+
+### Branch Naming
+
+```
+feat/ratd-pipeline-crud        # new feature
+fix/runner-duckdb-memory-leak  # bug fix
+refactor/proto-message-cleanup # refactoring
+docs/adr-executor-plugin       # documentation
+test/ratq-integration-tests    # test additions
+```
+
+### Commit Messages
+
+```
+type(scope): description
+
+feat(ratd): add pipeline CRUD endpoints
+fix(runner): handle DuckDB OOM on large datasets
+test(ratq): add integration tests for schema introspection
+refactor(proto): rename PipelineSpec to PipelineManifest
+docs(adr): document executor plugin decision
+chore(infra): update postgres to 16.2
+```
+
+---
+
+## Service Ports
+
+| Service | Port | URL | When Needed |
+|---|---|---|---|
+| **Portal** | 3000 | [localhost:3000](http://localhost:3000) | Always (main interface) |
+| **API (ratd)** | 8080 | [localhost:8080](http://localhost:8080) | API development, debugging |
+| **MinIO Console** | 9001 | [localhost:9001](http://localhost:9001) | Browsing S3 data |
+| **Nessie** | 19120 | [localhost:19120](http://localhost:19120) | Iceberg catalog debugging |
+| **Postgres** | 5432 | `localhost:5432` | Database debugging |
+
+<Callout type="info">
+Postgres, MinIO, and Nessie bind to `127.0.0.1` (localhost only). They are accessible from your machine but not from the network.
+</Callout>
+
+---
+
+## Troubleshooting
+
+### Port already in use
+
+```bash filename="Terminal"
+# Find what is using port 3000
+lsof -i :3000
+# or on Linux
+ss -tlnp | grep 3000
+```
+
+Stop the conflicting process or modify the port in a `docker-compose.override.yml`.
+
+### Container keeps restarting
+
+Check logs for the failing service:
+
+```bash filename="Terminal"
+docker compose -f infra/docker-compose.yml logs runner
+```
+
+Common causes:
+- **OOM**: Increase Docker Desktop memory (Settings > Resources > Memory)
+- **Missing dependency**: Run `make setup` to regenerate code
+- **Port conflict**: Another service is using the same port
+
+### Clean rebuild
+
+If something is fundamentally broken:
+
+```bash filename="Terminal"
+make clean      # remove containers, volumes, generated code
+make setup      # regenerate everything
+make build      # rebuild all images
+make up         # start fresh
+```
+
+### Stale generated code
+
+If tests fail with import errors or missing types:
+
+```bash filename="Terminal"
+make proto      # regenerate gRPC stubs
+make sqlc       # regenerate SQL code
+make sdk-build  # rebuild TypeScript SDK
+```

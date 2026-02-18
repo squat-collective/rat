@@ -1,0 +1,468 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Quality Tests
+
+Quality tests are SQL queries that validate your data after a pipeline runs. They act as guards: if a test finds problems, it can block the pipeline from merging bad data into production. Think of them as unit tests for your data.
+
+## How Quality Tests Work
+
+Every quality test is a SQL query that returns **violation rows** — rows that break the rule you are testing. The test result is determined by the row count:
+
+- **0 rows returned** = PASS (no violations found)
+- **1+ rows returned** = FAIL (violations detected)
+
+<Mermaid chart={`
+sequenceDiagram
+    participant P as Pipeline
+    participant R as Runner
+    participant Q as Quality Tests
+    participant B as Nessie Branch
+
+    P->>R: Execute pipeline SQL
+    R->>B: Write results to branch
+    R->>Q: Run quality tests on branch data
+    Q-->>R: Test results
+    alt All tests pass (or warn only)
+        R->>B: Merge branch to main
+    else Any error-severity test fails
+        R->>B: Delete branch
+        R-->>P: Run FAILED
+    end
+`} />
+
+Quality tests run **after** the pipeline writes data to the ephemeral Nessie branch but **before** the branch is merged to main. This means:
+
+- Tests validate the **actual data** that would be merged
+- Failed tests prevent bad data from ever reaching the main branch
+- The data is tested in isolation — other pipelines are not affected
+
+## File Location and Naming
+
+Quality tests live in the pipeline's `tests/quality/` directory:
+
+```
+{namespace}/pipelines/{layer}/{pipeline_name}/tests/quality/
+```
+
+Each test is a separate `.sql` file. The filename becomes the test name in logs and the portal:
+
+```
+ecommerce/pipelines/silver/clean_orders/
+├── pipeline.sql
+├── config.yaml
+└── tests/
+    └── quality/
+        ├── test_no_null_order_ids.sql
+        ├── test_unique_order_ids.sql
+        ├── test_valid_status_values.sql
+        └── test_positive_amounts.sql
+```
+
+<Callout type="info">
+Naming convention: prefix test files with `test_` and use descriptive names that explain what the test validates. The name should read as an assertion: `test_no_null_order_ids` means "there should be no null order IDs."
+</Callout>
+
+## Writing Test SQL
+
+A quality test is a `SELECT` statement that returns rows violating a rule. The simplest way to think about it: **select the bad rows**.
+
+```sql filename="tests/quality/test_no_null_order_ids.sql"
+-- @severity: error
+-- @description: Order ID must never be null
+
+SELECT order_id, customer_id, updated_at
+FROM {{ this }}
+WHERE order_id IS NULL
+```
+
+`{{ this }}` refers to the pipeline's own output table on the ephemeral branch. This is the data that was just written by the pipeline.
+
+If this query returns 0 rows, the test passes. If it returns any rows, those rows are logged as violations and the test fails.
+
+## Test Annotations
+
+Quality tests support annotations in the same `-- @key: value` format as pipelines:
+
+| Annotation | Values | Default | Description |
+|---|---|---|---|
+| `@severity` | `error`, `warn` | `error` | Controls whether failure blocks the merge |
+| `@description` | Free text | _(none)_ | Human-readable description shown in portal and logs |
+| `@tags` | Comma-separated | _(none)_ | Tags for filtering and grouping tests |
+| `@remediation` | Free text | _(none)_ | Instructions for fixing violations when the test fails |
+
+### Severity Levels
+
+<Tabs items={['error', 'warn']}>
+<Tabs.Tab>
+**`error`** (default) — Test failure **blocks the merge**. The ephemeral branch is deleted and the run fails. Bad data never reaches production.
+
+```sql filename="tests/quality/test_no_null_pks.sql"
+-- @severity: error
+-- @description: Primary keys must never be null
+-- @remediation: Check source data for missing IDs. Fix upstream pipeline.
+
+SELECT * FROM {{ this }} WHERE order_id IS NULL
+```
+
+Use `error` severity for critical data quality rules: primary keys, referential integrity, business-critical validations.
+</Tabs.Tab>
+<Tabs.Tab>
+**`warn`** — Test failure is logged but **does not block the merge**. The pipeline run succeeds with warnings. Violations are visible in the portal and run logs.
+
+```sql filename="tests/quality/test_reasonable_amounts.sql"
+-- @severity: warn
+-- @description: Order amounts over $10,000 may indicate data issues
+-- @tags: anomaly, review
+-- @remediation: Review flagged orders manually. May be legitimate large orders.
+
+SELECT order_id, total_amount
+FROM {{ this }}
+WHERE total_amount > 10000
+```
+
+Use `warn` severity for soft checks: anomaly detection, data quality monitoring, non-critical validations you want visibility into.
+</Tabs.Tab>
+</Tabs>
+
+## How Tests Gate Merges
+
+The branch resolution logic after quality tests:
+
+<Mermaid chart={`
+flowchart TD
+    A[Run Quality Tests] --> B{Any test with\nseverity=error\nfailed?}
+    B -->|Yes| C[Delete Branch\nRun = FAILED]
+    B -->|No| D{Any test with\nseverity=warn\nfailed?}
+    D -->|Yes| E[Merge Branch\nRun = PASSED\nwith warnings]
+    D -->|No| F[Merge Branch\nRun = PASSED]
+
+    style C fill:#ef4444,color:#fff
+    style E fill:#eab308,color:#000
+    style F fill:#22c55e,color:#000
+`} />
+
+In summary:
+- **All tests pass** -> Branch merged, run succeeds
+- **Only warn tests fail** -> Branch merged, run succeeds with warnings
+- **Any error test fails** -> Branch deleted, run fails, data never reaches main
+
+## Running Tests
+
+### Automatically During Pipeline Runs
+
+Quality tests run automatically as part of every pipeline execution. You do not need to do anything — RAT discovers all `.sql` files in `tests/quality/` and runs them.
+
+### Manually from the Portal
+
+You can also trigger quality tests manually from the portal:
+1. Navigate to the pipeline in the portal
+2. Go to the "Quality" tab
+3. Click "Run Tests" to execute all quality tests against the current production data
+
+Manual test runs do not create a branch or affect production data — they simply report violations against the current state of the table.
+
+## Common Test Patterns
+
+### Not Null
+
+Ensure a column has no null values:
+
+```sql filename="tests/quality/test_no_null_customer_ids.sql"
+-- @severity: error
+-- @description: Customer ID is a required field
+
+SELECT *
+FROM {{ this }}
+WHERE customer_id IS NULL
+```
+
+### Unique
+
+Ensure a column (or combination of columns) has no duplicates:
+
+```sql filename="tests/quality/test_unique_order_ids.sql"
+-- @severity: error
+-- @description: Order IDs must be unique
+
+SELECT order_id, COUNT(*) AS duplicate_count
+FROM {{ this }}
+GROUP BY order_id
+HAVING COUNT(*) > 1
+```
+
+For composite uniqueness:
+
+```sql filename="tests/quality/test_unique_order_lines.sql"
+-- @severity: error
+-- @description: Each order-product combination must be unique
+
+SELECT order_id, product_id, COUNT(*) AS cnt
+FROM {{ this }}
+GROUP BY order_id, product_id
+HAVING COUNT(*) > 1
+```
+
+### Accepted Values
+
+Ensure a column only contains expected values:
+
+```sql filename="tests/quality/test_valid_status.sql"
+-- @severity: error
+-- @description: Status must be one of the accepted values
+-- @tags: enum, validation
+
+SELECT order_id, status
+FROM {{ this }}
+WHERE status NOT IN ('pending', 'processing', 'shipped', 'delivered', 'cancelled', 'refunded')
+```
+
+### Referential Integrity (Relationships)
+
+Ensure foreign keys reference existing records:
+
+```sql filename="tests/quality/test_valid_customer_refs.sql"
+-- @severity: error
+-- @description: Every order must reference an existing customer
+-- @remediation: Check for orphaned orders or missing customer records
+
+SELECT o.order_id, o.customer_id
+FROM {{ this }} o
+LEFT JOIN {{ ref('silver.customers') }} c
+    ON o.customer_id = c.customer_id
+WHERE c.customer_id IS NULL
+```
+
+<Callout type="info">
+Quality tests can use `ref()` to reference other tables, not just `{{ this }}`. This enables cross-table validation like referential integrity checks. The referenced tables are read from the main branch (production data), while `{{ this }}` reads from the ephemeral branch.
+</Callout>
+
+### Range / Bounds
+
+Ensure numeric values fall within expected ranges:
+
+```sql filename="tests/quality/test_positive_amounts.sql"
+-- @severity: error
+-- @description: Order amounts must be positive
+-- @tags: financial, validation
+
+SELECT order_id, total_amount
+FROM {{ this }}
+WHERE total_amount <= 0
+```
+
+```sql filename="tests/quality/test_reasonable_dates.sql"
+-- @severity: warn
+-- @description: Order dates should be within the last 2 years
+-- @tags: anomaly
+
+SELECT order_id, order_date
+FROM {{ this }}
+WHERE order_date < CURRENT_DATE - INTERVAL 2 YEAR
+   OR order_date > CURRENT_DATE + INTERVAL 1 DAY
+```
+
+### Row Count
+
+Ensure the pipeline produces a reasonable number of rows:
+
+```sql filename="tests/quality/test_minimum_row_count.sql"
+-- @severity: error
+-- @description: Pipeline must produce at least 1 row
+-- @remediation: Check if source data is empty or if filters are too aggressive
+
+SELECT 1 AS violation
+WHERE (SELECT COUNT(*) FROM {{ this }}) = 0
+```
+
+```sql filename="tests/quality/test_no_row_explosion.sql"
+-- @severity: warn
+-- @description: Row count should not exceed 10x the previous run
+-- @tags: anomaly
+
+WITH current_count AS (
+    SELECT COUNT(*) AS cnt FROM {{ this }}
+),
+previous_count AS (
+    SELECT COUNT(*) AS cnt FROM {{ ref('silver.clean_orders') }}
+)
+SELECT
+    c.cnt AS current_rows,
+    p.cnt AS previous_rows,
+    ROUND(c.cnt::FLOAT / GREATEST(p.cnt, 1), 2) AS ratio
+FROM current_count c, previous_count p
+WHERE c.cnt > p.cnt * 10
+```
+
+### String Format
+
+Ensure strings match expected patterns:
+
+```sql filename="tests/quality/test_valid_email_format.sql"
+-- @severity: warn
+-- @description: Email addresses should have valid format
+-- @tags: format, pii
+
+SELECT customer_id, email
+FROM {{ this }}
+WHERE email IS NOT NULL
+  AND email NOT LIKE '%_@_%.__%'
+```
+
+### Freshness
+
+Ensure data is not stale:
+
+```sql filename="tests/quality/test_data_freshness.sql"
+-- @severity: warn
+-- @description: Most recent order should be within the last 24 hours
+-- @tags: freshness, monitoring
+-- @remediation: Check if the source system is producing new data
+
+SELECT
+    MAX(updated_at) AS most_recent,
+    CURRENT_TIMESTAMP AS checked_at,
+    DATEDIFF('hour', MAX(updated_at), CURRENT_TIMESTAMP) AS hours_stale
+FROM {{ this }}
+HAVING MAX(updated_at) < CURRENT_TIMESTAMP - INTERVAL 24 HOUR
+```
+
+## Organizing Tests
+
+### Tags for Grouping
+
+Use `@tags` to categorize tests for filtering in the portal:
+
+```sql
+-- @tags: financial, compliance, critical
+-- @tags: anomaly, monitoring
+-- @tags: pii, format
+-- @tags: freshness
+-- @tags: referential-integrity
+```
+
+### Reusable Patterns
+
+If you find yourself writing the same test across multiple pipelines, create a consistent naming convention:
+
+```
+tests/quality/
+├── test_pk_not_null.sql          # Primary key checks
+├── test_pk_unique.sql
+├── test_valid_status.sql         # Enum validations
+├── test_positive_amounts.sql     # Range checks
+├── test_customer_ref.sql         # Foreign key checks
+└── test_freshness.sql            # Monitoring
+```
+
+## Example: Complete Test Suite for an Orders Pipeline
+
+Here is a full set of quality tests for a Silver orders pipeline:
+
+```
+ecommerce/pipelines/silver/clean_orders/
+├── pipeline.sql
+└── tests/
+    └── quality/
+        ├── test_pk_not_null.sql
+        ├── test_pk_unique.sql
+        ├── test_valid_status.sql
+        ├── test_positive_amounts.sql
+        ├── test_valid_customer_refs.sql
+        ├── test_reasonable_dates.sql
+        └── test_minimum_rows.sql
+```
+
+```sql filename="test_pk_not_null.sql"
+-- @severity: error
+-- @description: order_id must never be null
+
+SELECT * FROM {{ this }} WHERE order_id IS NULL
+```
+
+```sql filename="test_pk_unique.sql"
+-- @severity: error
+-- @description: order_id must be unique across all rows
+
+SELECT order_id, COUNT(*) AS cnt
+FROM {{ this }}
+GROUP BY order_id
+HAVING COUNT(*) > 1
+```
+
+```sql filename="test_valid_status.sql"
+-- @severity: error
+-- @description: Status must be a known value
+-- @tags: enum
+-- @remediation: Add new status to the accepted values list or fix upstream
+
+SELECT order_id, status
+FROM {{ this }}
+WHERE status NOT IN (
+    'pending', 'confirmed', 'processing',
+    'shipped', 'delivered', 'cancelled', 'refunded'
+)
+```
+
+```sql filename="test_positive_amounts.sql"
+-- @severity: error
+-- @description: Total amount must be positive for non-cancelled orders
+-- @tags: financial
+
+SELECT order_id, status, total_amount
+FROM {{ this }}
+WHERE total_amount <= 0
+  AND status NOT IN ('cancelled', 'refunded')
+```
+
+```sql filename="test_valid_customer_refs.sql"
+-- @severity: error
+-- @description: Every order must reference a valid customer
+-- @tags: referential-integrity
+
+SELECT o.order_id, o.customer_id
+FROM {{ this }} o
+LEFT JOIN {{ ref('silver.customers') }} c ON o.customer_id = c.customer_id
+WHERE c.customer_id IS NULL
+```
+
+```sql filename="test_reasonable_dates.sql"
+-- @severity: warn
+-- @description: Order dates more than 1 year old or in the future are suspicious
+-- @tags: anomaly
+
+SELECT order_id, order_date
+FROM {{ this }}
+WHERE order_date < CURRENT_DATE - INTERVAL 1 YEAR
+   OR order_date > CURRENT_DATE
+```
+
+```sql filename="test_minimum_rows.sql"
+-- @severity: error
+-- @description: Pipeline must produce at least 1 row
+
+SELECT 1 AS violation
+WHERE (SELECT COUNT(*) FROM {{ this }}) = 0
+```
+
+## Tips and Best Practices
+
+<Cards>
+  <Card title="Start with the basics">
+    Every pipeline should have at minimum: not-null primary key, unique primary key, and at least one business rule check. Add more tests as you discover data issues.
+  </Card>
+  <Card title="Use error for gates, warn for monitoring">
+    Reserve `severity: error` for rules that must never be violated. Use `severity: warn` for anomaly detection and soft checks that you want visibility into.
+  </Card>
+  <Card title="Test what matters">
+    Do not write tests for things DuckDB already enforces (like type casting). Focus on business rules and data quality issues that can only be caught at the data level.
+  </Card>
+  <Card title="Include remediation steps">
+    The `@remediation` annotation tells whoever sees the failure what to do about it. Future you will thank present you.
+  </Card>
+</Cards>
+
+<Callout type="warning">
+**Common mistake**: Writing a test that returns the entire table when it fails. If you have 1 million violations, the test will try to log all of them. Instead, limit your SELECT to the relevant columns and consider adding a `LIMIT 100` for very large violation sets.
+</Callout>

@@ -1,0 +1,239 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Architecture Overview
+
+RAT is a self-hostable data platform that runs as **8 containers** orchestrated by Docker Compose. It follows a strict separation of concerns: a Go API server handles orchestration and state, Python services handle data processing, and a Next.js frontend provides the user interface.
+
+---
+
+## Design Philosophy
+
+RAT's architecture is guided by five principles:
+
+1. **Single `docker compose up`** --- The entire platform starts with one command. No external dependencies, no cloud accounts, no license keys for the Community Edition.
+2. **Separation of compute and state** --- Data lives in S3 (MinIO) in open Apache Iceberg format. Metadata lives in Postgres. Compute (DuckDB) is ephemeral and stateless.
+3. **Git-like isolation** --- Every pipeline run creates an isolated Nessie branch. Bad data never reaches the production catalog. Quality tests gate merges.
+4. **Plugin extensibility** --- The Community Edition ships with no-op implementations for auth, sharing, and enforcement. Pro plugins slot in without changing the core platform.
+5. **No vendor lock-in** --- All storage is open format (Iceberg + Parquet). The catalog is Nessie (open source). You can query your data with any tool that speaks Iceberg.
+
+---
+
+## System Block Diagram
+
+The following diagram shows all 8 containers (7 services + 1 init job), their communication protocols, network zones, and exposed ports.
+
+<Mermaid chart={`
+block-beta
+    columns 4
+
+    block:frontend["🌐 Frontend Network (rat_frontend)"]:4
+        portal["Portal\n(Next.js)\n:3000"]
+        ratd["ratd\n(Go)\n:8080 REST\n:8081 gRPC"]
+    end
+
+    space:4
+
+    block:backend["🔒 Backend Network (infra_default)"]:4
+        ratq["ratq\n(Python)\n:50051 gRPC"]
+        runner["runner\n(Python)\n:50052 gRPC"]
+        postgres["Postgres\n16.4\n:5432"]
+        minio["MinIO\n(S3)\n:9000/:9001"]
+        nessie["Nessie\n(Iceberg Catalog)\n:19120"]
+        minioinit["minio-init\n(one-shot)"]
+    end
+
+    portal --> ratd
+    ratd --> ratq
+    ratd --> runner
+    ratd --> postgres
+    ratd --> minio
+    ratd --> nessie
+    ratq --> minio
+    ratq --> nessie
+    runner --> minio
+    runner --> nessie
+    minioinit --> minio
+    nessie --> postgres
+`} />
+
+<Callout type="info">
+The `portal` and `ratd` containers live on both the **frontend** and **backend** networks. The portal needs frontend access (user-facing port 3000) and backend access (to reach ratd internally for server-side rendering). All other services live exclusively on the **backend** network and are not reachable from outside Docker.
+</Callout>
+
+---
+
+## Containers at a Glance
+
+| Container | Language | Role | Exposed Ports | Network |
+|-----------|----------|------|---------------|---------|
+| **portal** | Next.js (TypeScript) | Web IDE --- the only user interface | `3000` (HTTP) | frontend + backend |
+| **ratd** | Go | API server, scheduler, plugin host, catalog ops | `8080` (REST), `8081` (gRPC, internal) | frontend + backend |
+| **ratq** | Python | Read-only DuckDB query service | `50051` (gRPC, internal) | backend |
+| **runner** | Python | Pipeline execution engine | `50052` (gRPC, internal) | backend |
+| **postgres** | PostgreSQL 16.4 | Platform state (16 tables) | `5432` (localhost only) | backend |
+| **minio** | MinIO | S3-compatible object storage | `9000` (S3 API), `9001` (Console) | backend |
+| **nessie** | Java (Quarkus) | Iceberg REST catalog with git-like branching | `19120` (REST, localhost only) | backend |
+| **minio-init** | MinIO Client (mc) | One-shot: creates bucket, enables versioning | --- (exits after setup) | backend |
+
+---
+
+## Communication Protocols
+
+<Mermaid chart={`
+flowchart LR
+    Portal -->|REST HTTP| ratd
+    ratd -->|ConnectRPC gRPC| runner
+    ratd -->|ConnectRPC gRPC| ratq
+    ratd -->|ConnectRPC gRPC| plugins["Plugins (Pro)"]
+    ratd -->|SQL pgx| postgres
+    ratd -->|S3 API MinIO SDK| minio
+    ratd -->|Iceberg REST API| nessie
+    runner -->|S3 API| minio
+    runner -->|Iceberg REST API| nessie
+    runner -->|HTTP callback| ratd
+    ratq -->|S3 API| minio
+    ratq -->|Iceberg REST API| nessie
+    nessie -->|JDBC| postgres
+`} />
+
+### Protocol Choices
+
+| Path | Protocol | Why |
+|------|----------|-----|
+| Portal to ratd | **REST (HTTP)** | Browser-native. SWR data fetching. No gRPC-Web complexity. |
+| ratd to runner/ratq | **ConnectRPC (gRPC)** | Type-safe, streaming support (SSE logs), HTTP/1.1 compatible for easier debugging. |
+| ratd to Postgres | **SQL via pgx** | Pure Go driver. Connection pooling. Type-safe queries via sqlc. |
+| ratd to MinIO | **S3 API** | Standard S3 protocol via MinIO Go SDK. Swappable with any S3-compatible store. |
+| ratd to Nessie | **Iceberg REST API** | Standard catalog protocol. Not Nessie-specific --- works with any Iceberg REST catalog. |
+| runner to ratd | **HTTP callback** | Push-based status reporting. Runner POSTs terminal status on completion with 60s poll fallback. |
+
+---
+
+## Network Zones
+
+RAT uses two Docker networks to enforce network segmentation:
+
+### Frontend Network (`rat_frontend`)
+
+The user-facing network. Only two containers are attached:
+
+- **portal** --- serves the web IDE on port 3000
+- **ratd** --- serves the REST API on port 8080
+
+This is the only network accessible from the host machine (via published ports).
+
+### Backend Network (`infra_default`)
+
+The internal network where all inter-service communication happens. **All 8 containers** are attached to this network, but only `portal` and `ratd` are also on the frontend network.
+
+Services like `runner`, `ratq`, `postgres`, `minio`, and `nessie` are **never directly accessible** from the host (except via localhost-bound debug ports for postgres, minio, and nessie).
+
+<Callout type="warning">
+In production, the localhost-bound debug ports for Postgres (`:5432`), MinIO (`:9000`, `:9001`), and Nessie (`:19120`) should be removed or firewalled. They exist for development convenience only.
+</Callout>
+
+---
+
+## Startup Sequence
+
+Services start in dependency order enforced by Docker Compose health checks:
+
+<Steps>
+
+### Infrastructure layer starts first
+
+**Postgres** and **MinIO** start simultaneously. Both have health checks (pg_isready and mc ready). Nothing else starts until both are healthy.
+
+### minio-init runs (one-shot)
+
+Once MinIO is healthy, the **minio-init** container runs. It creates the `rat` bucket, enables S3 versioning, and configures a 7-day lifecycle policy for non-current object versions. It exits after completion.
+
+### Nessie starts
+
+**Nessie** depends on Postgres (it persists catalog metadata via JDBC). It starts once Postgres is healthy and exposes the Iceberg REST catalog on port 19120.
+
+### Python services start
+
+**runner** and **ratq** start once MinIO and Nessie are healthy. They initialize their DuckDB engines with S3 and Iceberg extensions.
+
+### ratd starts
+
+**ratd** depends on Postgres, MinIO, and Nessie. On startup it runs database migrations, initializes the scheduler, starts the reaper daemon, connects to runner and ratq via gRPC, and loads any configured plugins.
+
+### Portal starts last
+
+**portal** depends on ratd being healthy. It needs the API to be available for both server-side rendering and client-side data fetching.
+
+</Steps>
+
+---
+
+## Resource Allocation
+
+Every container has explicit memory and CPU limits to prevent runaway consumption:
+
+| Container | Memory Limit | CPU Limit | PIDs Limit | Notes |
+|-----------|-------------|-----------|------------|-------|
+| ratd | 512 MB | 1.0 | 100 | Lightweight Go binary |
+| ratq | 1 GB | 1.0 | 100 | Single persistent DuckDB, in-memory catalog cache |
+| runner | 2 GB | 2.0 | 100 | One DuckDB per concurrent run, up to 10 concurrent |
+| portal | 512 MB | 1.0 | 100 | Standalone Next.js, mostly static |
+| postgres | 1 GB | 1.0 | 100 | Metadata only, low volume |
+| minio | 1 GB | 1.0 | 100 | Data file storage |
+| nessie | 512 MB | 1.0 | 100 | Catalog metadata, Quarkus runtime |
+| minio-init | 256 MB | 0.5 | 100 | One-shot, exits immediately |
+
+**Total minimum**: ~7.25 GB RAM. Recommended: 8 GB+ available for Docker.
+
+---
+
+## Security Posture
+
+Every container is hardened with defense-in-depth:
+
+- **Read-only filesystem** (`read_only: true`) on ratd, ratq, runner, portal --- with `/tmp` as tmpfs
+- **Drop all Linux capabilities** (`cap_drop: [ALL]`)
+- **No privilege escalation** (`no-new-privileges:true`)
+- **PID limits** (100 per container) to prevent fork bombs
+- **JSON body size limit** (1 MB) on ratd to prevent request flooding
+- **Rate limiting** (50 req/s per IP, burst 100) on all API endpoints
+
+See the [Security](/architecture/security) page for the complete security model.
+
+---
+
+## Where Data Lives
+
+| Data Type | Storage | Format |
+|-----------|---------|--------|
+| Pipeline source code (SQL/Python) | MinIO (S3) | Plain text, S3-versioned |
+| Pipeline config | MinIO (S3) | YAML |
+| Quality test SQL | MinIO (S3) | Plain text |
+| Raw uploaded files | MinIO (S3) | CSV, Parquet, JSON |
+| Transformed data (tables) | MinIO (S3) | Apache Iceberg (Parquet + metadata) |
+| Table catalog | Nessie | Git-like refs pointing to Iceberg metadata |
+| Platform state | Postgres | 16 relational tables |
+| Run logs | Postgres (JSONB column) | Structured log entries |
+
+See [Storage Layout](/architecture/storage-layout) for the full S3 directory structure and [Database Schema](/architecture/database-schema) for the Postgres tables.
+
+---
+
+## Next Steps
+
+<Cards>
+  <Card title="Services Deep Dive" href="/architecture/services">
+    Detailed breakdown of each service's responsibilities and internals
+  </Card>
+  <Card title="Data Flow" href="/architecture/data-flow">
+    Sequence diagrams showing how data moves through the system
+  </Card>
+  <Card title="Pipeline Execution" href="/architecture/pipeline-execution">
+    The 5-phase execution model in detail
+  </Card>
+  <Card title="Security Model" href="/architecture/security">
+    Authentication, authorization, sandboxing, and hardening
+  </Card>
+</Cards>

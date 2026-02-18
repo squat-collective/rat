@@ -1,0 +1,288 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+
+# Data Retention
+
+RAT includes a built-in data retention system that automatically cleans up old runs, logs, orphan branches, and other stale data. The **reaper daemon** runs as a background process inside `ratd`, enforcing retention policies on a configurable schedule.
+
+---
+
+## Why Data Retention Matters
+
+Without retention policies, your RAT installation will accumulate:
+
+- **Run records** — every pipeline execution creates a run record in Postgres
+- **Run logs** — log output is stored in S3
+- **Quality test results** — each run stores quality test outcomes
+- **Nessie branches** — ephemeral branches from failed runs may not be cleaned up
+- **Soft-deleted pipelines** — deleted pipelines linger in the database
+- **Landing zone files** — processed files accumulate in `_processed/` folders
+- **Audit log entries** — every API action creates an audit record
+- **Iceberg snapshots** — each write creates a new Iceberg snapshot
+
+Over time, this data grows unbounded and consumes disk space, degrades query performance, and makes the UI slower.
+
+---
+
+## System-Wide Settings
+
+The retention config is stored in Postgres under the `platform_settings` table as a JSON document. All fields have sensible defaults.
+
+### Configuration Fields
+
+| Field | Default | Description |
+|---|---|---|
+| `runs_max_per_pipeline` | `100` | Maximum number of run records kept per pipeline. Oldest runs beyond this count are pruned. |
+| `runs_max_age_days` | `90` | Maximum age of run records in days. Runs older than this are pruned regardless of count. |
+| `logs_max_age_days` | `30` | Maximum age of run log files in S3. Older logs are deleted. |
+| `quality_results_max_per_test` | `100` | Maximum quality test result records kept per test. Oldest beyond this are pruned. |
+| `soft_delete_purge_days` | `30` | Days after soft-deletion before a pipeline is permanently purged from the database. |
+| `stuck_run_timeout_minutes` | `30` | Runs in `running` status for longer than this are automatically failed. Catches executor crashes. |
+| `audit_log_max_age_days` | `365` | Maximum age of audit log entries. Entries older than this are purged. |
+| `nessie_orphan_branch_max_age_hours` | `6` | Nessie branches matching the `run-*` pattern older than this are deleted. Catches branches from crashed runs. |
+| `reaper_interval_minutes` | `15` | How often the reaper daemon runs. Changes take effect after the current tick. |
+| `iceberg_snapshot_max_age_days` | `7` | Maximum age of Iceberg snapshots before they are expired. |
+| `iceberg_orphan_file_max_age_days` | `3` | Maximum age of orphan data files (not referenced by any snapshot) before deletion. |
+
+### Configuring via Portal
+
+<Steps>
+
+### Open Settings
+
+Navigate to **Settings** in the Portal sidebar.
+
+### Click the Retention tab
+
+The retention settings form shows all 11 configuration fields with their current values.
+
+### Modify values
+
+Change any field. The form validates that values are within reasonable ranges (e.g., `reaper_interval_minutes` must be at least 1).
+
+### Save
+
+Click **Save**. The reaper picks up the new configuration on its next tick (within `reaper_interval_minutes`).
+
+</Steps>
+
+### Configuring via API
+
+```bash filename="Terminal"
+# Get current retention config
+curl http://localhost:8080/api/v1/settings/retention
+
+# Update retention config
+curl -X PUT http://localhost:8080/api/v1/settings/retention \
+  -H "Content-Type: application/json" \
+  -d '{
+    "runs_max_per_pipeline": 50,
+    "runs_max_age_days": 60,
+    "logs_max_age_days": 14,
+    "quality_results_max_per_test": 50,
+    "soft_delete_purge_days": 7,
+    "stuck_run_timeout_minutes": 30,
+    "audit_log_max_age_days": 180,
+    "nessie_orphan_branch_max_age_hours": 3,
+    "reaper_interval_minutes": 10,
+    "iceberg_snapshot_max_age_days": 7,
+    "iceberg_orphan_file_max_age_days": 3
+  }'
+```
+
+---
+
+## Per-Pipeline Overrides
+
+Individual pipelines can override the system-wide retention settings. This is useful when some pipelines need longer retention (e.g., regulatory pipelines) or shorter retention (e.g., experimental pipelines).
+
+### Setting per-pipeline retention
+
+In the Pipeline **Settings** tab, expand the **Retention Override** section. Any field left blank uses the system default.
+
+```bash filename="API Override"
+curl -X PATCH http://localhost:8080/api/v1/pipelines/{ns}/{layer}/{name} \
+  -H "Content-Type: application/json" \
+  -d '{
+    "retention_config": {
+      "runs_max_per_pipeline": 500,
+      "runs_max_age_days": 365
+    }
+  }'
+```
+
+The override only needs to include fields you want to change. Unspecified fields fall back to the system default.
+
+| Override Field | System Default | Pipeline Override | Effective Value |
+|---|---|---|---|
+| `runs_max_per_pipeline` | 100 | 500 | **500** |
+| `runs_max_age_days` | 90 | 365 | **365** |
+| `logs_max_age_days` | 30 | *(not set)* | **30** |
+
+---
+
+## Reaper Daemon
+
+The reaper daemon is a background goroutine that runs inside `ratd`. It performs 6 cleanup tasks on each tick:
+
+### Task 1: Prune Runs (count + age)
+
+Deletes run records that exceed either the per-pipeline count limit or the age limit. Both conditions are evaluated:
+
+- If a pipeline has 150 runs and `runs_max_per_pipeline` is 100, the oldest 50 are deleted
+- If a run is 120 days old and `runs_max_age_days` is 90, it is deleted
+
+Associated run logs in S3 are also deleted when runs are pruned.
+
+### Task 2: Fail Stuck Runs
+
+Runs stuck in `running` status for longer than `stuck_run_timeout_minutes` are automatically transitioned to `failed` with the error message: `"Run timed out (exceeded stuck_run_timeout_minutes)"`.
+
+This catches cases where the runner crashed mid-execution without reporting a status update.
+
+### Task 3: Purge Soft-Deleted Pipelines
+
+When you delete a pipeline through the Portal or API, it is **soft-deleted** (marked with a `deleted_at` timestamp but not removed). After `soft_delete_purge_days`, the reaper permanently removes the pipeline record and its associated S3 files.
+
+### Task 4: Clean Orphan Nessie Branches
+
+Each pipeline run creates an ephemeral Nessie branch named `run-{uuid}`. These branches are normally deleted after the run completes (merged on success, deleted on failure). If the runner crashes, branches may be left behind.
+
+The reaper lists all Nessie branches matching `run-*` and deletes any older than `nessie_orphan_branch_max_age_hours`.
+
+### Task 5: Purge Processed Landing Zone Files
+
+When a pipeline with `archive_landing_zones: true` finishes, source files are moved to `_processed/{run_id}/` within the landing zone. The reaper deletes processed files older than the zone's `processed_max_age_days` setting.
+
+This only applies to landing zones with `auto_purge: true` enabled.
+
+### Task 6: Prune Audit Log
+
+Audit log entries older than `audit_log_max_age_days` are permanently deleted.
+
+---
+
+## Manual Reaper Trigger
+
+You can trigger the reaper immediately without waiting for the next scheduled tick:
+
+```bash filename="Terminal"
+curl -X POST http://localhost:8080/api/v1/settings/retention/reap
+```
+
+This runs a full reaper cycle and returns the cleanup statistics:
+
+```json filename="Response"
+{
+  "runs_pruned": 42,
+  "logs_pruned": 38,
+  "quality_pruned": 15,
+  "pipelines_purged": 2,
+  "runs_failed": 1,
+  "branches_cleaned": 3,
+  "lz_files_cleaned": 120,
+  "audit_pruned": 500
+}
+```
+
+<Callout type="info">
+Manual reaper triggers are useful after bulk deleting pipelines or when you want to reclaim disk space immediately.
+</Callout>
+
+---
+
+## Landing Zone Lifecycle
+
+Landing zones have their own retention model:
+
+```
+Upload file to landing zone
+    │
+    ▼
+File at: {ns}/landing/{zone}/{filename}
+    │
+    ▼ (pipeline runs with archive_landing_zones: true)
+File moved to: {ns}/landing/{zone}/_processed/{run_id}/{filename}
+    │
+    ▼ (reaper runs, zone has auto_purge: true)
+File deleted after processed_max_age_days
+```
+
+### Landing Zone Settings
+
+| Field | Description |
+|---|---|
+| `auto_purge` | Enable automatic cleanup of `_processed/` files (default: `false`) |
+| `processed_max_age_days` | Days to keep processed files before deletion (required when `auto_purge` is `true`) |
+
+Set these in the landing zone settings:
+
+```bash filename="Terminal"
+curl -X PATCH http://localhost:8080/api/v1/landing-zones/{ns}/{zone_name} \
+  -H "Content-Type: application/json" \
+  -d '{
+    "auto_purge": true,
+    "processed_max_age_days": 7
+  }'
+```
+
+<Callout type="warning">
+Setting `processed_max_age_days` too low risks deleting files before you have a chance to investigate failures. A value of 7-30 days is recommended for most use cases.
+</Callout>
+
+---
+
+## Monitoring Retention
+
+### Reaper Status
+
+Check the last reaper run and its results:
+
+```bash filename="Terminal"
+curl http://localhost:8080/api/v1/settings/retention/status
+```
+
+```json filename="Response"
+{
+  "last_run_at": "2026-02-16T09:15:00Z",
+  "runs_pruned": 12,
+  "logs_pruned": 10,
+  "quality_pruned": 5,
+  "pipelines_purged": 0,
+  "runs_failed": 0,
+  "branches_cleaned": 1,
+  "lz_files_cleaned": 45,
+  "audit_pruned": 0,
+  "updated_at": "2026-02-16T09:15:02Z"
+}
+```
+
+### Reaper Logs
+
+```bash filename="Terminal"
+docker compose -f infra/docker-compose.yml logs -f ratd | grep reaper
+```
+
+---
+
+## Best Practices
+
+### Start with defaults
+
+The default retention config is designed for typical single-user installations. Only adjust values when you have a specific need.
+
+### Keep more for regulated data
+
+If your pipelines handle data subject to regulatory requirements (finance, healthcare), increase `runs_max_age_days` and `audit_log_max_age_days` to meet compliance needs.
+
+### Use per-pipeline overrides sparingly
+
+System-wide settings should cover 90% of your pipelines. Use per-pipeline overrides only for exceptional cases (very high-volume pipelines or long-retention regulatory data).
+
+### Monitor disk usage
+
+Check MinIO storage usage periodically. The reaper handles run logs and processed landing zone files, but Iceberg data files (the actual table data) are governed by Iceberg snapshot expiration, not the reaper.
+
+```bash filename="Terminal"
+# Check MinIO bucket usage
+curl -s http://localhost:9001/api/v1/buckets/rat-data/usage
+```

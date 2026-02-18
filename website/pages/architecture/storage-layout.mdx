@@ -1,0 +1,403 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Storage Layout
+
+All data in RAT lives in MinIO (S3-compatible object storage) in a single bucket called `rat`. This page documents the complete directory structure, how files map to concepts, and how versioning works.
+
+---
+
+## Bucket Configuration
+
+| Property | Value |
+|----------|-------|
+| **Bucket name** | `rat` |
+| **S3 versioning** | Enabled |
+| **Lifecycle policy** | Non-current versions expire after 7 days |
+| **Region** | `us-east-1` |
+| **Path-style access** | `true` |
+
+S3 versioning is enabled to support the **pipeline versioning system** --- when a pipeline is published, the S3 version IDs of its files are pinned as a snapshot. Rolling back restores the pinned versions.
+
+---
+
+## Full Directory Tree
+
+```
+s3://rat/
+│
+├── {namespace}/                          # One directory per namespace
+│   │
+│   ├── pipelines/                        # Pipeline source code and config
+│   │   ├── bronze/                       # Layer directory
+│   │   │   ├── {pipeline_name}/          # One directory per pipeline
+│   │   │   │   ├── pipeline.sql          # SQL pipeline source code
+│   │   │   │   ├── pipeline.py           # OR Python pipeline source code
+│   │   │   │   ├── config.yaml           # Pipeline configuration
+│   │   │   │   └── tests/
+│   │   │   │       └── quality/
+│   │   │   │           ├── no_nulls.sql      # Quality test
+│   │   │   │           ├── positive_amounts.sql
+│   │   │   │           └── unique_ids.sql
+│   │   │   └── {another_pipeline}/
+│   │   │       └── ...
+│   │   ├── silver/
+│   │   │   └── ...
+│   │   └── gold/
+│   │       └── ...
+│   │
+│   ├── landing/                          # Landing zones (raw file uploads)
+│   │   └── {zone_name}/                  # One directory per landing zone
+│   │       ├── orders_2024_01.csv        # Uploaded files
+│   │       ├── orders_2024_02.csv
+│   │       ├── products.parquet
+│   │       ├── _samples/                 # Sample files for preview
+│   │       │   └── orders_sample.csv
+│   │       └── _processed/               # Archived files (post-run)
+│   │           └── {run_id}/             # Files processed by this run
+│   │               ├── orders_2024_01.csv
+│   │               └── orders_2024_02.csv
+│   │
+│   └── warehouse/                        # Iceberg table data
+│       ├── bronze/
+│       │   └── {table_name}/
+│       │       ├── metadata/
+│       │       │   ├── v1.metadata.json      # Iceberg metadata
+│       │       │   ├── v2.metadata.json
+│       │       │   ├── snap-{id}-{uuid}.avro # Snapshot manifest
+│       │       │   └── {uuid}-m0.avro        # Manifest file
+│       │       └── data/
+│       │           ├── {uuid}.parquet        # Data files
+│       │           ├── {uuid}.parquet
+│       │           └── ...
+│       ├── silver/
+│       │   └── ...
+│       └── gold/
+│           └── ...
+│
+└── {another_namespace}/
+    └── ...
+```
+
+---
+
+## Pipeline Files
+
+Each pipeline is a directory containing its source code, configuration, and quality tests.
+
+### Directory Structure
+
+```
+{namespace}/pipelines/{layer}/{name}/
+├── pipeline.sql          # SQL source (Jinja template)
+├── config.yaml           # Configuration (optional)
+└── tests/
+    └── quality/
+        ├── test_1.sql    # Quality test SQL files
+        └── test_2.sql
+```
+
+### pipeline.sql
+
+The main pipeline source code. A Jinja-templated SQL file that produces a result set.
+
+```sql filename="ecommerce/pipelines/silver/clean_orders/pipeline.sql"
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+-- @watermark_column: updated_at
+
+SELECT
+    CAST(order_id AS INTEGER) AS order_id,
+    TRIM(status) AS status,
+    CAST(total_amount AS DECIMAL(12, 2)) AS total_amount,
+    CAST(updated_at AS TIMESTAMP) AS updated_at
+FROM {{ ref('bronze.raw_orders') }}
+{% if is_incremental() %}
+WHERE updated_at > '{{ watermark_value }}'
+{% endif %}
+```
+
+### pipeline.py
+
+Alternative to `pipeline.sql` for pipelines that need Python logic:
+
+```python filename="ecommerce/pipelines/bronze/api_ingest/pipeline.py"
+import duckdb
+
+def run(conn: duckdb.DuckDBPyConnection, context: dict) -> duckdb.DuckDBPyRelation:
+    """Ingest data from API response stored in landing zone."""
+    landing_path = context["landing_zone"]("api_data")
+    return conn.sql(f"""
+        SELECT
+            json_extract_string(data, '$.id') AS id,
+            json_extract_string(data, '$.name') AS name,
+            json_extract(data, '$.value') AS value
+        FROM read_json_auto('{landing_path}')
+    """)
+```
+
+<Callout type="info">
+A pipeline directory contains either `pipeline.sql` OR `pipeline.py`, never both. The runner auto-detects the type during Phase 1.
+</Callout>
+
+### config.yaml
+
+Pipeline configuration. All fields are optional --- annotations in the SQL file take priority.
+
+```yaml filename="ecommerce/pipelines/silver/clean_orders/config.yaml"
+merge_strategy: incremental
+unique_key: order_id
+watermark_column: updated_at
+description: "Cleaned and deduplicated orders from bronze"
+```
+
+### Quality Tests
+
+Quality test SQL files live in `tests/quality/` within the pipeline directory. Each file is a SQL query that returns rows violating a quality rule:
+
+```sql filename="tests/quality/no_null_order_ids.sql"
+-- Returns rows where order_id is NULL (should return 0 rows to pass)
+SELECT order_id, customer_id, total_amount
+FROM {{ this }}
+WHERE order_id IS NULL
+```
+
+```sql filename="tests/quality/positive_amounts.sql"
+-- Returns rows where total_amount is not positive
+SELECT order_id, total_amount
+FROM {{ this }}
+WHERE total_amount <= 0
+```
+
+---
+
+## Landing Zone Files
+
+Landing zones are directories for raw file uploads. Users upload CSV, Parquet, or JSON files, then reference them in pipeline SQL via `{{ landing_zone("zone_name") }}`.
+
+### Directory Structure
+
+```
+{namespace}/landing/{zone_name}/
+├── orders_2024_01.csv          # Uploaded files (active)
+├── orders_2024_02.csv
+├── products.parquet
+├── events.json
+├── _samples/                   # Sample files for preview
+│   └── orders_sample.csv
+└── _processed/                 # Archived files
+    ├── {run_id_1}/             # Files consumed by run 1
+    │   └── orders_2024_01.csv
+    └── {run_id_2}/             # Files consumed by run 2
+        └── orders_2024_02.csv
+```
+
+### File Lifecycle
+
+<Mermaid chart={`
+flowchart LR
+    A["Upload file"] --> B["Active in landing zone"]
+    B --> C["Pipeline reads via landing_zone()"]
+    C --> D{archive_landing_zones?}
+    D -->|true| E["Move to _processed/{run_id}/"]
+    D -->|false| F["File stays in place"]
+    E --> G["Reaper purges after N days"]
+`} />
+
+### Active Files
+
+Files in the root of the landing zone directory are "active" --- they are read by `{{ landing_zone("zone_name") }}` in pipeline SQL. DuckDB uses glob patterns to read all matching files:
+
+```sql
+-- landing_zone("orders") resolves to:
+SELECT * FROM read_csv_auto('s3://rat/ecommerce/landing/orders/**')
+```
+
+### Processed Files
+
+When a pipeline has `@archive_landing_zones: true`, after a successful run, source files are moved to `_processed/{run_id}/`. This:
+
+- Prevents duplicate processing on subsequent runs
+- Preserves files for auditing and debugging
+- Groups processed files by the run that consumed them
+
+### Processed File Cleanup
+
+The reaper daemon periodically purges processed landing zone files based on the zone's `processed_max_age_days` setting. If `auto_purge` is enabled on the zone, processed files are cleaned up automatically.
+
+### Sample Files
+
+The `_samples/` directory holds sample files used by the portal's preview feature. When a user uploads a file, the portal can generate a small sample for quick preview in the query console.
+
+---
+
+## Iceberg Warehouse
+
+The warehouse directory contains Apache Iceberg table data. Tables are organized by namespace and layer, mirroring the pipeline structure.
+
+### Directory Structure
+
+```
+{namespace}/warehouse/{layer}/{table_name}/
+├── metadata/
+│   ├── v1.metadata.json         # Iceberg table metadata (version 1)
+│   ├── v2.metadata.json         # Iceberg table metadata (version 2)
+│   ├── v3.metadata.json         # Latest metadata
+│   ├── snap-{id}-{uuid}.avro   # Snapshot manifest list
+│   └── {uuid}-m0.avro          # Manifest file (lists data files)
+└── data/
+    ├── {uuid}.parquet           # Parquet data file
+    ├── {uuid}.parquet
+    ├── {uuid}.parquet
+    └── ...
+```
+
+### Metadata Files
+
+| File | Format | Purpose |
+|------|--------|---------|
+| `v{n}.metadata.json` | JSON | Table schema, partition spec, snapshots, properties |
+| `snap-{id}-{uuid}.avro` | Avro | Manifest list (points to manifest files) |
+| `{uuid}-m0.avro` | Avro | Manifest (lists data files with stats) |
+
+Each write to the table creates:
+1. New Parquet data files in `data/`
+2. A new manifest file in `metadata/`
+3. A new snapshot entry in the manifest list
+4. A new metadata JSON version
+
+### Data Files
+
+Data files are Apache Parquet format with:
+
+- **Columnar storage** --- efficient for analytical queries
+- **Compression** --- Snappy by default (fast decompression)
+- **Row groups** --- ~128 MB per row group for optimal scan performance
+- **Column statistics** --- min/max per column per row group (enables predicate pushdown)
+
+### How Tables Map to Pipelines
+
+Every pipeline produces exactly one Iceberg table:
+
+```
+Pipeline: ecommerce/pipelines/silver/clean_orders/pipeline.sql
+Table:    ecommerce/warehouse/silver/clean_orders/
+Catalog:  ecommerce.silver.clean_orders (in Nessie)
+```
+
+The mapping is deterministic: `{namespace}.{layer}.{pipeline_name}`.
+
+---
+
+## S3 Versioning
+
+S3 versioning is enabled on the `rat` bucket. This is used by the **pipeline versioning system**.
+
+### How Versioning Works
+
+When S3 versioning is enabled, every `PUT` operation creates a new version of the object instead of overwriting it. Each version has a unique **version ID**.
+
+```
+s3://rat/ecommerce/pipelines/silver/clean_orders/pipeline.sql
+├── Version vId-3 (current)  ← HEAD
+├── Version vId-2 (previous)
+└── Version vId-1 (oldest)
+```
+
+### Pipeline Publishing
+
+When a pipeline is "published" in the portal, ratd snapshots the S3 version IDs of all pipeline files:
+
+```json filename="Published versions snapshot"
+{
+  "pipeline.sql": "vId-3",
+  "config.yaml": "vId-2",
+  "tests/quality/no_nulls.sql": "vId-1"
+}
+```
+
+This snapshot is stored in the `pipeline_versions` table and the `published_versions` JSONB column on the pipeline.
+
+### Pipeline Rollback
+
+Rolling back to a previous version means re-pinning the published version IDs to an earlier snapshot. The S3 objects themselves are never deleted (they are non-current versions).
+
+### Lifecycle Policy
+
+Non-current S3 versions expire after **7 days** (configured by the minio-init container). This means:
+
+- Published pipeline versions are preserved as long as the version entry exists
+- Unpublished edits (drafts) keep their history for 7 days
+- After 7 days, old non-current versions are garbage collected
+
+<Callout type="warning">
+The 7-day lifecycle policy means that rollback to a version older than 7 days may fail if the S3 version has been garbage collected. For critical pipelines, consider shorter publish cycles or extending the lifecycle policy.
+</Callout>
+
+---
+
+## File Size Considerations
+
+| File Type | Typical Size | Notes |
+|-----------|-------------|-------|
+| pipeline.sql | 0.1 - 10 KB | Small text files |
+| pipeline.py | 0.5 - 50 KB | Small Python scripts |
+| config.yaml | 0.1 - 1 KB | Minimal configuration |
+| Quality test SQL | 0.1 - 5 KB | Short SQL queries |
+| Landing zone CSV | 1 KB - 1 GB | User-uploaded data |
+| Landing zone Parquet | 1 KB - 500 MB | Compressed data |
+| Iceberg data (Parquet) | 10 MB - 500 MB per file | Row-group based |
+| Iceberg metadata | 1 KB - 100 KB | JSON + Avro |
+
+### Storage Growth
+
+The primary storage consumers are:
+
+1. **Iceberg data files** --- grows with each pipeline run (especially append_only strategies)
+2. **Landing zone files** --- grows with user uploads (mitigated by archival + purge)
+3. **S3 version history** --- grows with each edit (mitigated by 7-day lifecycle)
+
+The reaper helps manage growth by:
+- Purging processed landing zone files
+- Iceberg snapshot expiration (configurable `iceberg_snapshot_max_age_days`)
+- Iceberg orphan file cleanup (configurable `iceberg_orphan_file_max_age_days`)
+
+---
+
+## Path Conventions
+
+### Naming Rules
+
+| Component | Rule | Example |
+|-----------|------|---------|
+| Namespace | `[a-z][a-z0-9_-]*`, max 128 chars | `ecommerce`, `my-project` |
+| Layer | `bronze`, `silver`, `gold` (exact) | `silver` |
+| Pipeline name | `[a-z][a-z0-9_-]*`, max 128 chars | `clean_orders`, `daily-revenue` |
+| Landing zone name | `[a-z][a-z0-9_-]*`, max 128 chars | `orders`, `api-data` |
+| File name | Any valid S3 key characters | `orders_2024_01.csv` |
+
+### Full Path Examples
+
+```
+# Pipeline SQL file
+s3://rat/ecommerce/pipelines/silver/clean_orders/pipeline.sql
+
+# Pipeline config
+s3://rat/ecommerce/pipelines/silver/clean_orders/config.yaml
+
+# Quality test
+s3://rat/ecommerce/pipelines/silver/clean_orders/tests/quality/no_null_ids.sql
+
+# Landing zone file
+s3://rat/ecommerce/landing/orders/orders_2024_01.csv
+
+# Processed landing zone file
+s3://rat/ecommerce/landing/orders/_processed/550e8400-e29b-41d4/orders_2024_01.csv
+
+# Iceberg metadata
+s3://rat/ecommerce/warehouse/silver/clean_orders/metadata/v3.metadata.json
+
+# Iceberg data file
+s3://rat/ecommerce/warehouse/silver/clean_orders/data/00000-0-abc123.parquet
+```

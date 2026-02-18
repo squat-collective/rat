@@ -1,0 +1,215 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+
+# Scheduling
+
+RAT has a built-in scheduler that runs pipelines on a cron schedule. This guide covers how to create schedules, understand the cron format, and how the scheduler behaves in edge cases.
+
+---
+
+## Cron Format
+
+RAT uses the standard **5-field cron format**:
+
+```
+┌───────────── minute (0–59)
+│ ┌───────────── hour (0–23)
+│ │ ┌───────────── day of month (1–31)
+│ │ │ ┌───────────── month (1–12)
+│ │ │ │ ┌───────────── day of week (0–6, Sunday=0)
+│ │ │ │ │
+* * * * *
+```
+
+### Common Examples
+
+| Expression | Meaning |
+|---|---|
+| `*/15 * * * *` | Every 15 minutes |
+| `0 * * * *` | Every hour, on the hour |
+| `0 9 * * *` | Every day at 09:00 |
+| `0 9 * * 1-5` | Weekdays at 09:00 |
+| `0 0 * * 0` | Every Sunday at midnight |
+| `0 6,18 * * *` | Twice daily at 06:00 and 18:00 |
+| `30 2 1 * *` | 1st of every month at 02:30 |
+| `0 0 1 1 *` | January 1st at midnight (yearly) |
+
+<Callout type="info">
+RAT uses 5-field cron expressions (minute through day-of-week). The optional seconds field and year field used by some cron implementations are **not supported**.
+</Callout>
+
+---
+
+## Creating a Schedule
+
+<Steps>
+
+### Open your pipeline in the Portal
+
+Navigate to your pipeline and click the **Settings** tab.
+
+### Find the Schedule section
+
+Under the **Schedule** heading, you will see the cron expression input field.
+
+### Enter a cron expression
+
+Type a valid 5-field cron expression. The portal shows a human-readable preview of the next scheduled time.
+
+### Enable the schedule
+
+Toggle the **Enabled** switch to activate the schedule. Disabled schedules are saved but will not trigger any runs.
+
+### Save
+
+Click **Save** to persist the schedule. The scheduler will pick it up within 30 seconds.
+
+</Steps>
+
+You can also create schedules via the API:
+
+```bash filename="Terminal"
+curl -X POST http://localhost:8080/api/v1/schedules \
+  -H "Content-Type: application/json" \
+  -d '{
+    "pipeline_id": "your-pipeline-uuid",
+    "cron": "0 9 * * *",
+    "enabled": true
+  }'
+```
+
+---
+
+## Schedules vs. Triggers
+
+RAT has two mechanisms for automated pipeline execution. Understanding when to use each is important:
+
+| Feature | Schedule | Cron Trigger |
+|---|---|---|
+| **Mechanism** | Legacy — dedicated `schedules` table | New — uses the unified `pipeline_triggers` system |
+| **Cron support** | Yes | Yes (plus `cron_dependency` variant) |
+| **Event-driven** | No | Yes (6 trigger types including webhooks, upstream pipelines) |
+| **Cooldown** | No | Yes — configurable `cooldown_seconds` |
+| **Dependency-aware** | No | Yes — `cron_dependency` waits for upstream pipelines |
+| **Recommended** | For simple time-based runs | For all new pipelines |
+
+<Callout type="warning">
+Schedules are the legacy mechanism from earlier versions of RAT. For new pipelines, prefer using **cron triggers** or **cron_dependency triggers** instead. Schedules continue to work and are fully supported, but triggers offer more flexibility.
+
+See the [Pipeline Triggers](/guides/pipeline-triggers) guide for details.
+</Callout>
+
+---
+
+## Scheduler Behavior
+
+### Evaluation Interval
+
+The scheduler runs as a background goroutine inside `ratd`. It evaluates all enabled schedules every **30 seconds** by default. This means there can be up to a 30-second delay between when a schedule is due and when the run actually starts.
+
+### Catch-Up-Once Policy
+
+If the scheduler was down (e.g., during a deployment or restart) and missed one or more scheduled runs, it will **catch up once** when it comes back online. It does not backfill every missed interval.
+
+**Example**: Suppose you have a pipeline scheduled for `*/5 * * * *` (every 5 minutes), and `ratd` is down for 30 minutes. When it restarts, the scheduler will fire **one** catch-up run, not six.
+
+This prevents a flood of duplicate runs after downtime while ensuring that at least one execution happens with the latest data.
+
+<Callout type="info">
+The catch-up-once policy ensures you never miss a scheduled run entirely, but it also never creates a backlog of duplicate runs. If you need backfill capabilities, trigger runs manually via the portal or API.
+</Callout>
+
+### Active Run Skip
+
+If a pipeline is **already running** when its next scheduled time arrives, the scheduler **skips** that tick. This prevents overlapping runs of the same pipeline, which could cause data conflicts or resource exhaustion.
+
+The scheduler logs a message when it skips:
+
+```
+scheduler: skipping pipeline "default.silver.orders" — already running (run_id=abc-123)
+```
+
+### First Execution
+
+When you create a new schedule, the first tick **initializes** the schedule's `next_run_at` timestamp but does **not** fire a run. The pipeline will first execute at the **next scheduled time** after creation.
+
+For example, if you create a schedule with `0 9 * * *` (daily at 09:00) at 14:00, the first run will happen tomorrow at 09:00.
+
+---
+
+## Leader Election
+
+In a multi-replica deployment of `ratd`, only **one replica** runs the scheduler to prevent duplicate runs. RAT uses a Postgres advisory lock for leader election:
+
+1. On startup, each `ratd` replica attempts to acquire a Postgres advisory lock.
+2. The replica that acquires the lock becomes the **leader** and runs the scheduler.
+3. If the leader crashes, another replica acquires the lock and takes over.
+
+<Callout type="info">
+In the Community Edition (single-user, single replica), leader election happens automatically — there is only one instance to claim the lock. This is only relevant if you run multiple `ratd` replicas behind a load balancer.
+</Callout>
+
+---
+
+## Schedule Fields
+
+Each schedule record contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Unique schedule identifier |
+| `pipeline_id` | UUID | The pipeline this schedule belongs to |
+| `cron` | string | 5-field cron expression |
+| `enabled` | boolean | Whether the schedule is active |
+| `last_run_id` | UUID | ID of the last run triggered by this schedule |
+| `last_run_at` | timestamp | When the last run was triggered |
+| `next_run_at` | timestamp | Computed next execution time |
+
+---
+
+## Monitoring Schedules
+
+### Via the Portal
+
+The pipeline **Settings** tab shows the current schedule, whether it is enabled, and when the next run is expected.
+
+### Via the API
+
+```bash filename="Terminal"
+# List all schedules
+curl http://localhost:8080/api/v1/schedules
+
+# Get schedules for a specific pipeline
+curl http://localhost:8080/api/v1/pipelines/{namespace}/{layer}/{name}/schedules
+```
+
+### Checking the scheduler logs
+
+```bash filename="Terminal"
+docker compose -f infra/docker-compose.yml logs -f ratd | grep scheduler
+```
+
+---
+
+## Troubleshooting
+
+### Schedule is enabled but pipeline never runs
+
+1. **Check the cron expression** — use a tool like [crontab.guru](https://crontab.guru/) to verify
+2. **Check `next_run_at`** — the schedule may be waiting for its first tick
+3. **Check for active runs** — the scheduler skips if the pipeline is already running
+4. **Check the logs** — `docker compose logs ratd | grep scheduler`
+
+### Too many runs firing at once
+
+If many pipelines share the same schedule (e.g., `0 * * * *`), they will all fire simultaneously. Consider staggering schedules:
+
+```
+# Instead of all at :00
+0 * * * *   # pipeline A
+5 * * * *   # pipeline B
+10 * * * *  # pipeline C
+```
+
+### Schedule not updating after change
+
+The scheduler re-reads schedules every 30 seconds. If you just changed a schedule, wait up to 30 seconds for the change to take effect.

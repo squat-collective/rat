@@ -1,0 +1,258 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Environment Variables
+
+This is the complete reference for every environment variable across all RAT services. Variables are organized by service and category.
+
+---
+
+## ratd (Go Platform)
+
+The central API server, scheduler, and plugin host.
+
+### Server
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAT_LISTEN_ADDR` | `127.0.0.1:8080` | Full address the HTTP server binds to (host:port) |
+| `PORT` | — | Alternative port setting. When set, binds to `0.0.0.0:<PORT>`. `RAT_LISTEN_ADDR` takes precedence |
+| `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated list of allowed CORS origins. Must include the portal URL |
+| `RATE_LIMIT` | `50` | Maximum requests per second per client IP. Set to `"0"` to disable rate limiting |
+| `RAT_CONFIG` | `rat.yaml` | Path to the `rat.yaml` configuration file |
+| `EDITION` | `community` | Platform edition: `community` or `pro` |
+
+### Authentication
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAT_API_KEY` | — | Static API key. When set, all requests require `Authorization: Bearer <key>` |
+| `RAT_LICENSE_KEY` | — | Pro Edition license key for plugin activation |
+
+<Callout type="info">
+When `RAT_API_KEY` is not set, the API is unauthenticated. This is the default for the Community Edition (single-user, localhost-only). For production deployments, always set an API key or use a plugin-based auth system.
+</Callout>
+
+### Database
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | — | PostgreSQL connection string. Required. Format: `postgres://user:pass@host:port/dbname?sslmode=disable` |
+
+### S3 Storage
+
+| Variable | Default | Description |
+|---|---|---|
+| `S3_ENDPOINT` | — | MinIO or S3-compatible endpoint (e.g., `minio:9000`). Required |
+| `S3_ACCESS_KEY` | — | S3 access key ID. Required |
+| `S3_SECRET_KEY` | — | S3 secret access key. Required |
+| `S3_BUCKET` | `rat` | S3 bucket name where all data is stored |
+| `S3_USE_SSL` | `false` | Enable TLS for S3 connections. Set to `"true"` for AWS S3 or TLS-enabled MinIO |
+| `S3_METADATA_TIMEOUT` | `10s` | Timeout for S3 metadata operations (list, head, stat). Go duration format |
+| `S3_DATA_TIMEOUT` | `60s` | Timeout for S3 data operations (get, put, upload). Go duration format |
+
+### Service Discovery
+
+| Variable | Default | Description |
+|---|---|---|
+| `RUNNER_ADDR` | — | Runner service gRPC address. Required. Format: `http://runner:50052` |
+| `RATQ_ADDR` | — | Query service gRPC address. Required. Format: `http://ratq:50051` |
+| `NESSIE_URL` | — | Nessie REST catalog URL. Required. Format: `http://nessie:19120/api/v1` |
+
+### Scheduler
+
+| Variable | Default | Description |
+|---|---|---|
+| `SCHEDULER_ENABLED` | `true` | Enable the built-in cron scheduler. Set to `"false"` to disable |
+
+### TLS
+
+| Variable | Default | Description |
+|---|---|---|
+| `TLS_CERT_FILE` | — | Path to TLS certificate for HTTPS. When set with `TLS_KEY_FILE`, ratd serves HTTPS |
+| `TLS_KEY_FILE` | — | Path to TLS private key for HTTPS |
+| `GRPC_TLS_CA` | — | Path to CA certificate for verifying gRPC connections to runner and ratq |
+
+---
+
+## runner (Python Pipeline Executor)
+
+Executes pipelines, writes to Iceberg, and runs quality tests.
+
+### S3 Storage
+
+| Variable | Default | Description |
+|---|---|---|
+| `S3_ENDPOINT` | `minio:9000` | MinIO or S3-compatible endpoint |
+| `S3_ACCESS_KEY` | — | S3 access key ID. Required |
+| `S3_SECRET_KEY` | — | S3 secret access key. Required |
+| `S3_BUCKET` | `rat` | S3 bucket name |
+| `S3_USE_SSL` | `false` | Enable TLS for S3 connections |
+| `S3_SESSION_TOKEN` | — | Session token for temporary AWS credentials (STS) |
+| `S3_REGION` | `us-east-1` | S3 region. Required by some S3-compatible stores |
+
+### DuckDB
+
+| Variable | Default | Description |
+|---|---|---|
+| `DUCKDB_MEMORY_LIMIT` | `2GB` | Maximum memory per DuckDB connection. Supports units: `MB`, `GB` |
+| `DUCKDB_THREADS` | `4` | Number of CPU threads for DuckDB query execution |
+
+<Callout type="warning">
+`DUCKDB_MEMORY_LIMIT` should be set lower than the container's memory limit. If DuckDB tries to use more memory than the container allows, the OOM killer will terminate the process. A good rule of thumb: set DuckDB to 75% of the container memory.
+</Callout>
+
+### Catalog
+
+| Variable | Default | Description |
+|---|---|---|
+| `NESSIE_URL` | `http://nessie:19120/api/v1` | Nessie REST catalog endpoint |
+
+### gRPC Server
+
+| Variable | Default | Description |
+|---|---|---|
+| `GRPC_PORT` | `50052` | Port for the gRPC server |
+| `GRPC_TLS_CERT` | — | Path to TLS certificate for the gRPC server |
+| `GRPC_TLS_KEY` | — | Path to TLS private key for the gRPC server |
+
+### Execution
+
+| Variable | Default | Description |
+|---|---|---|
+| `RUN_TTL_SECONDS` | `3600` | How long completed run state is kept in memory (seconds). After expiry, the run status becomes unavailable via gRPC |
+| `RUNNER_MAX_CONCURRENT` | `10` | Maximum number of pipelines executing simultaneously |
+| `RUNNER_MAX_WORKERS` | `10` | Maximum worker threads in the execution thread pool |
+| `RUNNER_STATE_DIR` | `/tmp/rat-runner-state` | Directory for temporary run state and intermediate files |
+| `RATD_CALLBACK_URL` | — | Base URL for push-based status callbacks to ratd. Format: `http://ratd:8080`. When set, the runner POSTs terminal run status instead of waiting for ratd to poll |
+
+---
+
+## ratq (Python Query Service)
+
+Handles interactive DuckDB queries (read-only) and schema introspection.
+
+### S3 Storage
+
+| Variable | Default | Description |
+|---|---|---|
+| `S3_ENDPOINT` | `minio:9000` | MinIO or S3-compatible endpoint |
+| `S3_ACCESS_KEY` | — | S3 access key ID. Required |
+| `S3_SECRET_KEY` | — | S3 secret access key. Required |
+| `S3_BUCKET` | `rat` | S3 bucket name |
+| `S3_USE_SSL` | `false` | Enable TLS for S3 connections |
+| `S3_REGION` | `us-east-1` | S3 region |
+
+### DuckDB
+
+| Variable | Default | Description |
+|---|---|---|
+| `DUCKDB_MEMORY_LIMIT` | `2GB` | Maximum memory per DuckDB connection |
+| `DUCKDB_THREADS` | `4` | Number of CPU threads for DuckDB query execution |
+
+### Catalog
+
+| Variable | Default | Description |
+|---|---|---|
+| `NESSIE_URL` | `http://nessie:19120/api/v1` | Nessie REST catalog endpoint |
+
+### gRPC Server
+
+| Variable | Default | Description |
+|---|---|---|
+| `GRPC_PORT` | `50051` | Port for the gRPC server |
+| `GRPC_TLS_CERT` | — | Path to TLS certificate for the gRPC server |
+| `GRPC_TLS_KEY` | — | Path to TLS private key for the gRPC server |
+
+---
+
+## portal (Next.js Web IDE)
+
+The web-based user interface.
+
+| Variable | Default | Description |
+|---|---|---|
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8080` | Public API URL for browser-side requests. Embedded at **build time** |
+| `API_URL` | `http://ratd:8080` | Internal API URL for server-side rendering. Read at **runtime** |
+
+<Callout type="warning">
+**Build-time vs runtime**: `NEXT_PUBLIC_API_URL` is baked into the JavaScript bundle during `next build`. Changing it requires rebuilding the portal image. `API_URL` is a runtime variable that can be changed via environment without rebuilding.
+</Callout>
+
+---
+
+## Infrastructure Services
+
+These services use their official Docker images and are configured through their standard environment variables.
+
+### postgres
+
+| Variable | Default | Description |
+|---|---|---|
+| `POSTGRES_USER` | `rat` | PostgreSQL superuser name |
+| `POSTGRES_PASSWORD` | `rat` | PostgreSQL superuser password |
+| `POSTGRES_DB` | `rat` | Default database name |
+
+### minio
+
+| Variable | Default | Description |
+|---|---|---|
+| `MINIO_ROOT_USER` | `minioadmin` | MinIO root username (maps to `S3_ACCESS_KEY`) |
+| `MINIO_ROOT_PASSWORD` | `minioadmin` | MinIO root password (maps to `S3_SECRET_KEY`) |
+
+### nessie
+
+| Variable | Default | Description |
+|---|---|---|
+| `NESSIE_VERSION_STORE_TYPE` | `JDBC` | Metadata persistence backend |
+| `QUARKUS_DATASOURCE_JDBC_URL` | — | JDBC URL for Nessie metadata (points to Postgres) |
+| `QUARKUS_DATASOURCE_USERNAME` | — | Database username for Nessie |
+| `QUARKUS_DATASOURCE_PASSWORD` | — | Database password for Nessie |
+| `NESSIE_CATALOG_DEFAULT_WAREHOUSE` | `warehouse` | Default Iceberg warehouse name |
+| `NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION` | `s3://rat/` | Root S3 path for Iceberg data |
+
+---
+
+## Production Checklist
+
+When deploying RAT in production, ensure these variables are set to secure values:
+
+<Steps>
+
+### Change all default credentials
+
+```env filename="infra/.env"
+POSTGRES_USER=ratprod
+POSTGRES_PASSWORD=<strong-random-password>
+S3_ACCESS_KEY=<strong-random-key>
+S3_SECRET_KEY=<strong-random-secret>
+```
+
+### Set an API key
+
+```env filename="infra/.env"
+RAT_API_KEY=<your-api-key>
+```
+
+### Configure CORS for your domain
+
+```env filename="infra/.env"
+CORS_ORIGINS=https://rat.yourdomain.com
+```
+
+### Set the public API URL
+
+```env filename="infra/.env"
+NEXT_PUBLIC_API_URL=https://api.rat.yourdomain.com
+API_URL=http://ratd:8080
+```
+
+### Enable TLS if exposing to the internet
+
+See the [Security Hardening](/deployment/security-hardening) page for TLS configuration details.
+
+</Steps>
+
+<Callout type="error">
+Never use the default credentials (`rat`/`rat`, `minioadmin`/`minioadmin`) in production. These are well-known development defaults and will be the first thing an attacker tries.
+</Callout>

@@ -1,0 +1,453 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Makefile Targets
+
+`make` is the single entry point for every recurrent command in RAT. All targets run inside Docker containers — nothing is installed on the host machine. If you find yourself typing a raw command more than once, it should be a Makefile target.
+
+Run `make help` to see all available targets with descriptions.
+
+---
+
+## Why Make?
+
+- **Standardization**: Everyone runs the same command the same way
+- **Documentation**: `make help` is the command reference
+- **Reproducibility**: Targets are idempotent — running twice produces the same result
+- **Containerized**: All targets use Docker — your host machine stays clean
+
+<Callout type="warning">
+Never run raw `go test`, `pytest`, `npm run`, or `docker compose` commands directly. Always use `make <target>`. This ensures consistent environments and flags across all contributors.
+</Callout>
+
+---
+
+## Setup
+
+### make setup
+
+First-time setup. Generates all code (protobuf stubs, sqlc, TypeScript SDK) so the project is ready to build and test.
+
+```bash filename="Terminal"
+make setup
+```
+
+**What it does:**
+1. Runs `make proto` — generates Go + Python gRPC stubs from `.proto` files
+2. Runs `make sqlc` — generates type-safe Go code from SQL queries
+3. Runs `make sdk-build` — builds the TypeScript SDK
+
+<Callout type="info">
+You only need to run `make setup` once after cloning the repository. After that, run individual targets (`make proto`, `make sqlc`, `make sdk-build`) when you change the relevant source files.
+</Callout>
+
+---
+
+## Lifecycle
+
+These targets manage the Docker Compose stack (all 7 services).
+
+### make up
+
+Start all services in detached mode. Builds images if they do not exist yet.
+
+```bash filename="Terminal"
+make up
+```
+
+After starting, prints the URLs for portal, API, MinIO, and Nessie.
+
+### make down
+
+Stop all services. Preserves data volumes (Postgres, MinIO).
+
+```bash filename="Terminal"
+make down
+```
+
+### make restart
+
+Stop and restart all services (equivalent to `make down && make up`).
+
+```bash filename="Terminal"
+make restart
+```
+
+### make build
+
+Build all Docker images. Uses layer caching for fast subsequent builds.
+
+```bash filename="Terminal"
+make build
+```
+
+### make rebuild
+
+Rebuild all Docker images from scratch (no cache). Use when you need a completely clean build.
+
+```bash filename="Terminal"
+make rebuild
+```
+
+### make logs
+
+Tail logs from all services in real-time. Press `Ctrl+C` to stop.
+
+```bash filename="Terminal"
+make logs
+```
+
+To view logs for a specific service, use Docker Compose directly:
+
+```bash filename="Terminal"
+docker compose -f infra/docker-compose.yml logs -f ratd
+```
+
+### make status
+
+Show the status of all services (running, healthy, exited).
+
+```bash filename="Terminal"
+make status
+```
+
+---
+
+## Testing
+
+RAT has 26+ Makefile targets, with testing being the largest group. All tests run inside Docker containers.
+
+### make test
+
+Run **all** tests sequentially: Go, Python, then TypeScript.
+
+```bash filename="Terminal"
+make test
+```
+
+This is equivalent to running `make test-go`, `make test-py`, and `make test-ts` one after another.
+
+### make test-all-parallel
+
+Run all tests in parallel (Go + Python + TypeScript simultaneously). Faster on machines with multiple cores.
+
+```bash filename="Terminal"
+make test-all-parallel
+```
+
+Uses `make -j3` internally to run the three test suites concurrently.
+
+### make test-go
+
+Run Go tests for the `platform/` service. Uses the race detector (`-race`) and disables test caching (`-count=1`).
+
+```bash filename="Terminal"
+make test-go
+```
+
+**What it runs:**
+```
+go mod tidy && go test -v -race -count=1 ./...
+```
+
+### make test-py
+
+Run Python tests for both `runner/` and `query/` services. Uses pre-built test images if available (run `make test-images` first for faster execution).
+
+```bash filename="Terminal"
+make test-py
+```
+
+**What it runs:**
+- Runner tests: `pytest -v` in the `runner/` directory
+- Query tests: `pytest -v` in the `query/` directory
+
+### make test-images
+
+Build pre-cached Docker images for Python tests. These images have all dependencies pre-installed, making `make test-py` significantly faster.
+
+```bash filename="Terminal"
+make test-images
+```
+
+<Callout type="info">
+After running `make test-images`, subsequent `make test-py` runs will mount only the source and test files into the pre-built image instead of installing dependencies from scratch every time.
+</Callout>
+
+### make test-ts
+
+Run TypeScript tests for the SDK and portal. Builds the SDK first (via `make sdk-test`), then runs portal tests.
+
+```bash filename="Terminal"
+make test-ts
+```
+
+### make test-integration
+
+Run Go integration tests against real Postgres and MinIO instances. Starts a separate test Docker Compose stack, runs the tests, then tears it down.
+
+```bash filename="Terminal"
+make test-integration
+```
+
+**What it does:**
+1. Starts `postgres` and `minio` from `infra/docker-compose.test.yml`
+2. Runs integration tests in `platform/internal/postgres/` and `platform/internal/storage/`
+3. Tears down the test services
+
+### make smoke-test
+
+Run an end-to-end smoke test against a running stack. Requires `make up` to have been run first.
+
+```bash filename="Terminal"
+make smoke-test
+```
+
+Executes the `infra/scripts/smoke-test.sh` script which verifies that all services are healthy and basic operations work.
+
+---
+
+## Code Quality
+
+### make lint
+
+Lint all code across all languages: Go, Python (runner + query), and Protobuf.
+
+```bash filename="Terminal"
+make lint
+```
+
+**What it runs:**
+- Go: `go vet ./...`
+- Python: `ruff check . && ruff format --check .` (for both runner and query)
+- Proto: `buf lint`
+
+### make lint-go-strict
+
+Run `golangci-lint` with the project's `.golangci.yml` configuration. Stricter than `go vet` — catches style issues, unused code, and common mistakes.
+
+```bash filename="Terminal"
+make lint-go-strict
+```
+
+### make fmt
+
+Auto-format all code (Go + Python). Modifies files in place.
+
+```bash filename="Terminal"
+make fmt
+```
+
+**What it runs:**
+- Go: `goimports -w .`
+- Python: `ruff format .` (for both runner and query)
+
+---
+
+## Code Generation
+
+### make proto
+
+Generate Go and Python gRPC stubs from `.proto` files in the `proto/` directory.
+
+```bash filename="Terminal"
+make proto
+```
+
+Uses `buf generate` with the configuration from `proto/buf.gen.yaml`. Generated files are written to:
+- `platform/gen/` (Go)
+- `runner/src/rat_runner/gen/` (Python)
+- `query/src/rat_query/gen/` (Python)
+
+### make sqlc
+
+Generate type-safe Go code from SQL queries defined in `platform/internal/postgres/`.
+
+```bash filename="Terminal"
+make sqlc
+```
+
+Uses `sqlc generate` to produce Go structs and functions from SQL queries. See the [sqlc documentation](https://sqlc.dev/) for the query annotation format.
+
+---
+
+## Development
+
+### make dev-ratd
+
+Start the Go platform service with hot reload using [air](https://github.com/air-verse/air). The service automatically restarts when you save a Go file.
+
+```bash filename="Terminal"
+make dev-ratd
+```
+
+Exposes ports 8080 (REST) and 8081 (gRPC) on the host. Connects to the `infra_default` Docker network so it can reach Postgres, MinIO, and other services.
+
+<Callout type="info">
+`make dev-ratd` runs interactively (not detached). Use a separate terminal for other commands. Press `Ctrl+C` to stop.
+</Callout>
+
+### make dev-portal
+
+Start the Next.js portal with hot reload. Builds the SDK first (automatically runs `make sdk-build`).
+
+```bash filename="Terminal"
+make dev-portal
+```
+
+Exposes port 3000 on the host. Connects to the Docker network so server-side rendering can reach `ratd`.
+
+### make sdk-build
+
+Build the TypeScript SDK. Produces ESM, CJS, and TypeScript declaration outputs.
+
+```bash filename="Terminal"
+make sdk-build
+```
+
+Output is written to `sdk-typescript/dist/`.
+
+### make sdk-test
+
+Build the SDK and run its test suite (27 vitest tests).
+
+```bash filename="Terminal"
+make sdk-test
+```
+
+### make portal-build
+
+Build the portal for production (standalone Next.js output). Builds the SDK first.
+
+```bash filename="Terminal"
+make portal-build
+```
+
+Output is written to `portal/.next/`.
+
+### make portal-typecheck
+
+Type-check the portal without building. Faster than `make portal-build` for verifying type correctness.
+
+```bash filename="Terminal"
+make portal-typecheck
+```
+
+---
+
+## Documentation
+
+### make docs
+
+Start the documentation site dev server (Nextra) on port 3001 with hot reload.
+
+```bash filename="Terminal"
+make docs
+```
+
+### make docs-build
+
+Build the documentation as a static site.
+
+```bash filename="Terminal"
+make docs-build
+```
+
+Output is written to `website/out/`.
+
+### make docs-serve
+
+Build and serve the static documentation site on port 3001.
+
+```bash filename="Terminal"
+make docs-serve
+```
+
+---
+
+## Operations
+
+### make backup
+
+Create a timestamped backup of Postgres (pg_dump) and MinIO (mc mirror).
+
+```bash filename="Terminal"
+make backup
+```
+
+Backups are saved to `./backups/YYYYMMDD_HHMMSS/` with subdirectories for `postgres/` and `minio/`.
+
+### make restore
+
+Restore Postgres and MinIO from a previous backup.
+
+```bash filename="Terminal"
+make restore BACKUP_DIR=./backups/20260216_093000
+```
+
+<Callout type="warning">
+The `BACKUP_DIR` argument is required. Without it, the command lists available backups and exits.
+</Callout>
+
+### make clean
+
+Remove all containers, volumes, and generated files. This deletes all data.
+
+```bash filename="Terminal"
+make clean
+```
+
+**What it removes:**
+- Docker containers and volumes (`docker compose down -v`)
+- Generated proto stubs (`platform/gen/`, `runner/src/rat_runner/gen/`, `query/src/rat_query/gen/`)
+- Build artifacts (`portal/.next/`, `sdk-typescript/dist/`)
+
+### make clean-all
+
+Full clean — everything `make clean` does plus Docker images and pre-built test images.
+
+```bash filename="Terminal"
+make clean-all
+```
+
+---
+
+## Quick Reference
+
+| Target | Description |
+|---|---|
+| `make help` | Show all available targets |
+| `make setup` | First-time setup (proto + sqlc + sdk) |
+| `make up` | Start all 7 services |
+| `make down` | Stop all services |
+| `make restart` | Restart all services |
+| `make build` | Build all Docker images |
+| `make rebuild` | Rebuild all images (no cache) |
+| `make logs` | Tail all service logs |
+| `make status` | Show service status |
+| `make test` | Run all tests (sequential) |
+| `make test-all-parallel` | Run all tests (parallel) |
+| `make test-go` | Go tests only |
+| `make test-py` | Python tests only |
+| `make test-images` | Build Python test images |
+| `make test-ts` | TypeScript tests only |
+| `make test-integration` | Go integration tests |
+| `make smoke-test` | E2E smoke test |
+| `make lint` | Lint all code |
+| `make lint-go-strict` | Strict Go linting |
+| `make fmt` | Format all code |
+| `make proto` | Generate gRPC stubs |
+| `make sqlc` | Generate Go from SQL |
+| `make dev-ratd` | Hot reload Go platform |
+| `make dev-portal` | Hot reload Next.js portal |
+| `make sdk-build` | Build TypeScript SDK |
+| `make sdk-test` | Test TypeScript SDK |
+| `make portal-build` | Build portal for production |
+| `make portal-typecheck` | Type-check portal |
+| `make docs` | Start docs dev server |
+| `make docs-build` | Build static docs |
+| `make docs-serve` | Build and serve docs |
+| `make backup` | Backup Postgres + MinIO |
+| `make restore` | Restore from backup |
+| `make clean` | Remove containers + volumes + generated files |
+| `make clean-all` | Full clean including Docker images |

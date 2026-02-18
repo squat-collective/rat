@@ -1,0 +1,254 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Architecture Decision Records
+
+Architecture Decision Records (ADRs) document significant design decisions in RAT. They capture the context, rationale, and consequences of decisions so that future contributors understand **why** the system is built the way it is — not just **how**.
+
+---
+
+## What is an ADR?
+
+An ADR is a short document that records a single architectural decision. It is:
+
+- **Immutable**: Once accepted, an ADR is never edited. If a decision changes, a new ADR supersedes the old one.
+- **Contextual**: It captures the situation at the time the decision was made, including constraints, trade-offs, and alternatives considered.
+- **Permanent**: Even superseded ADRs remain in the repository as historical context.
+
+<Callout type="info">
+ADRs are not design documents or specifications. They are concise records of **decisions** — typically 1-2 pages. If you need detailed design, write a separate design doc and reference it from the ADR.
+</Callout>
+
+---
+
+## ADR Format
+
+Every ADR follows this structure:
+
+```markdown filename="docs/adr/NNN-title.md"
+# ADR-NNN: Title of the Decision
+
+## Status
+
+Accepted | Superseded by ADR-NNN | Deprecated
+
+## Context
+
+What is the situation? What problem are we solving? What constraints exist?
+Describe the forces at play (technical, business, team, timeline).
+
+## Decision
+
+What did we decide? Be specific and concrete.
+
+## Consequences
+
+What are the results of this decision?
+- **Positive**: Benefits gained
+- **Negative**: Trade-offs accepted
+- **Neutral**: Side effects that are neither good nor bad
+```
+
+### Example
+
+```markdown filename="docs/adr/003-warmpool-executor.md"
+# ADR-003: WarmPoolExecutor with ConnectRPC Dispatch
+
+## Status
+
+Accepted
+
+## Context
+
+ratd needs to dispatch pipeline execution to the runner service. The runner
+is a long-lived Python process with a warm DuckDB connection pool. We need
+a mechanism for ratd to:
+1. Submit a pipeline for execution
+2. Poll for run status during execution
+3. Cancel a running pipeline
+
+Options considered:
+- Direct HTTP calls from ratd to runner
+- Message queue (Redis, RabbitMQ)
+- gRPC with ConnectRPC
+
+## Decision
+
+Use ConnectRPC (gRPC over HTTP/1.1) for ratd-to-runner communication.
+The WarmPoolExecutor in ratd maintains a ConnectRPC client and polls
+the runner every 5 seconds for status updates during execution.
+
+## Consequences
+
+- **Positive**: HTTP/1.1 compatible (works through proxies), curl-friendly
+  for debugging, type-safe via protobuf
+- **Positive**: No additional infrastructure (no message queue to operate)
+- **Negative**: Polling adds up to 5s latency for status updates (acceptable
+  for batch pipelines, not for real-time)
+- **Negative**: Smaller ecosystem than raw gRPC (fewer tools, tutorials)
+```
+
+---
+
+## When to Write an ADR
+
+Write an ADR when you make a decision that:
+
+- **Is hard to reverse**: Choosing a database, communication protocol, or storage format
+- **Has significant trade-offs**: Accepting limitations in exchange for benefits
+- **Affects multiple components**: A decision that changes how services interact
+- **Deviates from convention**: Doing something differently from the "obvious" choice
+- **Will be questioned later**: If someone will ask "why did we do it this way?" in 6 months, write an ADR now
+
+You do **not** need an ADR for:
+
+- Library version bumps
+- Code formatting decisions
+- Bug fixes
+- Implementation details within a single component
+
+---
+
+## How to Create a New ADR
+
+<Steps>
+
+### Determine the next number
+
+```bash filename="Terminal"
+ls docs/adr/
+```
+
+ADRs are numbered sequentially: `001`, `002`, `003`, etc.
+
+### Create the file
+
+```bash filename="Terminal"
+# Use the next available number
+touch docs/adr/013-your-decision-title.md
+```
+
+### Write the ADR
+
+Follow the format: Status, Context, Decision, Consequences. Be concise — aim for 1-2 pages.
+
+### Submit with the implementation
+
+ADRs are submitted in the same PR as the code they document. The ADR explains the "why", the code implements the "what".
+
+### Review
+
+ADR review focuses on:
+- Is the context accurate?
+- Are the alternatives and trade-offs honestly represented?
+- Is the decision clearly stated?
+
+</Steps>
+
+---
+
+## Existing ADRs
+
+RAT has the following accepted ADRs:
+
+### Foundation (v2.0 - v2.3)
+
+| ADR | Title | Status | Summary |
+|---|---|---|---|
+| **001** | S3 Storage via MinIO Go SDK | Accepted | All data stored in S3 (MinIO). Go SDK for server-side operations, presigned URLs for browser uploads |
+| **002** | No-Op Auth with Plugin Slot | Accepted | Community Edition has no authentication. Auth is a plugin slot that Pro plugins can fill |
+| **003** | WarmPoolExecutor + ConnectRPC Dispatch | Accepted | Pipeline execution dispatched to runner via ConnectRPC. 5-second polling for status updates |
+| **004** | Background Cron Scheduler | Accepted | 30-second tick interval, catch-up-once policy, Postgres advisory lock for leader election |
+| **005** | Runner Service Architecture | Accepted | Python runner with DuckDB, PyArrow, PyIceberg. 5-phase execution (branch, write, test, merge) |
+| **006** | Query Service (ratq) Architecture | Accepted | Separate read-only DuckDB sidecar for interactive queries. Isolates query workload from pipeline execution |
+
+### Platform Evolution (v2.4 - v2.6)
+
+| ADR | Title | Status | Summary |
+|---|---|---|---|
+| **007** | Plugin System Foundation | Accepted | Go plugins loaded via gRPC. Registry pattern with health checks. Base `PluginService` proto |
+| **008** | Auth-Keycloak: First Pro Plugin | Accepted | JWT validation against Keycloak. Bearer token extraction, JWKS verification, user context injection |
+| **009** | ContainerExecutor Pro Plugin | Accepted | Run pipelines in isolated containers instead of the shared runner process. Resource limits per pipeline |
+
+### Multi-User and Sharing (v2.7 - v2.9)
+
+| ADR | Title | Status | Summary |
+|---|---|---|---|
+| **010** | ACL Sharing + Enforcement Plugin | Accepted | Resource-level access control. Owner, editor, viewer roles. Enforcement middleware intercepts all requests |
+| **011** | Cloud AWS Plugin | Accepted | Native AWS integration: S3 (not MinIO), IAM roles, CloudWatch logging, ECS deployment |
+| **012** | License Gating for Pro Plugins | Accepted | License key verification. Plugins check license validity on startup. Grace period for expired licenses |
+
+---
+
+## ADR Lifecycle
+
+```
+┌──────────┐     ┌──────────┐     ┌─────────────┐
+│ Proposed │ ──→ │ Accepted │ ──→ │ Superseded  │
+└──────────┘     └──────────┘     │ by ADR-NNN  │
+                                  └─────────────┘
+                        │
+                        └──→ ┌────────────┐
+                             │ Deprecated │
+                             └────────────┘
+```
+
+| Status | Meaning |
+|---|---|
+| **Proposed** | Under discussion, not yet decided. In PR review |
+| **Accepted** | Decision made and implemented. Immutable |
+| **Superseded** | Replaced by a newer ADR. The old ADR stays for history, with a link to the replacement |
+| **Deprecated** | The feature or component was removed. The ADR remains for historical context |
+
+<Callout type="warning">
+Never edit an accepted ADR. If the decision changes, write a new ADR with a reference to the one it supersedes:
+
+```markdown
+## Status
+
+Accepted (supersedes ADR-003)
+```
+
+And update the old ADR's status:
+
+```markdown
+## Status
+
+Superseded by ADR-015
+```
+
+This is the only permitted edit to an accepted ADR.
+</Callout>
+
+---
+
+## ADR File Location
+
+All ADRs live in the `docs/adr/` directory:
+
+```
+docs/adr/
+├── 001-s3-storage.md
+├── 002-auth-middleware.md
+├── 003-warmpool-executor.md
+├── 004-scheduler.md
+├── 005-runner-service.md
+├── 006-query-service.md
+├── 007-plugin-system.md
+├── 008-auth-keycloak.md
+├── 009-container-executor.md
+├── 010-acl-plugin.md
+├── 011-cloud-aws.md
+└── 012-license-gating.md
+```
+
+---
+
+## Reading ADRs
+
+ADRs are the best way to understand why RAT is built the way it is. When you are:
+
+- **New to the project**: Read ADRs 001-006 to understand the foundational decisions
+- **Working on plugins**: Read ADRs 007-012 to understand the plugin architecture
+- **Proposing a change**: Check if an existing ADR covers the topic. If it does, your proposal should supersede it with a new ADR explaining why the decision changed
+- **Debugging unexpected behavior**: An ADR may explain why a component behaves a certain way (e.g., the 5-second polling interval in ADR-003)

@@ -1,0 +1,348 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Monitoring
+
+RAT exposes health endpoints, structured logs, and Docker health checks to help you monitor the platform. This guide covers what to monitor, how to set up alerts, and how to diagnose common issues.
+
+---
+
+## Health Endpoints
+
+The `ratd` API server exposes three health endpoints:
+
+### GET /health
+
+Full health check. Returns the status of every subsystem that `ratd` depends on.
+
+```bash filename="Terminal"
+curl -s http://localhost:8080/health | jq .
+```
+
+```json filename="Response"
+{
+  "status": "ok",
+  "services": {
+    "postgres": "healthy",
+    "minio": "healthy",
+    "nessie": "healthy",
+    "runner": "healthy",
+    "ratq": "healthy"
+  }
+}
+```
+
+| Status | Meaning |
+|---|---|
+| `"ok"` | All subsystems are healthy |
+| `"degraded"` | One or more non-critical subsystems are unhealthy (e.g., runner down but API still works) |
+| `"unhealthy"` | Critical subsystems are down (e.g., Postgres unreachable) |
+
+This endpoint checks:
+- **Postgres**: Executes a `SELECT 1` query
+- **MinIO**: Lists the bucket to verify connectivity
+- **Nessie**: Calls the Nessie config endpoint
+- **Runner**: Opens a gRPC channel and checks readiness
+- **ratq**: Opens a gRPC channel and checks readiness
+
+### GET /health/live
+
+Liveness probe. Returns `200 OK` if the `ratd` process is running, regardless of subsystem health. Use this for container orchestrators that need to know if the process is alive.
+
+```bash filename="Terminal"
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health/live
+# 200
+```
+
+This endpoint does **not** check any dependencies. It returns `200` as long as the HTTP server is accepting connections.
+
+### GET /health/ready
+
+Readiness probe. Returns `200 OK` if `ratd` is ready to serve traffic (all critical dependencies are available).
+
+```bash filename="Terminal"
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health/ready
+# 200
+```
+
+This endpoint checks Postgres and MinIO connectivity. It returns `503 Service Unavailable` if either is unreachable.
+
+<Callout type="info">
+In Kubernetes deployments, use `/health/live` as the `livenessProbe` and `/health/ready` as the `readinessProbe`. In Docker Compose, the built-in health check already uses the `/ratd healthcheck` CLI command which performs a similar check.
+</Callout>
+
+---
+
+## Prometheus Metrics
+
+`ratd` exposes a Prometheus metrics endpoint:
+
+### GET /metrics
+
+```bash filename="Terminal"
+curl -s http://localhost:8080/metrics
+```
+
+```text filename="Sample output"
+# HELP ratd_http_requests_total Total number of HTTP requests
+# TYPE ratd_http_requests_total counter
+ratd_http_requests_total{method="GET",path="/api/v1/pipelines",status="200"} 142
+
+# HELP ratd_http_request_duration_seconds HTTP request duration in seconds
+# TYPE ratd_http_request_duration_seconds histogram
+ratd_http_request_duration_seconds_bucket{method="GET",path="/api/v1/pipelines",le="0.1"} 140
+ratd_http_request_duration_seconds_bucket{method="GET",path="/api/v1/pipelines",le="0.5"} 142
+
+# HELP ratd_pipeline_runs_total Total pipeline runs by status
+# TYPE ratd_pipeline_runs_total counter
+ratd_pipeline_runs_total{status="completed"} 87
+ratd_pipeline_runs_total{status="failed"} 3
+ratd_pipeline_runs_total{status="cancelled"} 1
+
+# HELP ratd_active_runs Current number of running pipelines
+# TYPE ratd_active_runs gauge
+ratd_active_runs 2
+```
+
+### Key Metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `ratd_http_requests_total` | counter | Total HTTP requests by method, path, status |
+| `ratd_http_request_duration_seconds` | histogram | Request latency distribution |
+| `ratd_pipeline_runs_total` | counter | Total pipeline runs by final status |
+| `ratd_active_runs` | gauge | Currently executing pipelines |
+| `ratd_scheduler_ticks_total` | counter | Scheduler evaluation cycles |
+| `ratd_scheduler_runs_triggered_total` | counter | Runs triggered by the scheduler |
+| `ratd_grpc_requests_total` | counter | gRPC requests to runner/ratq |
+| `ratd_grpc_request_duration_seconds` | histogram | gRPC call latency |
+
+### Prometheus Configuration
+
+Add RAT to your Prometheus scrape configuration:
+
+```yaml filename="prometheus.yml"
+scrape_configs:
+  - job_name: 'ratd'
+    static_configs:
+      - targets: ['ratd:8080']
+    scrape_interval: 15s
+    metrics_path: /metrics
+```
+
+---
+
+## Docker Health Checks
+
+Every RAT service registers a Docker health check. Use `docker compose ps` or `docker inspect` to view health status.
+
+### Health Check Configuration
+
+| Service | Method | Interval | Timeout | Retries | Start Period |
+|---|---|---|---|---|---|
+| **ratd** | CLI: `/ratd healthcheck` | 5s | 3s | 5 | 5s |
+| **ratq** | Python gRPC channel check | 10s | 5s | 5 | 15s |
+| **runner** | Python gRPC channel check | 10s | 5s | 5 | 15s |
+| **portal** | `wget http://localhost:3000` | 10s | 5s | 3 | 30s |
+| **postgres** | `pg_isready -U rat` | 5s | 3s | 5 | 5s |
+| **minio** | `mc ready local` | 5s | 3s | 5 | 5s |
+| **nessie** | HTTP `/q/health/ready` | 10s | 5s | 5 | 15s |
+
+### Checking Health Status
+
+```bash filename="Terminal"
+# Overview of all services
+docker compose -f infra/docker-compose.yml ps
+
+# Detailed health info for a specific service
+docker inspect --format='{{json .State.Health}}' ratd | jq .
+```
+
+```json filename="Health output"
+{
+  "Status": "healthy",
+  "FailingStreak": 0,
+  "Log": [
+    {
+      "Start": "2026-02-16T09:30:00.000Z",
+      "End": "2026-02-16T09:30:00.050Z",
+      "ExitCode": 0,
+      "Output": "ok\n"
+    }
+  ]
+}
+```
+
+---
+
+## Logging
+
+### Log Format
+
+All services use the Docker `json-file` log driver with rotation:
+
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+Each service produces up to 30 MB of logs (3 files x 10 MB) before rotation.
+
+### Viewing Logs
+
+```bash filename="Terminal"
+# All services
+make logs
+
+# Specific service
+docker compose -f infra/docker-compose.yml logs -f ratd
+
+# Last 100 lines
+docker compose -f infra/docker-compose.yml logs --tail 100 ratd
+
+# Since a timestamp
+docker compose -f infra/docker-compose.yml logs --since "2026-02-16T09:00:00" ratd
+```
+
+### Log Levels
+
+`ratd` uses Go's `slog` structured logging:
+
+```json
+{"time":"2026-02-16T09:30:00Z","level":"INFO","msg":"server started","addr":"0.0.0.0:8080"}
+{"time":"2026-02-16T09:30:05Z","level":"INFO","msg":"scheduler tick","evaluated":5,"triggered":1}
+{"time":"2026-02-16T09:30:10Z","level":"ERROR","msg":"runner unreachable","addr":"runner:50052","error":"connection refused"}
+```
+
+The runner and ratq services use Python's standard logging:
+
+```
+2026-02-16 09:30:00 INFO  [rat_runner.server] gRPC server started on port 50052
+2026-02-16 09:30:05 INFO  [rat_runner.executor] Starting pipeline: ecommerce.silver.clean_orders
+2026-02-16 09:30:15 ERROR [rat_runner.executor] Pipeline failed: DuckDB OOM
+```
+
+### Centralized Logging
+
+For production, forward logs to a centralized system:
+
+<Tabs items={['Loki (Grafana)', 'ELK Stack', 'CloudWatch']}>
+<Tabs.Tab>
+Use the Loki Docker driver:
+
+```yaml filename="infra/docker-compose.override.yml"
+x-logging: &default-logging
+  driver: loki
+  options:
+    loki-url: "http://loki:3100/loki/api/v1/push"
+    loki-batch-size: "400"
+    labels: "service={{.Name}}"
+```
+</Tabs.Tab>
+<Tabs.Tab>
+Use Filebeat to ship container logs:
+
+```yaml filename="filebeat.yml"
+filebeat.autodiscover:
+  providers:
+    - type: docker
+      templates:
+        - condition:
+            contains:
+              docker.container.labels.com.docker.compose.project: "rat"
+          config:
+            - type: container
+              paths: ["/var/lib/docker/containers/${data.docker.container.id}/*.log"]
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+```
+</Tabs.Tab>
+<Tabs.Tab>
+Use the `awslogs` driver:
+
+```yaml filename="infra/docker-compose.override.yml"
+x-logging: &default-logging
+  driver: awslogs
+  options:
+    awslogs-region: us-east-1
+    awslogs-group: /ecs/rat
+    awslogs-stream-prefix: rat
+```
+</Tabs.Tab>
+</Tabs>
+
+---
+
+## What to Alert On
+
+### Critical (Page immediately)
+
+| Condition | Check | Threshold |
+|---|---|---|
+| API down | `GET /health/live` returns non-200 | Any failure |
+| Postgres down | `GET /health` → `postgres: unhealthy` | 2+ consecutive failures |
+| MinIO down | `GET /health` → `minio: unhealthy` | 2+ consecutive failures |
+| Runner down | `GET /health` → `runner: unhealthy` | 3+ consecutive failures |
+| Disk full | Host disk usage | > 90% |
+
+### Warning (Investigate during business hours)
+
+| Condition | Check | Threshold |
+|---|---|---|
+| Pipeline failures | `ratd_pipeline_runs_total{status="failed"}` | > 3 in 1 hour |
+| High latency | `ratd_http_request_duration_seconds` p99 | > 5 seconds |
+| Runner queue full | `ratd_active_runs` | Near `RUNNER_MAX_CONCURRENT` |
+| ratq unhealthy | `GET /health` → `ratq: unhealthy` | 3+ consecutive failures |
+| Memory pressure | Container memory usage | > 85% of limit |
+
+### Informational
+
+| Condition | Check | Threshold |
+|---|---|---|
+| Scheduler trigger rate | `ratd_scheduler_runs_triggered_total` | Sudden change in rate |
+| Request volume | `ratd_http_requests_total` | Unusual spikes |
+| Backup age | Latest backup timestamp | > 24 hours (per your schedule) |
+
+---
+
+## Dashboard Template
+
+If you use Grafana, create a dashboard with these panels:
+
+| Panel | Type | Query / Source |
+|---|---|---|
+| Service Health | Stat | `GET /health` endpoint |
+| Active Runs | Gauge | `ratd_active_runs` |
+| Run Success Rate | Pie chart | `ratd_pipeline_runs_total` by status |
+| API Latency | Heatmap | `ratd_http_request_duration_seconds` |
+| Request Rate | Time series | `rate(ratd_http_requests_total[5m])` |
+| Error Rate | Time series | `rate(ratd_http_requests_total{status=~"5.."}[5m])` |
+| Container Memory | Time series | Docker metrics |
+| Container CPU | Time series | Docker metrics |
+
+---
+
+## Troubleshooting
+
+### Service shows "unhealthy" in docker compose ps
+
+1. Check the service logs: `docker compose logs <service>`
+2. Check the health check output: `docker inspect --format='{{json .State.Health.Log}}' <service> | jq .`
+3. The most recent health check log entry shows the exit code and output
+
+### High memory usage on runner
+
+The runner's DuckDB instance may be processing a large dataset:
+
+```bash filename="Terminal"
+docker stats --no-stream runner
+```
+
+If memory is consistently near the limit, increase `DUCKDB_MEMORY_LIMIT` and the container memory limit. See the [Docker Compose](/deployment/docker-compose) page for tuning details.
+
+### Logs show "connection refused" errors
+
+This typically means a downstream service has not finished starting yet. Check the health status of the target service and wait for it to become healthy.

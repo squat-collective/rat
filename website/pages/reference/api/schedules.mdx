@@ -1,0 +1,268 @@
+import { Callout } from 'nextra/components'
+
+# Schedules
+
+Schedules define cron-based recurring executions for pipelines. The scheduler runs as a background goroutine inside ratd, evaluating cron expressions every 30 seconds and creating runs for pipelines whose schedules are due.
+
+<Callout type="info">
+Schedules are the legacy scheduling mechanism. For new pipelines, consider using [Triggers](/reference/api/triggers) with the `cron` or `cron_dependency` type, which offer more flexibility (cooldowns, dependency awareness, and unified trigger management).
+</Callout>
+
+---
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/schedules` | List all schedules |
+| `POST` | `/api/v1/schedules` | Create a schedule |
+| `GET` | `/api/v1/schedules/{id}` | Get schedule details |
+| `PUT` | `/api/v1/schedules/{id}` | Update a schedule |
+| `DELETE` | `/api/v1/schedules/{id}` | Delete a schedule |
+
+---
+
+## List Schedules
+
+```
+GET /api/v1/schedules
+```
+
+Returns a list of all schedules.
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/schedules
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "schedules": [
+    {
+      "id": "sched-123",
+      "namespace": "default",
+      "layer": "silver",
+      "pipeline": "orders",
+      "cron": "0 * * * *",
+      "enabled": true,
+      "last_run_at": "2026-02-12T14:00:00Z",
+      "next_run_at": "2026-02-12T15:00:00Z",
+      "created_at": "2026-02-10T10:00:00Z",
+      "updated_at": "2026-02-10T10:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `schedules` | `array` | List of schedule objects |
+| `schedules[].id` | `string` | Schedule ID |
+| `schedules[].namespace` | `string` | Pipeline namespace |
+| `schedules[].layer` | `string` | Pipeline layer |
+| `schedules[].pipeline` | `string` | Pipeline name |
+| `schedules[].cron` | `string` | 5-field cron expression |
+| `schedules[].enabled` | `boolean` | Whether the schedule is active |
+| `schedules[].last_run_at` | `string\|null` | ISO 8601 timestamp of the last triggered run |
+| `schedules[].next_run_at` | `string\|null` | ISO 8601 timestamp of the next scheduled run |
+| `schedules[].created_at` | `string` | ISO 8601 creation timestamp |
+| `schedules[].updated_at` | `string` | ISO 8601 last update timestamp |
+| `total` | `integer` | Total number of schedules |
+
+---
+
+## Create Schedule
+
+```
+POST /api/v1/schedules
+```
+
+Creates a new schedule for a pipeline.
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | `string` | Yes | Pipeline namespace |
+| `layer` | `string` | Yes | Pipeline layer |
+| `pipeline` | `string` | Yes | Pipeline name |
+| `cron` | `string` | Yes | 5-field cron expression |
+| `enabled` | `boolean` | No | Whether the schedule is active (default: `true`) |
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/schedules \
+  -H "Content-Type: application/json" \
+  -d '{
+    "namespace": "default",
+    "layer": "silver",
+    "pipeline": "orders",
+    "cron": "0 * * * *",
+    "enabled": true
+  }'
+```
+
+### Response — `201 Created`
+
+```json
+{
+  "id": "sched-123",
+  "namespace": "default",
+  "layer": "silver",
+  "pipeline": "orders",
+  "cron": "0 * * * *",
+  "enabled": true,
+  "created_at": "2026-02-12T10:00:00Z",
+  "updated_at": "2026-02-12T10:00:00Z"
+}
+```
+
+### Cron Expression Reference
+
+| Expression | Schedule |
+|---|---|
+| `* * * * *` | Every minute |
+| `0 * * * *` | Every hour (at minute 0) |
+| `*/15 * * * *` | Every 15 minutes |
+| `0 0 * * *` | Daily at midnight |
+| `0 6 * * 1-5` | Weekdays at 6:00 AM |
+| `0 0 1 * *` | First day of every month at midnight |
+| `30 2 * * 0` | Every Sunday at 2:30 AM |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Missing required fields, invalid namespace/layer/name, invalid cron expression |
+| `404` | `NOT_FOUND` | Pipeline not found |
+
+---
+
+## Get Schedule
+
+```
+GET /api/v1/schedules/{id}
+```
+
+Returns details for a single schedule.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | `string` | Schedule ID |
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/schedules/sched-123
+```
+
+### Response — `200 OK`
+
+Returns the full schedule object.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Schedule not found |
+
+---
+
+## Update Schedule
+
+```
+PUT /api/v1/schedules/{id}
+```
+
+Updates a schedule's cron expression or enabled state. This is a partial update.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | `string` | Schedule ID |
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `cron` | `string` | No | Updated cron expression |
+| `enabled` | `boolean` | No | Enable or disable the schedule |
+
+### Request
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/schedules/sched-123 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "cron": "*/15 * * * *",
+    "enabled": false
+  }'
+```
+
+### Response — `200 OK`
+
+Returns the full schedule object with updated fields.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Invalid cron expression |
+| `404` | `NOT_FOUND` | Schedule not found |
+
+---
+
+## Delete Schedule
+
+```
+DELETE /api/v1/schedules/{id}
+```
+
+Deletes a schedule.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | `string` | Schedule ID |
+
+### Request
+
+```bash
+curl -X DELETE http://localhost:8080/api/v1/schedules/sched-123
+```
+
+### Response — `204 No Content`
+
+No response body.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Schedule not found |
+
+---
+
+## Scheduler Behavior
+
+The scheduler uses a **catch-up-once** policy:
+
+- The scheduler evaluates all enabled schedules every **30 seconds**
+- If a schedule's cron expression indicates it should have fired, a run is created
+- If the scheduler was down during a scheduled time, it fires **once** when it recovers (not once per missed interval)
+- The scheduler uses `robfig/cron/v3` for cron parsing (standard 5-field format)
+
+<Callout type="info">
+The scheduler runs inside ratd as a background goroutine. It shares the same process and database connection pool as the API server. No additional infrastructure is required.
+</Callout>

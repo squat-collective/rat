@@ -1,0 +1,238 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Mermaid } from '@/components/mermaid'
+
+# Pipeline Versioning
+
+RAT provides a publish-and-version system for pipelines, similar to how Git tags work. When you publish a pipeline, RAT takes a snapshot of all its files at that point in time. Runs always execute against the **published** version, so you can freely edit pipeline code without affecting running or scheduled pipelines.
+
+---
+
+## How Versioning Works
+
+Every pipeline in RAT has two conceptual states:
+
+1. **Draft** — the current files on S3 (editable in the Portal editor)
+2. **Published** — a pinned snapshot of specific S3 file versions
+
+When you publish a pipeline, RAT records the S3 version ID of every file in the pipeline directory (SQL/Python source, `config.yaml`, quality tests). Future runs use these pinned version IDs to read exact file contents, regardless of subsequent edits.
+
+<Mermaid chart={`flowchart LR
+    A[Edit pipeline.sql in Portal] --> B[Draft updated on S3]
+    B --> C{Publish?}
+    C -- No --> D[Runs use PREVIOUS published version]
+    C -- Yes --> E[Snapshot S3 version IDs]
+    E --> F[Create PipelineVersion record]
+    F --> G[Runs use NEW published version]
+`} />
+
+---
+
+## Publishing a Pipeline
+
+<Steps>
+
+### Edit your pipeline code
+
+Make changes to `pipeline.sql` (or `pipeline.py`), `config.yaml`, or quality tests in the Portal editor.
+
+### Notice the "draft dirty" indicator
+
+After saving, the pipeline's **Overview** tab shows a badge indicating **unpublished changes**. This is the `draft_dirty` flag — it means the current draft differs from the last published version.
+
+### Click "Publish"
+
+On the pipeline Overview tab, click the **Publish** button. You will be prompted to enter a version message describing your changes.
+
+### Enter a version message
+
+Write a brief description of what changed, similar to a Git commit message:
+
+```
+Add watermark column for incremental processing
+```
+
+### Confirm
+
+RAT creates a new `PipelineVersion` record with:
+- An auto-incremented **version number** (1, 2, 3, ...)
+- Your **version message**
+- A **published_versions** map (file path to S3 version ID for every file)
+
+The `draft_dirty` flag is reset to `false`.
+
+</Steps>
+
+### Publishing via API
+
+```bash filename="Terminal"
+curl -X POST http://localhost:8080/api/v1/pipelines/{ns}/{layer}/{name}/publish \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Add watermark column for incremental processing"
+  }'
+```
+
+Response:
+
+```json filename="Response"
+{
+  "id": "version-uuid",
+  "pipeline_id": "pipeline-uuid",
+  "version_number": 3,
+  "message": "Add watermark column for incremental processing",
+  "published_versions": {
+    "default/pipelines/silver/clean_orders/pipeline.sql": "s3-version-id-abc",
+    "default/pipelines/silver/clean_orders/config.yaml": "s3-version-id-def",
+    "default/pipelines/silver/clean_orders/tests/quality/not_null_order_id.sql": "s3-version-id-ghi"
+  },
+  "created_at": "2026-02-16T10:30:00Z"
+}
+```
+
+---
+
+## Draft Mode
+
+When you edit pipeline files in the Portal and save them, those changes go to S3 immediately. However, they do **not** affect running or scheduled pipelines until you publish.
+
+The `draft_dirty` flag tracks whether there are unpublished changes:
+
+| State | `draft_dirty` | What runs use |
+|---|---|---|
+| No changes since last publish | `false` | Latest published version |
+| Edited but not published | `true` | Latest published version (edits are ignored) |
+| Never published | N/A | Pipeline cannot be executed — publish first |
+
+<Callout type="warning">
+A pipeline that has **never been published** cannot be executed by the scheduler or triggers. You must publish at least once before automated runs will work. Manual runs from the Portal also use the published version.
+</Callout>
+
+---
+
+## Version History
+
+The pipeline **Overview** tab in the Portal shows the complete version history:
+
+```
+Version 3 — "Add watermark column for incremental processing"
+            Published 2 hours ago
+
+Version 2 — "Switch to incremental merge strategy"
+            Published 3 days ago
+
+Version 1 — "Initial pipeline"
+            Published 1 week ago
+```
+
+Each version entry shows:
+- **Version number** — sequential integer starting from 1
+- **Message** — the description you provided when publishing
+- **Published at** — timestamp of when the version was created
+- **Published versions** — the exact set of files and their S3 version IDs
+
+### Viewing version history via API
+
+```bash filename="Terminal"
+curl http://localhost:8080/api/v1/pipelines/{ns}/{layer}/{name}/versions
+```
+
+---
+
+## Rolling Back
+
+If a published version introduces a bug or regression, you can roll back to a previous version. Rolling back in RAT works like `git revert` — it creates a **new** version with the file snapshot from the target version, rather than deleting history.
+
+<Steps>
+
+### Open version history
+
+Go to the pipeline **Overview** tab and find the version you want to roll back to.
+
+### Click "Rollback"
+
+Click the **Rollback** button next to the target version.
+
+### Confirm
+
+RAT creates a **new version** (e.g., Version 4) whose `published_versions` map points to the same S3 version IDs as the rollback target (e.g., Version 1).
+
+</Steps>
+
+```bash filename="API Rollback"
+curl -X POST http://localhost:8080/api/v1/pipelines/{ns}/{layer}/{name}/versions/{version_number}/rollback
+```
+
+**After rollback**:
+
+```
+Version 4 — "Rollback to version 1"    ← NEW version, same files as v1
+            Published just now
+
+Version 3 — "Add watermark column"      ← still in history
+Version 2 — "Switch to incremental"     ← still in history
+Version 1 — "Initial pipeline"          ← the target
+```
+
+<Callout type="info">
+Rollback never deletes or modifies existing versions. Every change creates a new version, maintaining a complete audit trail. This is analogous to `git revert` (which creates a new commit) rather than `git reset` (which erases history).
+</Callout>
+
+---
+
+## How Runs Use Published Versions
+
+When the executor runs a pipeline, it reads files using the **pinned S3 version IDs** from the `published_versions` map. This means:
+
+1. **Source code** (`pipeline.sql` or `pipeline.py`) is read at the exact version that was published
+2. **Configuration** (`config.yaml`) uses the published version
+3. **Quality tests** are discovered and read from the published version map
+4. Edits made after publishing do **not** affect running pipelines
+
+This isolation is critical for reliability. Without versioning, a developer editing a pipeline during a scheduled run could cause the run to read a half-edited file.
+
+### S3 Versioning Under the Hood
+
+RAT leverages MinIO's S3-compatible object versioning:
+
+1. Every file write to S3 creates a new version with a unique version ID
+2. Publishing reads the current HEAD version ID for each file in the pipeline directory
+3. These version IDs are stored in the `PipelineVersion.published_versions` map
+4. The runner reads files using `GET Object?versionId=...` to retrieve exact contents
+
+---
+
+## Versioning and Quality Tests
+
+Quality tests are part of the published version. When you add, modify, or remove a quality test file, the change only takes effect after publishing. This ensures:
+
+- You can write and test quality rules in draft mode without affecting production
+- A published pipeline always runs the same set of quality tests
+- Rolling back restores both the pipeline SQL **and** its quality tests
+
+---
+
+## Best Practices
+
+### Publish often, with descriptive messages
+
+Each publish is a checkpoint. If something breaks, you can quickly identify which version introduced the issue and roll back.
+
+```
+# Good messages
+"Add deduplication via unique_key on order_id"
+"Fix NULL handling in customer_email join"
+"Add freshness quality test (max 24h)"
+
+# Bad messages
+"update"
+"fix"
+"changes"
+```
+
+### Test before publishing
+
+Edit your pipeline, run it manually once to verify the output, then publish. Draft runs (if the feature is enabled) let you test without affecting the published version.
+
+### Use version history for debugging
+
+When a scheduled run fails unexpectedly, check the version history. If the failure started after a specific publish, compare the versions to identify the breaking change.

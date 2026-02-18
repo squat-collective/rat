@@ -1,0 +1,31 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/rat-data/rat/platform/gen
+plugins:
+  # Go
+  - remote: buf.build/protocolbuffers/go
+    out: ../platform/gen
+    opt: paths=source_relative
+  - remote: buf.build/connectrpc/go
+    out: ../platform/gen
+    opt: paths=source_relative
+  # Python (runner)
+  - remote: buf.build/protocolbuffers/python
+    out: ../runner/src/rat_runner/gen
+  - remote: buf.build/grpc/python
+    out: ../runner/src/rat_runner/gen
+  # Python (query)
+  - remote: buf.build/protocolbuffers/python
+    out: ../query/src/rat_query/gen
+  - remote: buf.build/grpc/python
+    out: ../query/src/rat_query/gen
+  # TypeScript (SDK + portal)
+  - remote: buf.build/connectrpc/es
+    out: ../sdk-typescript/src/gen
+    opt: target=ts
+  - remote: buf.build/bufbuild/es
+    out: ../sdk-typescript/src/gen
+    opt: target=ts

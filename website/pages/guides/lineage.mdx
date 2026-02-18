@@ -1,0 +1,224 @@
+import { Callout, Steps } from 'nextra/components'
+import { Mermaid } from '@/components/mermaid'
+
+# Data Lineage
+
+Data lineage shows you how data flows through your pipelines — which tables feed into which pipelines, and which pipelines produce which tables. RAT builds a lineage graph automatically by scanning your pipeline SQL for `ref()` and `landing_zone()` calls, then renders it as an interactive DAG (Directed Acyclic Graph).
+
+---
+
+## How RAT Builds Lineage
+
+RAT does not require you to manually declare dependencies. Instead, it **parses your pipeline SQL** to extract references:
+
+1. **`ref('layer.name')`** — a reference to another table in the same namespace
+2. **`ref('ns.layer.name')`** — a cross-namespace reference to a table
+3. **`landing_zone('zone_name')`** — a reference to a landing zone file drop area
+
+From these references, RAT constructs a directed graph with three node types and three edge types.
+
+### Node Types
+
+| Node Type | Description | Example |
+|---|---|---|
+| **Pipeline** | A SQL or Python pipeline | `silver.clean_orders` |
+| **Table** | An Iceberg table (output of a pipeline) | `silver.clean_orders` (table) |
+| **Landing Zone** | A file drop area for raw data | `raw_orders` |
+
+<Callout type="info">
+Pipelines and tables share the same name because each pipeline produces exactly one table. In the lineage graph, they are displayed as separate nodes to clearly show the transformation boundary.
+</Callout>
+
+### Edge Types
+
+| Edge Type | Direction | Meaning |
+|---|---|---|
+| **ref** | Table --> Pipeline | Pipeline reads from this table |
+| **produces** | Pipeline --> Table | Pipeline writes to this table |
+| **landing_input** | Landing Zone --> Pipeline | Pipeline ingests files from this landing zone |
+
+### Example
+
+Given these three pipelines:
+
+```sql filename="bronze/ingest_orders/pipeline.sql"
+SELECT *
+FROM {{ landing_zone('raw_orders') }}
+```
+
+```sql filename="silver/clean_orders/pipeline.sql"
+SELECT
+    order_id,
+    customer_id,
+    CAST(total_amount AS DECIMAL(10,2)) AS total_amount,
+    status,
+    updated_at
+FROM {{ ref('bronze.ingest_orders') }}
+WHERE order_id IS NOT NULL
+```
+
+```sql filename="gold/daily_revenue/pipeline.sql"
+SELECT
+    DATE_TRUNC('day', updated_at) AS revenue_date,
+    SUM(total_amount) AS total_revenue,
+    COUNT(DISTINCT order_id) AS order_count
+FROM {{ ref('silver.clean_orders') }}
+GROUP BY revenue_date
+```
+
+RAT generates this lineage graph:
+
+<Mermaid chart={`flowchart LR
+    LZ[/"raw_orders (Landing Zone)"/] --> BP[bronze.ingest_orders]
+    BP --> BT[(bronze.ingest_orders)]
+    BT --> SP[silver.clean_orders]
+    SP --> ST[(silver.clean_orders)]
+    ST --> GP[gold.daily_revenue]
+    GP --> GT[(gold.daily_revenue)]
+`} />
+
+---
+
+## Using the Lineage Page
+
+The Lineage page is accessible from the Portal sidebar under **Lineage**.
+
+<Steps>
+
+### Open the Lineage page
+
+Click **Lineage** in the sidebar. The full DAG for all pipelines loads.
+
+### Filter by namespace
+
+Use the namespace dropdown at the top to filter the graph to a specific namespace. This is helpful when you have many pipelines across multiple namespaces.
+
+### Explore the graph
+
+- **Pan** by clicking and dragging the background
+- **Zoom** with the scroll wheel or pinch gesture
+- **Click a node** to highlight its upstream and downstream connections
+- **Double-click a node** to navigate to that pipeline or table
+
+### Understand the colors
+
+Nodes are color-coded by layer:
+
+| Color | Layer |
+|---|---|
+| Copper/Orange | Bronze |
+| Silver/Gray | Silver |
+| Gold/Yellow | Gold |
+| Green | Landing Zone |
+
+</Steps>
+
+---
+
+## Cross-Namespace References
+
+Pipelines can reference tables in other namespaces using three-part references:
+
+```sql filename="pipeline.sql"
+-- Reference a table in the "shared" namespace
+SELECT *
+FROM {{ ref('shared.silver.customer_master') }}
+```
+
+Cross-namespace edges appear in the lineage graph as connections that span namespace boundaries. When filtering by namespace, cross-namespace references are shown as external nodes at the edge of the graph.
+
+<Callout type="info">
+Cross-namespace references create implicit dependencies. If the referenced table does not exist (because the upstream pipeline in the other namespace has not run yet), the pipeline will fail at execution time.
+</Callout>
+
+---
+
+## Lineage for Python Pipelines
+
+Python pipelines use `ref()` within their SQL queries (executed through DuckDB). RAT scans the Python source for string patterns matching `ref('...')` to extract dependencies. This works reliably for inline SQL strings:
+
+```python filename="pipeline.py"
+# @merge_strategy: full_refresh
+
+import duckdb
+
+def run(conn: duckdb.DuckDBPyConnection, ref, landing_zone, **kwargs):
+    orders = conn.sql(f"""
+        SELECT * FROM {ref('silver.clean_orders')}
+    """).arrow()
+
+    customers = conn.sql(f"""
+        SELECT * FROM {ref('silver.clean_customers')}
+    """).arrow()
+
+    return conn.sql("""
+        SELECT
+            o.order_id,
+            c.customer_name,
+            o.total_amount
+        FROM orders o
+        JOIN customers c ON o.customer_id = c.customer_id
+    """).arrow()
+```
+
+<Callout type="warning">
+If you construct `ref()` calls dynamically (e.g., from a list or variable), RAT's static scanner cannot detect them. In these cases, the lineage graph will be incomplete. Prefer explicit `ref()` calls with string literals for accurate lineage.
+</Callout>
+
+---
+
+## Lineage and Pipeline Execution
+
+While lineage is primarily a visualization tool, it also serves operational purposes:
+
+1. **Impact analysis** — Before modifying a Silver pipeline, check which Gold pipelines depend on it downstream
+2. **Root cause analysis** — When a Gold table has bad data, trace upstream through the lineage to find the source
+3. **Trigger planning** — Use the lineage graph to design `pipeline_success` and `cron_dependency` trigger chains
+
+---
+
+## How Lineage is Computed
+
+Lineage is computed **on-demand** when you open the Lineage page or request it via API. The process is:
+
+1. List all pipelines in the target namespace(s)
+2. Read each pipeline's SQL/Python source from S3
+3. Extract `ref()` and `landing_zone()` calls via regex parsing
+4. Build the node and edge graph
+5. Render the graph in the Portal using ReactFlow
+
+This means lineage always reflects the **current state** of pipeline source files. If you edit a pipeline to add a new `ref()`, the lineage updates on next page load.
+
+### Lineage via API
+
+```bash filename="Terminal"
+# Get lineage for a namespace
+curl http://localhost:8080/api/v1/lineage?namespace=default
+
+# Get lineage for a specific pipeline (upstream + downstream)
+curl http://localhost:8080/api/v1/lineage?namespace=default&layer=silver&name=clean_orders
+```
+
+Response:
+
+```json filename="Response"
+{
+  "nodes": [
+    {"id": "pipeline:default.silver.clean_orders", "type": "pipeline", "namespace": "default", "layer": "silver", "name": "clean_orders"},
+    {"id": "table:default.bronze.ingest_orders", "type": "table", "namespace": "default", "layer": "bronze", "name": "ingest_orders"},
+    {"id": "table:default.silver.clean_orders", "type": "table", "namespace": "default", "layer": "silver", "name": "clean_orders"}
+  ],
+  "edges": [
+    {"source": "table:default.bronze.ingest_orders", "target": "pipeline:default.silver.clean_orders", "type": "ref"},
+    {"source": "pipeline:default.silver.clean_orders", "target": "table:default.silver.clean_orders", "type": "produces"}
+  ]
+}
+```
+
+---
+
+## Limitations
+
+- **Static analysis only** — lineage is built from parsing source code, not runtime execution. Dynamically constructed SQL that builds `ref()` calls at runtime will not be detected.
+- **No column-level lineage** — RAT tracks table-level dependencies. It does not trace individual columns through transformations.
+- **Landing zones without `landing_zone()`** — if a pipeline reads from S3 directly (e.g., using a hardcoded `read_csv_auto('s3://...')` path instead of the `landing_zone()` function), that dependency will not appear in lineage.

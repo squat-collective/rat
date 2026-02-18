@@ -1,0 +1,139 @@
+syntax = "proto3";
+package ratatouille.runner.v1;
+
+option go_package = "github.com/rat-data/rat/platform/gen/runner/v1;runnerv1";
+
+import "common/v1/common.proto";
+
+// Field reservation policy: see common/v1/common.proto.
+// When removing fields, always add `reserved` for both the number and name.
+
+// RunnerService handles pipeline execution.
+// Implemented by the Python runner container.
+// Called by ratd (Go platform).
+service RunnerService {
+  // Submit a pipeline for execution.
+  rpc SubmitPipeline(SubmitPipelineRequest) returns (SubmitPipelineResponse);
+
+  // Get the current status of a run.
+  rpc GetRunStatus(ratatouille.common.v1.GetRunStatusRequest) returns (ratatouille.common.v1.GetRunStatusResponse);
+
+  // Stream logs from a running or completed pipeline.
+  rpc StreamLogs(ratatouille.common.v1.StreamLogsRequest) returns (stream ratatouille.common.v1.LogEntry);
+
+  // Cancel a running pipeline.
+  rpc CancelRun(ratatouille.common.v1.CancelRunRequest) returns (ratatouille.common.v1.CancelRunResponse);
+
+  // Preview a pipeline without writing to the data lake.
+  // Executes the transformation with LIMIT, returns sample results + profiling stats.
+  // Ephemeral — no DB row in runs, no Iceberg write, no Nessie branch.
+  rpc PreviewPipeline(PreviewPipelineRequest) returns (PreviewPipelineResponse);
+
+  // Validate pipeline templates (Jinja syntax, anti-patterns) without executing.
+  // Called by the platform before publishing to catch errors early.
+  rpc ValidatePipeline(ValidatePipelineRequest) returns (ValidatePipelineResponse);
+}
+
+message SubmitPipelineRequest {
+  string namespace = 1;
+  ratatouille.common.v1.Layer layer = 2;
+  string pipeline_name = 3;
+  string trigger = 4;            // "manual", "schedule:hourly", "sensor:upstream"
+  ratatouille.common.v1.S3Credentials s3_credentials = 5;  // S3 connection parameters
+  map<string, string> env = 6;       // additional environment variables
+  map<string, string> published_versions = 7;  // file path -> S3 version ID
+  string run_id = 8;             // platform-assigned run ID (used for archive folder names)
+}
+
+message SubmitPipelineResponse {
+  string run_id = 1;
+  ratatouille.common.v1.RunStatus status = 2;
+}
+
+// --- Preview messages ---
+
+message PreviewPipelineRequest {
+  string namespace = 1;
+  ratatouille.common.v1.Layer layer = 2;
+  string pipeline_name = 3;
+  ratatouille.common.v1.S3Credentials s3_credentials = 4;  // S3 connection parameters
+  map<string, string> env = 5;         // additional environment variables
+  int32 preview_limit = 6;             // max rows to return (default 100)
+  repeated string sample_files = 7;    // scope input to specific S3 keys
+  string code = 8;                     // optional inline source code (skip S3 read if set)
+  string pipeline_type = 9;            // "sql" or "python" -- hint when code is provided
+}
+
+message PreviewPipelineResponse {
+  // Result is a oneof: either the preview succeeded (data) or failed (preview_error).
+  // Both branches include logs and warnings, which are always populated.
+  oneof result {
+    PreviewSuccess data = 10;          // populated on success
+    PreviewFailure preview_error = 11; // populated on failure
+  }
+
+  // Fields below are always populated regardless of success/failure.
+  repeated ratatouille.common.v1.LogEntry logs = 7;  // execution logs (reuses shared LogEntry)
+  repeated string warnings = 9;        // non-fatal warnings
+
+  // Legacy fields retained for backward compatibility.
+  // New clients should use the oneof result instead.
+  bytes arrow_ipc = 1;                 // Arrow IPC stream (first N rows) — use data.arrow_ipc instead
+  repeated ColumnInfo columns = 2;     // column names + DuckDB types — use data.columns instead
+  int64 total_row_count = 3;           // total rows before LIMIT — use data.total_row_count instead
+  repeated PhaseProfile phases = 4;    // per-phase timing breakdown — use data.phases instead
+  string explain_output = 5;           // EXPLAIN ANALYZE text — use data.explain_output instead
+  int64 memory_peak_bytes = 6;         // DuckDB peak memory usage — use data.memory_peak_bytes instead
+  string error = 8;                    // error message — use preview_error.message instead
+}
+
+// PreviewSuccess holds the results of a successful preview execution.
+message PreviewSuccess {
+  bytes arrow_ipc = 1;                 // Arrow IPC stream (first N rows)
+  repeated ColumnInfo columns = 2;     // column names + DuckDB types
+  int64 total_row_count = 3;           // total rows before LIMIT
+  repeated PhaseProfile phases = 4;    // per-phase timing breakdown
+  string explain_output = 5;           // EXPLAIN ANALYZE text (SQL only)
+  int64 memory_peak_bytes = 6;         // DuckDB peak memory usage
+}
+
+// PreviewFailure describes why a preview execution failed.
+message PreviewFailure {
+  string message = 1;                  // human-readable error message
+  string phase = 2;                    // phase that failed: "detect", "compile", "execute", etc.
+}
+
+// ColumnInfo describes a single column in preview results.
+message ColumnInfo {
+  string name = 1;
+  string type = 2;                     // DuckDB type name (VARCHAR, INTEGER, etc.)
+}
+
+// PhaseProfile captures timing for a single execution phase.
+message PhaseProfile {
+  string name = 1;                     // phase name: "detect", "compile", "execute", "explain", "count"
+  int64 duration_ms = 2;               // wall-clock time in milliseconds
+  map<string, string> metadata = 3;    // phase-specific metadata (e.g. {"pipeline_type": "sql"})
+}
+
+// --- Validate messages ---
+
+message ValidatePipelineRequest {
+  string namespace = 1;
+  ratatouille.common.v1.Layer layer = 2;
+  string pipeline_name = 3;
+  ratatouille.common.v1.S3Credentials s3_credentials = 4;  // S3 connection parameters
+}
+
+message ValidatePipelineResponse {
+  bool valid = 1;                      // true if all files passed validation
+  repeated FileValidation files = 2;   // per-file validation results
+}
+
+// FileValidation holds validation results for a single pipeline file.
+message FileValidation {
+  string path = 1;                     // S3 key of the file
+  bool valid = 2;                      // true if no errors
+  repeated string errors = 3;          // fatal template errors
+  repeated string warnings = 4;        // non-fatal warnings
+}

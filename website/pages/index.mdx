@@ -1,0 +1,107 @@
+import { Callout } from 'nextra/components'
+import { Card, Cards } from '../components/cards'
+
+# What is RAT?
+
+**RAT** is a self-hostable data platform that makes data engineering accessible to everyone. Write SQL (or Python), run pipelines, and query your data — all from a web-based IDE.
+
+<Callout type="info">
+RAT is built with a Go platform, Python execution engine, and Next.js portal.
+Community Edition is free and open-source.
+</Callout>
+
+## Why RAT?
+
+- **Anyone can data** — If you can write SQL, you can build data pipelines
+- **Self-hostable** — One `docker compose up` and you're running
+- **Batteries included** — Editor, scheduler, query console, lineage, quality tests — all built-in
+- **Apache Iceberg** — Your data lives in open table format, not locked in a vendor
+- **Git-like isolation** — Each pipeline run gets its own branch — bad data never reaches production
+
+## How It Works
+
+RAT uses a **medallion architecture** (Bronze → Silver → Gold) to organize data transformations:
+
+```
+Raw Files → Bronze (raw ingest) → Silver (cleaned) → Gold (business-ready)
+```
+
+You write SQL pipelines that transform data between layers. RAT handles execution, scheduling, versioning, and quality testing.
+
+## Quick Example
+
+Here's a complete pipeline that deduplicates raw orders into a clean Silver table:
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+-- @watermark_column: updated_at
+
+SELECT
+    order_id,
+    customer_id,
+    total_amount,
+    status,
+    updated_at
+FROM {{ ref('bronze.raw_orders') }}
+{% if is_incremental() %}
+WHERE updated_at > '{{ watermark_value }}'
+{% endif %}
+```
+
+## Platform at a Glance
+
+| Component | What It Does |
+|-----------|-------------|
+| **Portal** | Web IDE — editor, query console, DAG visualization |
+| **ratd** | Go API server — orchestration, scheduling, auth |
+| **runner** | Python pipeline executor — DuckDB + Iceberg writes |
+| **ratq** | Python query service — read-only DuckDB queries |
+| **Postgres** | Platform state (pipelines, runs, schedules) |
+| **MinIO** | S3-compatible object storage for data files |
+| **Nessie** | Git-like Iceberg catalog for branch isolation |
+
+## Get Started
+
+<Cards>
+  <Card title="Installation" href="/getting-started/installation">
+    Get RAT running in 5 minutes with Docker Compose
+  </Card>
+  <Card title="Your First Pipeline" href="/getting-started/first-pipeline">
+    Build your first data pipeline step by step
+  </Card>
+  <Card title="Core Concepts" href="/getting-started/concepts">
+    Understand namespaces, layers, pipelines, and runs
+  </Card>
+  <Card title="Portal Tour" href="/getting-started/portal-tour">
+    Visual walkthrough of the RAT web IDE
+  </Card>
+</Cards>
+
+## Architecture Overview
+
+RAT runs as 7 containers orchestrated by Docker Compose:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    docker compose up                          │
+│                                                              │
+│  ┌────────┐  ┌────────┐  ┌────────┐  ┌──────────────────┐  │
+│  │  ratd  │  │  ratq  │  │ runner │  │     portal       │  │
+│  │  (Go)  │  │ (Py)   │  │  (Py)  │  │   (Next.js)     │  │
+│  │  API   │◄─┤ Query  │  │ Execute│  │   Web IDE        │  │
+│  └───┬────┘  └────────┘  └────────┘  └──────────────────┘  │
+│      │                                                       │
+│  ┌───┴────┐  ┌────────┐  ┌────────┐                        │
+│  │postgres│  │ minio  │  │ nessie │                        │
+│  └────────┘  └────────┘  └────────┘                        │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Read more in the [Architecture Overview](/architecture/overview).
+
+---
+
+<Callout type="default" emoji="🏚️">
+RAT is built by [Le Squat](https://squat-collective.github.io/website/) — an underground builders collective. Open-source, community-first.
+</Callout>

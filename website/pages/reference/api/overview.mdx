@@ -1,0 +1,347 @@
+import { Callout } from 'nextra/components'
+
+# API Overview
+
+The RAT platform exposes a REST API served by **ratd** (the Go API server) on port `8080`. All platform operations — pipelines, runs, queries, storage, scheduling — are performed through this API. The portal communicates exclusively with this API.
+
+---
+
+## Base URL
+
+All API endpoints are prefixed with `/api/v1`:
+
+```
+http://localhost:8080/api/v1
+```
+
+A few endpoints live outside the `/api/v1` prefix:
+
+| Endpoint | Description |
+|---|---|
+| `GET /health` | Liveness check (always 200) |
+| `GET /health/live` | Version info |
+| `GET /health/ready` | Dependency health checks |
+| `GET /metrics` | Prometheus metrics |
+
+---
+
+## Authentication
+
+RAT supports three authentication modes depending on the edition and configuration:
+
+### No Authentication (Community Default)
+
+By default, the Community Edition requires no authentication. All endpoints are open.
+
+### API Key (Community)
+
+When the `RAT_API_KEY` environment variable is set, all API requests must include the key:
+
+```bash
+curl -H "X-Api-Key: your-api-key" http://localhost:8080/api/v1/pipelines
+```
+
+### Bearer Token (Pro Edition)
+
+When the auth plugin is enabled (Pro Edition with Keycloak or another identity provider), all requests must include a JWT bearer token:
+
+```bash
+curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." http://localhost:8080/api/v1/pipelines
+```
+
+<Callout type="info">
+The `GET /health` endpoint is always unauthenticated — it is used by Docker health checks and load balancers. The `POST /api/v1/webhooks` endpoint uses its own token-based authentication and bypasses the main auth middleware.
+</Callout>
+
+---
+
+## Content Types
+
+### JSON (default)
+
+All request and response bodies use JSON:
+
+```
+Content-Type: application/json
+```
+
+### Multipart Form Data (file uploads)
+
+File upload endpoints accept multipart form data:
+
+```
+Content-Type: multipart/form-data
+```
+
+Used by:
+- `POST /api/v1/files/upload` — pipeline file upload (max 32 MB)
+- `POST /api/v1/landing-zones/{ns}/{name}/files` — landing zone file upload (max 32 MB)
+- `POST /api/v1/landing-zones/{ns}/{name}/samples` — sample file upload (max 32 MB)
+
+### Server-Sent Events (SSE)
+
+The run logs endpoint supports real-time streaming via SSE when the client sends the appropriate `Accept` header:
+
+```
+Accept: text/event-stream
+```
+
+Used by:
+- `GET /api/v1/runs/{id}/logs` — real-time log streaming
+
+---
+
+## Error Response Format
+
+All API errors return a structured JSON envelope:
+
+```json
+{
+  "error": {
+    "code": "ERROR_CODE",
+    "type": "VALIDATION",
+    "message": "Human-readable error description"
+  }
+}
+```
+
+### Error Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `code` | `string` | Machine-readable error code (e.g., `INVALID_ARGUMENT`, `NOT_FOUND`) |
+| `type` | `string` | Error category mapped from the HTTP status code |
+| `message` | `string` | Human-readable description of what went wrong |
+
+### Error Types by HTTP Status
+
+| HTTP Status | Type | Description |
+|---|---|---|
+| `400` | `VALIDATION` | Invalid request body, missing required fields, malformed input |
+| `401` | `AUTHENTICATION` | Missing or invalid authentication credentials |
+| `403` | `AUTHORIZATION` | Insufficient permissions for the requested operation |
+| `404` | `NOT_FOUND` | The requested resource does not exist |
+| `409` | `CONFLICT` | The resource already exists or the operation conflicts with current state |
+| `413` | `VALIDATION` | Request body or uploaded file exceeds size limit |
+| `422` | `VALIDATION` | Request is well-formed but semantically invalid (e.g., template validation failure) |
+| `429` | `RATE_LIMIT` | Too many requests — retry after the indicated delay |
+| `500` | `INTERNAL` | Unexpected server error |
+| `501` | `UNAVAILABLE` | Feature not available (e.g., sharing in Community Edition) |
+| `503` | `UNAVAILABLE` | Service dependency unavailable (e.g., runner or ratq not connected) |
+
+### Common Error Codes
+
+| Code | Used When |
+|---|---|
+| `INVALID_ARGUMENT` | Missing required fields, invalid field values, malformed JSON |
+| `NOT_FOUND` | Pipeline, run, schedule, namespace, or other resource not found |
+| `ALREADY_EXISTS` | Attempting to create a resource that already exists |
+| `INTERNAL` | Unexpected server-side error |
+
+---
+
+## Pagination
+
+List endpoints support cursor-based pagination using `limit` and `offset` query parameters:
+
+| Parameter | Type | Default | Maximum | Description |
+|---|---|---|---|---|
+| `limit` | `integer` | `50` | `200` | Number of items to return per page |
+| `offset` | `integer` | `0` | — | Number of items to skip before returning results |
+
+### Example
+
+```bash
+# First page (items 0-49)
+curl http://localhost:8080/api/v1/pipelines?limit=50&offset=0
+
+# Second page (items 50-99)
+curl http://localhost:8080/api/v1/pipelines?limit=50&offset=50
+```
+
+### Paginated Response Shape
+
+All paginated responses include a `total` count alongside the results array:
+
+```json
+{
+  "pipelines": [ ... ],
+  "total": 142
+}
+```
+
+Use `total` to calculate the number of pages: `Math.ceil(total / limit)`.
+
+---
+
+## Sorting
+
+Some list endpoints support sorting via query parameters:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `sort` | `string` | `created_at` | Field to sort by |
+| `order` | `string` | `desc` | Sort direction: `asc` or `desc` |
+
+### Example
+
+```bash
+curl "http://localhost:8080/api/v1/pipelines?sort=name&order=asc"
+```
+
+Available sort fields vary by endpoint — refer to each endpoint's documentation for details.
+
+---
+
+## Filtering
+
+List endpoints support filtering via query parameters. Available filters vary by endpoint:
+
+```bash
+# Filter pipelines by namespace and layer
+curl "http://localhost:8080/api/v1/pipelines?namespace=default&layer=silver"
+
+# Filter runs by status
+curl "http://localhost:8080/api/v1/runs?status=running"
+
+# Search pipelines by name
+curl "http://localhost:8080/api/v1/pipelines?search=orders"
+```
+
+Refer to each endpoint's documentation for the full list of supported filters.
+
+---
+
+## Rate Limiting
+
+When rate limiting is enabled, all responses include rate limit headers:
+
+| Header | Description |
+|---|---|
+| `RateLimit-Limit` | Maximum number of requests allowed in the current window |
+| `RateLimit-Remaining` | Number of requests remaining in the current window |
+| `Retry-After` | Seconds to wait before making another request (only on `429` responses) |
+
+### Example 429 Response
+
+```
+HTTP/1.1 429 Too Many Requests
+RateLimit-Limit: 100
+RateLimit-Remaining: 0
+Retry-After: 30
+Content-Type: application/json
+
+{
+  "error": {
+    "code": "RATE_LIMITED",
+    "type": "RATE_LIMIT",
+    "message": "Too many requests. Retry after 30 seconds."
+  }
+}
+```
+
+<Callout type="info">
+The webhook endpoint (`POST /api/v1/webhooks`) has its own separate rate limiter with a per-token cooldown. See the [Webhooks](/reference/api/webhooks) documentation for details.
+</Callout>
+
+---
+
+## SSE Streaming
+
+The run logs endpoint supports Server-Sent Events for real-time log streaming. To enable SSE, set the `Accept` header:
+
+```bash
+curl -H "Accept: text/event-stream" http://localhost:8080/api/v1/runs/{id}/logs
+```
+
+### SSE Event Types
+
+| Event | Description |
+|---|---|
+| `log` | A log line from the pipeline execution |
+| `status` | A status change event (e.g., run completed) |
+| `error` | An error occurred during execution |
+
+### SSE Format
+
+```
+event: log
+data: {"timestamp": "2026-02-12T14:00:01Z", "level": "info", "message": "Starting pipeline silver.orders"}
+
+event: log
+data: {"timestamp": "2026-02-12T14:00:02Z", "level": "info", "message": "Executing SQL..."}
+
+event: status
+data: {"status": "success", "rows_written": 12340, "duration_ms": 4500}
+```
+
+For active runs, the SSE stream keeps the connection open and polls for new logs every 2 seconds until the run reaches a terminal state (`success`, `failed`, or `cancelled`).
+
+### JSON Fallback
+
+Without the `Accept: text/event-stream` header, the logs endpoint returns a standard JSON response with all available logs:
+
+```json
+{
+  "logs": [
+    {"timestamp": "2026-02-12T14:00:01Z", "level": "info", "message": "Starting pipeline silver.orders"}
+  ],
+  "status": "success"
+}
+```
+
+---
+
+## File Uploads
+
+File upload endpoints use `multipart/form-data` encoding with a maximum file size of **32 MB**.
+
+### Example: Upload a Pipeline File
+
+```bash
+curl -X POST http://localhost:8080/api/v1/files/upload \
+  -F "path=default/pipelines/silver/orders/data.csv" \
+  -F "file=@/local/path/to/data.csv"
+```
+
+### Example: Upload to a Landing Zone
+
+```bash
+curl -X POST http://localhost:8080/api/v1/landing-zones/default/raw-uploads/files \
+  -F "file=@/local/path/to/orders.csv"
+```
+
+Files exceeding 32 MB receive a `413` response:
+
+```json
+{
+  "error": {
+    "code": "INVALID_ARGUMENT",
+    "type": "VALIDATION",
+    "message": "file too large (max 32MB)"
+  }
+}
+```
+
+---
+
+## API Endpoint Summary
+
+| Group | Endpoints | Documentation |
+|---|---|---|
+| Health | 5 | [Health](/reference/api/health) |
+| Pipelines | 10 | [Pipelines](/reference/api/pipelines) |
+| Runs | 5 | [Runs](/reference/api/runs) |
+| Query | 2 | [Query](/reference/api/query) |
+| Tables | 4 | [Tables](/reference/api/tables) |
+| Storage | 5 | [Storage](/reference/api/storage) |
+| Landing Zones | 14 | [Landing Zones](/reference/api/landing-zones) |
+| Triggers | 5 | [Triggers](/reference/api/triggers) |
+| Quality Tests | 4 | [Quality Tests](/reference/api/quality-tests) |
+| Schedules | 5 | [Schedules](/reference/api/schedules) |
+| Namespaces | 4 | [Namespaces](/reference/api/namespaces) |
+| Retention | 6 | [Retention](/reference/api/retention) |
+| Lineage | 1 | [Lineage](/reference/api/lineage) |
+| Webhooks | 1 | [Webhooks](/reference/api/webhooks) |
+| Sharing | 4 | [Sharing](/reference/api/sharing) |
+| Audit | 1 | [Audit](/reference/api/audit) |

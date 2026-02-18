@@ -1,0 +1,161 @@
+import { Callout } from 'nextra/components'
+
+# Query
+
+The query endpoints provide interactive SQL querying against your data lake. Queries are read-only and execute via **ratq**, a Python DuckDB sidecar that connects to your Iceberg tables. All query requests are proxied through ratd, which deserializes Arrow IPC responses into JSON for REST clients.
+
+---
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/query` | Execute an interactive SQL query |
+| `GET` | `/api/v1/schema` | Get all tables with column schemas (bulk) |
+
+---
+
+## Execute Query
+
+```
+POST /api/v1/query
+```
+
+Executes a read-only SQL query against the data lake using DuckDB. Queries have a 30-second timeout and a maximum request size of 100 KB.
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `sql` | `string` | Yes | SQL query to execute (max 100 KB) |
+| `namespace` | `string` | No | Namespace context for table resolution |
+| `limit` | `integer` | No | Maximum rows to return (default: 1000) |
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sql": "SELECT * FROM silver.orders WHERE amount > 100 LIMIT 10",
+    "namespace": "default",
+    "limit": 1000
+  }'
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "columns": [
+    { "name": "id", "type": "VARCHAR" },
+    { "name": "amount", "type": "DECIMAL(14,2)" },
+    { "name": "status", "type": "VARCHAR" },
+    { "name": "created_at", "type": "TIMESTAMP" }
+  ],
+  "rows": [
+    ["ORD-001", 129.99, "completed", "2026-02-12T10:00:00Z"],
+    ["ORD-002", 245.50, "completed", "2026-02-12T11:30:00Z"]
+  ],
+  "total_rows": 10,
+  "duration_ms": 45
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `columns` | `array` | Column definitions |
+| `columns[].name` | `string` | Column name |
+| `columns[].type` | `string` | DuckDB type (e.g., `VARCHAR`, `INTEGER`, `DECIMAL(14,2)`, `TIMESTAMP`) |
+| `rows` | `array` | Result rows as arrays of values |
+| `total_rows` | `integer` | Number of rows returned |
+| `duration_ms` | `integer` | Query execution time in milliseconds |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Missing `sql` field, or query exceeds 100 KB size limit |
+| `400` | `INVALID_ARGUMENT` | SQL syntax error or invalid table reference |
+| `500` | `INTERNAL` | ratq sidecar not configured (`RATQ_ADDR` not set) |
+| `503` | `UNAVAILABLE` | ratq sidecar is unreachable |
+
+<Callout type="warning">
+Queries are **read-only**. Any attempt to execute DDL (`CREATE`, `DROP`, `ALTER`) or DML (`INSERT`, `UPDATE`, `DELETE`) statements will be rejected by the query service. Write operations are only performed by the runner during pipeline execution.
+</Callout>
+
+<Callout type="info">
+The query service uses DuckDB's Iceberg extension to scan Iceberg tables directly from S3. Table names use the format `{layer}.{table_name}` within a namespace context — for example, `silver.orders` resolves to the Iceberg table at `{namespace}/silver/orders/`.
+</Callout>
+
+---
+
+## Get Schema (Bulk)
+
+```
+GET /api/v1/schema
+```
+
+Returns all tables with their column schemas in a single call. This endpoint uses batch fetching to avoid N+1 gRPC calls to the query service.
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/schema
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "tables": [
+    {
+      "namespace": "default",
+      "layer": "silver",
+      "name": "orders",
+      "columns": [
+        { "name": "id", "type": "VARCHAR" },
+        { "name": "amount", "type": "DECIMAL(14,2)" },
+        { "name": "status", "type": "VARCHAR" },
+        { "name": "created_at", "type": "TIMESTAMP" }
+      ]
+    },
+    {
+      "namespace": "default",
+      "layer": "bronze",
+      "name": "raw_orders",
+      "columns": [
+        { "name": "id", "type": "VARCHAR" },
+        { "name": "amount", "type": "VARCHAR" },
+        { "name": "status", "type": "VARCHAR" },
+        { "name": "source_file", "type": "VARCHAR" }
+      ]
+    }
+  ]
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `tables` | `array` | List of table schema objects |
+| `tables[].namespace` | `string` | Namespace the table belongs to |
+| `tables[].layer` | `string` | Data layer: `bronze`, `silver`, or `gold` |
+| `tables[].name` | `string` | Table name |
+| `tables[].columns` | `array` | Column definitions for the table |
+| `tables[].columns[].name` | `string` | Column name |
+| `tables[].columns[].type` | `string` | DuckDB column type |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `500` | `INTERNAL` | ratq sidecar not configured |
+| `503` | `UNAVAILABLE` | ratq sidecar is unreachable |
+
+<Callout type="info">
+The schema endpoint is used by the portal's editor for autocompletion and by the lineage graph for displaying column-level metadata. It returns all tables across all namespaces in a single response.
+</Callout>

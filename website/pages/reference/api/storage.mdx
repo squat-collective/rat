@@ -1,0 +1,298 @@
+import { Callout } from 'nextra/components'
+
+# Storage
+
+Storage endpoints manage pipeline source files in S3 (MinIO). These endpoints power the portal's code editor — every file you see in the editor is stored as an S3 object. Writing a file under a pipeline's prefix automatically marks the pipeline as draft-dirty.
+
+---
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/files` | List files by prefix |
+| `GET` | `/api/v1/files/{path}` | Read file content |
+| `PUT` | `/api/v1/files/{path}` | Write or update a file |
+| `DELETE` | `/api/v1/files/{path}` | Delete a file |
+| `POST` | `/api/v1/files/upload` | Multipart file upload |
+
+---
+
+## List Files
+
+```
+GET /api/v1/files
+```
+
+Lists files under an S3 prefix. The prefix must start with a valid namespace.
+
+### Query Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `prefix` | `string` | Yes | S3 prefix to list (e.g., `default/pipelines/silver/orders/`) |
+| `namespace` | `string` | No | Filter by namespace |
+| `exclude` | `string` | No | Comma-separated path segments to filter out (e.g., `landing,data`) |
+
+### Request
+
+```bash
+curl "http://localhost:8080/api/v1/files?prefix=default/pipelines/silver/orders/&exclude=landing,data"
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "files": [
+    {
+      "path": "default/pipelines/silver/orders/pipeline.sql",
+      "size": 245,
+      "modified": "2026-02-12T10:00:00Z",
+      "type": "pipeline-sql",
+      "version_id": "abc123"
+    },
+    {
+      "path": "default/pipelines/silver/orders/config.yaml",
+      "size": 180,
+      "modified": "2026-02-12T10:00:00Z",
+      "type": "config",
+      "version_id": "def456"
+    }
+  ]
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `files` | `array` | List of file objects |
+| `files[].path` | `string` | Full S3 path |
+| `files[].size` | `integer` | File size in bytes |
+| `files[].modified` | `string` | ISO 8601 last modified timestamp |
+| `files[].type` | `string` | Auto-detected file type (see File Type Classification below) |
+| `files[].version_id` | `string` | S3 version ID |
+
+### File Type Classification
+
+The `type` field is auto-detected from the file path:
+
+| Type | Matches |
+|---|---|
+| `pipeline-sql` | `pipeline.sql`, any `*.sql` file |
+| `pipeline-py` | `pipeline.py` |
+| `config` | `config.yaml`, `config.yml`, `schema.yaml`, `schema.yml` |
+| `meta` | `*.meta.yaml`, `*.meta.yml`, `meta.yaml` |
+| `doc` | `*.md`, `*.txt`, `*.rst`, `README` |
+| `test` | Files in `tests/` or `test/` dirs, `test_*` prefix, `*_test.go`, `*_test.py` |
+| `hook` | Files in `hooks/` dir, `hook_*`, `pre_*`, `post_*` prefixes |
+| _(empty string)_ | Unrecognized files |
+
+---
+
+## Read File
+
+```
+GET /api/v1/files/{path}
+```
+
+Returns the content of a single file from S3.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `path` | `string` | Full S3 file path (e.g., `default/pipelines/silver/orders/pipeline.sql`) |
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/files/default/pipelines/silver/orders/pipeline.sql
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "path": "default/pipelines/silver/orders/pipeline.sql",
+  "content": "SELECT * FROM {{ ref('bronze.raw_orders') }}\nWHERE id IS NOT NULL",
+  "size": 245,
+  "modified": "2026-02-12T10:00:00Z",
+  "version_id": "abc123"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `string` | Full S3 path |
+| `content` | `string` | File content as a string |
+| `size` | `integer` | File size in bytes |
+| `modified` | `string` | ISO 8601 last modified timestamp |
+| `version_id` | `string` | S3 version ID |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | File not found |
+| `500` | `INTERNAL` | S3 read error |
+
+---
+
+## Write File
+
+```
+PUT /api/v1/files/{path}
+```
+
+Creates or updates a file in S3. Writing a file under a pipeline's S3 prefix automatically marks the pipeline as draft-dirty (unpublished changes).
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `path` | `string` | Full S3 file path |
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `content` | `string` | Yes | File content to write |
+
+### Request
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/files/default/pipelines/silver/orders/pipeline.sql \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "SELECT * FROM {{ ref('\''bronze.raw_orders'\'') }}"
+  }'
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "path": "default/pipelines/silver/orders/pipeline.sql",
+  "status": "written",
+  "version_id": "abc123"
+}
+```
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Invalid request body (missing `content` field) |
+| `400` | `INVALID_ARGUMENT` | Path validation failure (see Path Validation below) |
+| `500` | `INTERNAL` | S3 write error |
+
+---
+
+## Delete File
+
+```
+DELETE /api/v1/files/{path}
+```
+
+Deletes a file from S3.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `path` | `string` | Full S3 file path |
+
+### Request
+
+```bash
+curl -X DELETE http://localhost:8080/api/v1/files/default/pipelines/silver/orders/old_file.sql
+```
+
+### Response — `204 No Content`
+
+No response body.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `500` | `INTERNAL` | S3 delete error |
+
+---
+
+## Upload File
+
+```
+POST /api/v1/files/upload
+```
+
+Uploads a file via multipart form data. Maximum file size is **32 MB**.
+
+### Form Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `path` | `string` | Yes | Destination S3 path |
+| `file` | `binary` | Yes | File content |
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/files/upload \
+  -F "path=default/pipelines/silver/orders/data.csv" \
+  -F "file=@/local/path/to/data.csv"
+```
+
+### Response — `201 Created`
+
+```json
+{
+  "path": "default/pipelines/silver/orders/data.csv",
+  "filename": "data.csv",
+  "size": 1024,
+  "status": "uploaded",
+  "version_id": "abc123"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `string` | Destination S3 path |
+| `filename` | `string` | Original filename |
+| `size` | `integer` | File size in bytes |
+| `status` | `string` | Always `uploaded` |
+| `version_id` | `string` | S3 version ID |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Missing `path` form field |
+| `400` | `INVALID_ARGUMENT` | Missing `file` form field |
+| `400` | `INVALID_ARGUMENT` | Path validation failure (e.g., path traversal attempt) |
+| `413` | `INVALID_ARGUMENT` | File exceeds 32 MB size limit |
+
+---
+
+## Path Validation
+
+All file paths are validated against the following rules:
+
+| Rule | Example Invalid Path |
+|---|---|
+| Must not be empty | _(empty string)_ |
+| Must not contain `..` (path traversal) | `default/../etc/passwd` |
+| Must be relative (no leading `/`) | `/default/pipelines/silver/orders/pipeline.sql` |
+| Must not contain null bytes | `default/pipelines\x00/file` |
+| Must not contain backslashes | `default\pipelines\file` |
+| Must start with a valid namespace segment | `invalid_ns/pipelines/silver/orders/pipeline.sql` |
+
+<Callout type="warning">
+Path traversal attempts (paths containing `..`) are rejected with a `400` error. This prevents unauthorized access to files outside the intended S3 prefix.
+</Callout>

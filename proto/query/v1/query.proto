@@ -1,0 +1,95 @@
+syntax = "proto3";
+package ratatouille.query.v1;
+
+option go_package = "github.com/rat-data/rat/platform/gen/query/v1;queryv1";
+
+import "common/v1/common.proto";
+
+// Field reservation policy: see common/v1/common.proto.
+// When removing fields, always add `reserved` for both the number and name.
+
+// QueryService handles interactive DuckDB queries.
+// Implemented by ratq (Python query sidecar).
+// Called by ratd (Go platform).
+service QueryService {
+  // Execute a SQL query and return results.
+  rpc ExecuteQuery(ExecuteQueryRequest) returns (ExecuteQueryResponse);
+
+  // Get schema for a table.
+  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
+
+  // Preview first N rows of a table.
+  rpc PreviewTable(PreviewTableRequest) returns (PreviewTableResponse);
+
+  // List all tables accessible in a namespace.
+  rpc ListTables(ListTablesRequest) returns (ListTablesResponse);
+}
+
+// ExecuteQueryRequest runs an arbitrary SQL query within a namespace.
+message ExecuteQueryRequest {
+  string sql = 1;                  // SQL statement to execute
+  string namespace = 2;            // scope query to this namespace's tables
+  int32 limit = 3;                 // max rows to return (default 1000)
+}
+
+// ExecuteQueryResponse returns the query results in Arrow IPC format.
+message ExecuteQueryResponse {
+  repeated ColumnMeta columns = 1; // column metadata for the result set
+  bytes arrow_batch = 2;           // Arrow IPC serialized RecordBatch
+  int64 total_rows = 3;            // total row count in the result set
+  int64 duration_ms = 4;           // query execution time in milliseconds
+}
+
+// ColumnMeta describes a single column in a result set.
+message ColumnMeta {
+  string name = 1;                 // column name
+  string type = 2;                 // DuckDB type name (VARCHAR, INTEGER, etc.)
+}
+
+// GetSchemaRequest retrieves the schema for a specific table.
+message GetSchemaRequest {
+  string namespace = 1;            // namespace containing the table
+  ratatouille.common.v1.Layer layer = 2;  // data layer (bronze, silver, gold)
+  string table_name = 3;           // name of the table to inspect
+}
+
+// GetSchemaResponse returns column definitions and table statistics.
+message GetSchemaResponse {
+  repeated ColumnMeta columns = 1; // column definitions for the table
+  int64 row_count = 2;             // approximate number of rows in the table
+  int64 size_bytes = 3;            // approximate size of the table on disk
+}
+
+// PreviewTableRequest returns the first N rows of a table.
+message PreviewTableRequest {
+  string namespace = 1;            // namespace containing the table
+  ratatouille.common.v1.Layer layer = 2;  // data layer (bronze, silver, gold)
+  string table_name = 3;           // name of the table to preview
+  int32 limit = 4;                 // max rows to return (default 50)
+}
+
+// PreviewTableResponse returns sample rows in Arrow IPC format.
+message PreviewTableResponse {
+  repeated ColumnMeta columns = 1; // column metadata for the preview
+  bytes arrow_batch = 2;           // Arrow IPC serialized RecordBatch of sample rows
+}
+
+// ListTablesRequest lists tables accessible within a namespace.
+message ListTablesRequest {
+  string namespace = 1;            // namespace to list tables from
+  ratatouille.common.v1.Layer layer = 2;  // optional filter by layer (UNSPECIFIED = all layers)
+}
+
+// ListTablesResponse returns metadata for each table in the namespace.
+message ListTablesResponse {
+  repeated TableInfo tables = 1;   // list of tables matching the request filters
+}
+
+// TableInfo describes a single table in the catalog.
+message TableInfo {
+  string namespace = 1;            // namespace the table belongs to
+  ratatouille.common.v1.Layer layer = 2;  // data layer (bronze, silver, gold)
+  string name = 3;                 // table name
+  int64 row_count = 4;             // approximate number of rows
+  int64 size_bytes = 5;            // approximate size on disk in bytes
+}

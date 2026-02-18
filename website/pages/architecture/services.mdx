@@ -1,0 +1,503 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Services
+
+RAT runs as 7 long-lived services plus 1 init job. This page provides a deep dive into each service: what it does, how it works internally, and how it connects to the rest of the platform.
+
+---
+
+## ratd --- Platform API Server
+
+| Property | Value |
+|----------|-------|
+| **Language** | Go 1.22+ |
+| **Image base** | `scratch` (static binary) |
+| **Ports** | `8080` (REST), `8081` (gRPC) |
+| **Memory limit** | 512 MB |
+| **CPU limit** | 1.0 |
+| **Networks** | frontend + backend |
+
+### Role
+
+`ratd` is the central orchestrator of the RAT platform. It is the **only service** that the portal talks to, and it coordinates all other services. Think of it as the control plane.
+
+### Key Responsibilities
+
+- **REST API** --- 69 endpoints covering pipelines, runs, schedules, namespaces, storage, quality tests, metadata, query proxy, landing zones, triggers, versions, and platform settings
+- **gRPC client** --- dispatches pipeline execution to runner and queries to ratq via ConnectRPC
+- **Authentication** --- plugin-based auth middleware (Noop for Community, JWT for Pro)
+- **Scheduling** --- background cron scheduler evaluating `schedules` table every 30 seconds
+- **Reaper** --- background daemon for data retention (prune runs, fail stuck, clean branches, purge soft-deletes)
+- **Plugin host** --- loads, health-checks, and communicates with Pro plugins via gRPC
+- **Database migrations** --- runs Postgres schema migrations on startup
+- **Catalog operations** --- interacts with Nessie for branch management and MinIO for file storage
+
+### Middleware Chain
+
+Every HTTP request passes through 11 middleware layers in order:
+
+```
+1. CORS                    → Cross-origin headers for portal
+2. Security Headers        → X-Content-Type-Options, X-Frame-Options, etc.
+3. Request ID              → Injects unique X-Request-Id header
+4. Real IP                 → Extracts client IP from X-Forwarded-For
+5. Request Logger          → Structured access logging via slog
+6. Recoverer               → Catches panics, returns 500
+7. JSON Body Limiter       → Caps request body at 1 MB
+8. Rate Limiter            → Per-IP token bucket: 50 req/s, burst 100
+9. Auth                    → Plugin auth (JWT), API key, or Noop
+10. Audit                  → Logs POST/PUT/DELETE to audit_log table
+11. Path Validation        → Validates slugs: [a-z][a-z0-9_-]*, max 128
+```
+
+### Health Check
+
+```bash filename="Health check command"
+/ratd healthcheck
+```
+
+The binary includes a built-in healthcheck subcommand that hits `http://localhost:8080/health` internally. The `/health` endpoint aggregates the status of Postgres, MinIO, Nessie, runner, and ratq, returning a JSON response:
+
+```json filename="GET /health"
+{
+  "status": "ok",
+  "services": {
+    "postgres": "healthy",
+    "minio": "healthy",
+    "nessie": "healthy",
+    "runner": "healthy",
+    "ratq": "healthy"
+  }
+}
+```
+
+### Router Structure
+
+ratd uses the Chi router (lightweight, stdlib-compatible). Routes are organized by resource:
+
+```go filename="Simplified route registration"
+r.Route("/api/v1", func(r chi.Router) {
+    r.Route("/namespaces", ...)         // 3 endpoints
+    r.Route("/pipelines", ...)          // 5 endpoints
+    r.Route("/runs", ...)               // 5 endpoints + SSE logs
+    r.Route("/schedules", ...)          // 5 endpoints
+    r.Route("/storage", ...)            // 5 endpoints + upload
+    r.Route("/quality", ...)            // 4 endpoints
+    r.Route("/metadata", ...)           // 2 endpoints
+    r.Route("/query", ...)              // 4 endpoints
+    r.Route("/landing-zones", ...)      // landing zone CRUD + files
+    r.Route("/triggers", ...)           // trigger management
+    r.Route("/versions", ...)           // pipeline versioning
+    r.Route("/settings", ...)           // platform settings
+})
+```
+
+---
+
+## runner --- Pipeline Execution Engine
+
+| Property | Value |
+|----------|-------|
+| **Language** | Python 3.12+ |
+| **Image base** | `python:3.12-slim` |
+| **Port** | `50052` (gRPC, internal) |
+| **Memory limit** | 2 GB |
+| **CPU limit** | 2.0 |
+| **Networks** | backend |
+
+### Role
+
+The runner is the data processing workhorse. It receives pipeline execution requests from ratd, creates isolated DuckDB instances, executes SQL or Python pipelines, writes results to Iceberg tables, and runs quality tests.
+
+### Key Responsibilities
+
+- **Pipeline execution** --- 5-phase execution: branch creation, config loading, DuckDB execution, Iceberg writes, quality testing, branch resolution
+- **DuckDB management** --- one DuckDB connection per run, with `httpfs` and `iceberg` extensions loaded
+- **Jinja templating** --- compiles `ref()`, `landing_zone()`, `this`, `is_incremental()`, `watermark_value`, and other template variables
+- **Iceberg writes** --- writes PyArrow tables to Iceberg via PyIceberg, supporting 6 merge strategies (full_refresh, incremental, append_only, delete_insert, scd2, snapshot)
+- **Nessie branching** --- creates and manages per-run branches for data isolation
+- **Quality testing** --- discovers and executes SQL quality tests, gating branch merges
+- **Python sandbox** --- executes Python pipelines with restricted builtins and blocked imports
+- **Concurrency control** --- max 10 concurrent pipeline runs
+
+### gRPC Service
+
+```protobuf filename="RunnerService RPCs"
+service RunnerService {
+  rpc SubmitPipeline(SubmitPipelineRequest) returns (SubmitPipelineResponse);
+  rpc GetRunStatus(GetRunStatusRequest) returns (GetRunStatusResponse);
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry);
+  rpc CancelRun(CancelRunRequest) returns (CancelRunResponse);
+  rpc PreviewPipeline(PreviewPipelineRequest) returns (PreviewPipelineResponse);
+  rpc ValidatePipeline(ValidatePipelineRequest) returns (ValidatePipelineResponse);
+}
+```
+
+| RPC | Description |
+|-----|-------------|
+| `SubmitPipeline` | Start a pipeline run. Returns a run handle immediately. Execution is async. |
+| `GetRunStatus` | Poll the status of a running pipeline (pending, running, success, failed, cancelled). |
+| `StreamLogs` | Stream log entries from a running pipeline in real-time. |
+| `CancelRun` | Request cancellation of a running pipeline. |
+| `PreviewPipeline` | Compile and execute the pipeline SQL, returning a preview of the result (no writes). |
+| `ValidatePipeline` | Compile the pipeline SQL and validate it without execution. |
+
+### Health Check
+
+```bash filename="Health check command"
+python -c "import grpc; ch=grpc.insecure_channel('localhost:50052'); grpc.channel_ready_future(ch).result(timeout=2)"
+```
+
+The health check verifies that the gRPC server is accepting connections on port 50052.
+
+### DuckDB Extensions
+
+Each pipeline run gets a fresh DuckDB connection with these extensions:
+
+- **httpfs** --- reads files from S3 (MinIO) via HTTP
+- **iceberg** --- reads Iceberg table metadata for `ref()` resolution via `iceberg_scan()`
+
+### Callback Mechanism
+
+When a pipeline run completes (success or failure), the runner **pushes** the terminal status back to ratd via an HTTP POST to `RATD_CALLBACK_URL`. This eliminates continuous polling. ratd falls back to polling GetRunStatus every 60 seconds as a safety net.
+
+---
+
+## ratq --- Query Service
+
+| Property | Value |
+|----------|-------|
+| **Language** | Python 3.12+ |
+| **Image base** | `python:3.12-slim` |
+| **Port** | `50051` (gRPC, internal) |
+| **Memory limit** | 1 GB |
+| **CPU limit** | 1.0 |
+| **Networks** | backend |
+
+### Role
+
+ratq provides interactive, read-only DuckDB queries over Iceberg tables. It is the engine behind the portal's query console. Unlike the runner (which creates a new DuckDB per run), ratq maintains a **single persistent DuckDB connection** with a periodically refreshed catalog.
+
+### Key Responsibilities
+
+- **Interactive queries** --- execute ad-hoc SQL against the Iceberg data lake
+- **Schema introspection** --- list tables, inspect columns, preview data
+- **Read-only enforcement** --- blocks any SQL that could modify data (25+ blocked statements, 20+ blocked functions)
+- **Catalog refresh** --- refreshes Iceberg table metadata from Nessie every 30 seconds
+- **Query limits** --- 100 KB max query size, 30 second timeout
+
+### gRPC Service
+
+```protobuf filename="QueryService RPCs"
+service QueryService {
+  rpc ExecuteQuery(ExecuteQueryRequest) returns (ExecuteQueryResponse);
+  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
+  rpc PreviewTable(PreviewTableRequest) returns (PreviewTableResponse);
+  rpc ListTables(ListTablesRequest) returns (ListTablesResponse);
+}
+```
+
+| RPC | Description |
+|-----|-------------|
+| `ExecuteQuery` | Execute a read-only SQL query and return results as columnar data. |
+| `GetSchema` | Return the column names, types, and nullability for a table. |
+| `PreviewTable` | Return the first N rows of a table (shortcut for `SELECT * LIMIT N`). |
+| `ListTables` | List all available Iceberg tables across namespaces. |
+
+### Read-Only Enforcement
+
+ratq enforces read-only access at the SQL level. Before executing any query, it scans the SQL for blocked patterns:
+
+**Blocked SQL statements** (25+): `CREATE`, `DROP`, `ALTER`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `COPY`, `ATTACH`, `DETACH`, `LOAD`, `INSTALL`, `SET`, `PRAGMA`, `EXPORT`, `IMPORT`, `VACUUM`, `CHECKPOINT`, and more.
+
+**Blocked functions** (20+): `read_csv`, `read_json`, `write_parquet`, `write_csv`, `read_parquet` (direct S3 access), `httpfs` functions, and system functions.
+
+<Callout type="warning">
+The query service is designed for interactive exploration, not ETL. If you need to write data, use a pipeline. If you need complex transformations, write them as a Gold-layer pipeline.
+</Callout>
+
+### Health Check
+
+```bash filename="Health check command"
+python -c "import grpc; ch=grpc.insecure_channel('localhost:50051'); grpc.channel_ready_future(ch).result(timeout=2)"
+```
+
+---
+
+## portal --- Web IDE
+
+| Property | Value |
+|----------|-------|
+| **Language** | TypeScript (Next.js 14+, App Router) |
+| **Image base** | `node:20-alpine` (standalone output) |
+| **Port** | `3000` (HTTP) |
+| **Memory limit** | 512 MB |
+| **CPU limit** | 1.0 |
+| **Networks** | frontend + backend |
+
+### Role
+
+The portal is the **only user interface** for RAT. It is a full-featured web IDE with a code editor, query console, pipeline DAG visualization, run monitoring, and scheduling management.
+
+### Key Responsibilities
+
+- **Code editor** --- CodeMirror 6 with SQL and Python syntax highlighting, integrated with the pipeline file system
+- **Query console** --- interactive SQL editor with tabular results, powered by ratq
+- **Pipeline management** --- create, edit, delete, and run pipelines through the UI
+- **DAG visualization** --- ReactFlow-based lineage graph showing pipeline dependencies via `ref()` calls
+- **Run monitoring** --- real-time log streaming, run history, phase profiling
+- **Schedule management** --- create and manage cron schedules
+- **Landing zones** --- file upload, preview, and management
+- **Quality dashboard** --- view quality test results and history
+
+### Routes
+
+The portal has 14 routes organized by feature:
+
+| Route | Description |
+|-------|-------------|
+| `/` | Dashboard --- overview of recent runs, pipeline counts |
+| `/pipelines` | Pipeline browser --- list, filter, search |
+| `/pipelines/[namespace]/[layer]/[name]` | Pipeline detail --- editor, config, runs, quality |
+| `/pipelines/new` | Create new pipeline |
+| `/query` | Query console --- interactive SQL editor |
+| `/runs` | Run history --- all runs across all pipelines |
+| `/runs/[id]` | Run detail --- logs, phase timing, error details |
+| `/schedules` | Schedule management |
+| `/landing-zones` | Landing zone browser |
+| `/landing-zones/[namespace]/[name]` | Landing zone detail --- files, upload, preview |
+| `/lineage` | Global lineage DAG |
+| `/settings` | Platform settings |
+| `/quality` | Quality test dashboard |
+| `/namespaces` | Namespace management |
+
+### Data Fetching
+
+The portal uses **SWR** (stale-while-revalidate) for all API data fetching. This provides:
+
+- Automatic caching and revalidation
+- Optimistic UI updates
+- Focus/reconnect revalidation
+- Deduplicated requests
+
+### Health Check
+
+```bash filename="Health check command"
+wget -qO- http://localhost:3000
+```
+
+---
+
+## postgres --- Platform State
+
+| Property | Value |
+|----------|-------|
+| **Image** | `postgres:16.4-alpine` |
+| **Port** | `5432` (localhost only) |
+| **Memory limit** | 1 GB |
+| **CPU limit** | 1.0 |
+| **Networks** | backend |
+
+### Role
+
+Postgres stores all platform metadata. It is **not** a data warehouse --- all actual data lives in S3 as Iceberg tables. Postgres tracks pipelines, runs, schedules, quality tests, audit logs, and system configuration.
+
+### Key Responsibilities
+
+- **16 tables** of platform state (see [Database Schema](/architecture/database-schema))
+- **Advisory locks** for leader election (ensures only one ratd instance runs the scheduler and reaper)
+- **Schema migrations** managed by ratd on startup
+- **Nessie persistence** --- Nessie also uses this Postgres instance (via JDBC) to persist its catalog metadata
+
+### Database
+
+- **Database name**: `rat`
+- **Default user**: `rat`
+- **Default password**: `rat` (development only)
+
+### Health Check
+
+```bash filename="Health check command"
+pg_isready -U rat
+```
+
+### Data Volume
+
+Postgres data is persisted in a Docker volume (`postgres_data`). Removing the volume (`docker compose down -v`) deletes all platform state.
+
+<Callout type="info">
+Postgres is metadata-only. Even if you lose the Postgres volume, your actual data (Iceberg tables, pipeline files) still exists in MinIO. You would lose run history, schedules, and quality results, but the data itself is safe.
+</Callout>
+
+---
+
+## minio --- S3 Object Storage
+
+| Property | Value |
+|----------|-------|
+| **Image** | `minio/minio:RELEASE.2024-06-13T22-53-53Z` |
+| **Ports** | `9000` (S3 API, localhost), `9001` (Console, localhost) |
+| **Memory limit** | 1 GB |
+| **CPU limit** | 1.0 |
+| **Networks** | backend |
+
+### Role
+
+MinIO provides S3-compatible object storage. It stores everything: pipeline source code, configuration files, quality tests, uploaded data files, and Iceberg table data (Parquet files + metadata).
+
+### Key Responsibilities
+
+- **Pipeline files** --- `pipeline.sql`, `pipeline.py`, `config.yaml`, quality test SQL
+- **Landing zone files** --- user-uploaded CSV, Parquet, JSON files
+- **Iceberg data** --- Parquet data files and Iceberg metadata written by the runner
+- **S3 versioning** --- enabled on the `rat` bucket for pipeline file snapshots (used by the versioning system)
+
+### Configuration
+
+| Setting | Value |
+|---------|-------|
+| Bucket | `rat` |
+| Versioning | Enabled |
+| Lifecycle | Non-current versions expire after 7 days |
+| Region | `us-east-1` |
+| Path-style access | `true` |
+
+### Health Check
+
+```bash filename="Health check command"
+mc ready local
+```
+
+### Data Volume
+
+MinIO data is persisted in a Docker volume (`minio_data`). This is where all your actual data lives.
+
+<Callout type="error">
+Losing the MinIO volume means losing **all your data** --- pipeline code, uploaded files, and Iceberg tables. Back up this volume in production.
+</Callout>
+
+---
+
+## minio-init --- Bucket Initialization
+
+| Property | Value |
+|----------|-------|
+| **Image** | `minio/mc:RELEASE.2024-06-12T14-34-03Z` |
+| **Memory limit** | 256 MB |
+| **CPU limit** | 0.5 |
+| **Networks** | backend |
+| **Lifecycle** | One-shot (exits after completion) |
+
+### Role
+
+A one-shot init container that runs after MinIO is healthy. It performs three tasks:
+
+1. **Creates the `rat` bucket** (`mc mb --ignore-existing local/rat`)
+2. **Enables S3 versioning** (`mc version enable local/rat`)
+3. **Configures lifecycle policy** (`mc ilm rule add` --- non-current versions expire after 7 days)
+
+This container runs once and exits. If it fails, it restarts (`restart: on-failure`) until it succeeds.
+
+---
+
+## nessie --- Iceberg Catalog
+
+| Property | Value |
+|----------|-------|
+| **Image** | `ghcr.io/projectnessie/nessie:0.79.0` |
+| **Port** | `19120` (REST, localhost only) |
+| **Memory limit** | 512 MB |
+| **CPU limit** | 1.0 |
+| **Networks** | backend |
+
+### Role
+
+Nessie is a git-like catalog for Apache Iceberg. It provides branch isolation for pipeline execution --- every run creates a Nessie branch, writes data on that branch, and only merges to `main` after quality tests pass.
+
+### Key Responsibilities
+
+- **Iceberg REST catalog** --- standard Iceberg REST protocol for table management
+- **Git-like branching** --- create, merge, and delete branches with optimistic concurrency
+- **Hash-based concurrency** --- every operation includes a commit hash to prevent conflicts
+- **Metadata persistence** --- catalog metadata persists in Postgres via JDBC
+
+### Why Nessie?
+
+Without Nessie, a failed pipeline run could leave corrupted or partial data in your tables. Nessie gives you:
+
+- **Isolation** --- each run writes to its own branch. The `main` branch (production) is never touched until quality tests pass.
+- **Atomic merges** --- merges are all-or-nothing. If a merge fails (conflict), the branch is deleted and the run fails cleanly.
+- **Rollback capability** --- because Nessie tracks commit history, you can inspect the state of any table at any point in time.
+
+See [Nessie Branching](/architecture/nessie-branching) for the full branch lifecycle.
+
+### Health Check
+
+```bash filename="Health check command"
+curl -f http://localhost:19120/q/health/ready || curl -f http://localhost:19120/api/v2/config
+```
+
+Nessie (Quarkus) exposes Smallrye Health on `/q/health/ready`. The fallback checks the v2 config endpoint.
+
+### Configuration
+
+| Setting | Value |
+|---------|-------|
+| Version store | JDBC (Postgres) |
+| Default warehouse | `warehouse` |
+| Warehouse location | `s3://rat/` |
+| S3 endpoint | `http://minio:9000` |
+| Path-style access | `true` |
+
+<Callout type="info">
+Nessie shares the same Postgres database (`rat`) as ratd but uses its own tables. This simplifies operations --- one database backup covers both platform state and catalog metadata.
+</Callout>
+
+---
+
+## Service Dependency Graph
+
+<Mermaid chart={`
+flowchart TD
+    portal --> ratd
+    ratd --> postgres
+    ratd --> minio
+    ratd --> nessie
+    ratd --> runner
+    ratd --> ratq
+    runner --> minio
+    runner --> nessie
+    ratq --> minio
+    ratq --> nessie
+    nessie --> postgres
+    minioinit["minio-init"] --> minio
+`} />
+
+The startup order enforced by `depends_on` with health check conditions:
+
+1. **postgres** + **minio** (parallel, no dependencies)
+2. **minio-init** (depends on minio healthy)
+3. **nessie** (depends on postgres healthy)
+4. **runner** + **ratq** (depend on minio + nessie healthy)
+5. **ratd** (depends on postgres + minio + nessie healthy)
+6. **portal** (depends on ratd healthy)
+
+---
+
+## Resource Summary
+
+<Mermaid chart={`
+pie title Memory Allocation (7.25 GB total)
+    "runner (2 GB)" : 2048
+    "postgres (1 GB)" : 1024
+    "minio (1 GB)" : 1024
+    "ratq (1 GB)" : 1024
+    "ratd (512 MB)" : 512
+    "portal (512 MB)" : 512
+    "nessie (512 MB)" : 512
+    "minio-init (256 MB)" : 256
+`} />
+
+The runner gets the largest memory allocation because it can run up to 10 concurrent DuckDB instances, each processing potentially large datasets in memory.

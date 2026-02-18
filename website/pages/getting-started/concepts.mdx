@@ -1,0 +1,514 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Core Concepts
+
+This page explains the foundational ideas behind RAT. Understanding these concepts will
+help you design better pipelines and make the most of the platform.
+
+---
+
+## How Everything Connects
+
+Before diving into each concept, here is a visual overview of how the main concepts
+relate to each other:
+
+<Mermaid chart={`
+graph TD
+    LZ[Landing Zone] -->|files ingested by| PB[Bronze Pipeline]
+    PB -->|writes| TB[Bronze Table]
+    TB -->|ref used by| PS[Silver Pipeline]
+    PS -->|writes| TS[Silver Table]
+    TS -->|ref used by| PG[Gold Pipeline]
+    PG -->|writes| TG[Gold Table]
+
+    PB -->|triggers| RB[Run]
+    PS -->|triggers| RS[Run]
+    PG -->|triggers| RG[Run]
+
+    RB -->|executes| QT1[Quality Tests]
+    RS -->|executes| QT2[Quality Tests]
+    RG -->|executes| QT3[Quality Tests]
+
+    SCH[Schedule / Trigger] -->|starts| PB
+    SCH -->|starts| PS
+    SCH -->|starts| PG
+
+    style LZ fill:#1a1a2e,stroke:#a855f7,color:#e5e5e5
+    style PB fill:#1a1a2e,stroke:#22c55e,color:#e5e5e5
+    style PS fill:#1a1a2e,stroke:#22c55e,color:#e5e5e5
+    style PG fill:#1a1a2e,stroke:#22c55e,color:#e5e5e5
+    style TB fill:#1a1a2e,stroke:#f59e0b,color:#e5e5e5
+    style TS fill:#1a1a2e,stroke:#f59e0b,color:#e5e5e5
+    style TG fill:#1a1a2e,stroke:#f59e0b,color:#e5e5e5
+    style RB fill:#1a1a2e,stroke:#3b82f6,color:#e5e5e5
+    style RS fill:#1a1a2e,stroke:#3b82f6,color:#e5e5e5
+    style RG fill:#1a1a2e,stroke:#3b82f6,color:#e5e5e5
+    style QT1 fill:#1a1a2e,stroke:#ef4444,color:#e5e5e5
+    style QT2 fill:#1a1a2e,stroke:#ef4444,color:#e5e5e5
+    style QT3 fill:#1a1a2e,stroke:#ef4444,color:#e5e5e5
+    style SCH fill:#1a1a2e,stroke:#8b5cf6,color:#e5e5e5
+`} />
+
+---
+
+## Namespaces
+
+A **namespace** is a logical grouping for your pipelines and tables — similar to a
+database schema in traditional databases. Namespaces help you organize your data platform
+when you have multiple projects, teams, or domains.
+
+| Example | Use case |
+|---|---|
+| `default` | General-purpose, starter namespace |
+| `marketing` | Marketing team's pipelines and tables |
+| `finance` | Financial data transformations |
+| `ecommerce` | E-commerce product and order data |
+
+Every pipeline and table lives inside a namespace. The **default** namespace is created
+automatically when you first start RAT.
+
+```sql filename="Querying a table in a namespace"
+SELECT * FROM "marketing"."silver"."campaign_metrics"
+```
+
+<Callout type="info">
+In the Community Edition, namespaces are purely organizational. In Pro Edition, namespaces
+can have different access controls and ownership policies.
+</Callout>
+
+---
+
+## Layers
+
+RAT uses the **medallion architecture** to organize data into three quality tiers. Every
+pipeline belongs to exactly one layer.
+
+### Bronze — Raw Data
+
+The first landing point for data. Bronze pipelines ingest data from external sources
+(file uploads, APIs, databases) with minimal transformation. The goal is to capture a
+faithful copy of the source data.
+
+**Typical Bronze pipelines:**
+- Ingest CSV/Parquet files from a landing zone
+- Read from an external API and store the raw JSON
+- Mirror a source database table
+
+```sql filename="bronze/raw_orders.sql"
+SELECT *
+FROM {{ landing_zone('order_uploads') }}
+```
+
+### Silver — Cleaned & Conformed
+
+Silver pipelines read from Bronze tables (using `ref()`) and apply cleaning, deduplication,
+type casting, and standardization. This is where you enforce data quality and make data
+consistent.
+
+**Typical Silver pipelines:**
+- Deduplicate records by primary key
+- Cast string dates to proper timestamps
+- Join reference data (countries, currencies)
+- Filter out invalid or test records
+
+```sql filename="silver/clean_orders.sql"
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+-- @watermark_column: updated_at
+
+SELECT
+    order_id,
+    TRIM(customer_name) AS customer_name,
+    CAST(amount AS DECIMAL(10, 2)) AS amount,
+    CAST(created_at AS TIMESTAMP) AS created_at,
+    current_timestamp AS updated_at
+FROM {{ ref('bronze.raw_orders') }}
+{% if is_incremental() %}
+WHERE created_at > '{{ watermark_value }}'
+{% endif %}
+```
+
+### Gold — Business-Ready
+
+Gold pipelines produce the final tables that business users, dashboards, and reports
+consume. They aggregate, summarize, and combine Silver tables into purpose-built datasets.
+
+**Typical Gold pipelines:**
+- Daily revenue summaries
+- Customer lifetime value calculations
+- KPI aggregations for dashboards
+
+```sql filename="gold/daily_revenue.sql"
+-- @merge_strategy: delete_insert
+-- @unique_key: date
+
+SELECT
+    DATE_TRUNC('day', created_at) AS date,
+    COUNT(*) AS order_count,
+    SUM(amount) AS total_revenue,
+    AVG(amount) AS avg_order_value
+FROM {{ ref('silver.clean_orders') }}
+GROUP BY 1
+```
+
+<Callout type="info">
+The medallion architecture is a convention, not a hard constraint. RAT enforces the three
+layer names (bronze, silver, gold) but does not prevent you from referencing across layers
+in any direction. That said, the Bronze → Silver → Gold flow is strongly recommended as a
+best practice.
+</Callout>
+
+---
+
+## Pipelines
+
+A **pipeline** is a SQL or Python program that transforms data. It is the core building
+block of RAT.
+
+### Addressing
+
+Every pipeline is uniquely identified by three parts:
+
+```
+namespace.layer.name
+```
+
+For example: `default.silver.clean_orders`
+
+### Types
+
+| Type | Language | Use case |
+|---|---|---|
+| **SQL** | DuckDB SQL + Jinja | Most data transformations — SELECT statements |
+| **Python** | Python 3.12 | Complex logic, API calls, ML models, custom transforms |
+
+### Jinja Templating
+
+SQL pipelines support Jinja templating with several built-in functions:
+
+| Function | Description | Example |
+|---|---|---|
+| `ref('layer.name')` | Reference another table | `{{ ref('bronze.raw_orders') }}` |
+| `ref('ns.layer.name')` | Cross-namespace reference | `{{ ref('finance.silver.invoices') }}` |
+| `landing_zone('name')` | Read from a landing zone | `{{ landing_zone('csv_uploads') }}` |
+| `this` | Current pipeline's output table | `{{ this }}` (used in quality tests) |
+| `is_incremental()` | True if table already exists | `{% if is_incremental() %}` |
+| `watermark_value` | Last processed watermark | `'{{ watermark_value }}'` |
+
+### Versioning
+
+Pipelines have a **draft** and **published** state:
+
+- **Draft** — Your current working copy. Saved with `Ctrl+S` but not yet active.
+- **Published** — A numbered snapshot that runs when triggered. Each publish increments
+  the version number.
+
+You can **roll back** to any previous published version from the Overview tab.
+
+---
+
+## Runs
+
+A **run** is a single execution of a pipeline. When you click "Run" or a trigger fires,
+RAT creates a new run.
+
+### Run lifecycle
+
+<Mermaid chart={`
+stateDiagram-v2
+    [*] --> pending
+    pending --> running : runner picks up
+    running --> success : execution + tests pass
+    running --> failed : execution error or test failure
+    running --> cancelled : user cancels
+    success --> [*]
+    failed --> [*]
+    cancelled --> [*]
+`} />
+
+| Status | Meaning |
+|---|---|
+| **pending** | Queued, waiting for a runner slot |
+| **running** | Pipeline SQL/Python is executing |
+| **success** | Completed, quality tests passed, data merged to main catalog |
+| **failed** | An error occurred or a quality test with `error` severity failed |
+| **cancelled** | Manually cancelled by the user |
+
+### Branch isolation
+
+Every run gets its own **Nessie branch** (git-like isolation for Iceberg tables). The
+pipeline writes data to this branch. Only after all quality tests pass does the branch
+merge into the main catalog. This means:
+
+- **Failed runs never corrupt production data** — the branch is simply discarded
+- **Concurrent runs are safe** — each run writes to its own isolated branch
+- **You can inspect failed data** — the branch exists until the reaper cleans it up
+
+---
+
+## Tables
+
+Tables in RAT are **Apache Iceberg** tables stored in **MinIO** (S3-compatible object
+storage).
+
+### What is Iceberg?
+
+Apache Iceberg is an open table format for large-scale data. It stores data as **Parquet
+files** organized with a metadata catalog. Key benefits:
+
+- **Time travel** — Query previous versions of a table
+- **Schema evolution** — Add/rename/drop columns without rewriting data
+- **Partition evolution** — Change partitioning without rewriting data
+- **Open format** — Data is not locked into any vendor
+
+### Table addressing
+
+Tables use the same three-part naming as pipelines:
+
+```sql
+"namespace"."layer"."table_name"
+```
+
+RAT automatically creates and manages Iceberg tables. When a pipeline runs successfully,
+its output becomes (or updates) the corresponding table.
+
+---
+
+## Merge Strategies
+
+The **merge strategy** controls how a pipeline's output is combined with the existing
+data in the target table. You set the strategy in pipeline settings or as a SQL comment
+directive.
+
+| Strategy | Behavior | When to use |
+|---|---|---|
+| **full_refresh** | Drop and recreate the table every run | Small tables, complete recalculations |
+| **incremental** | Upsert new/changed rows based on a unique key and watermark | Large tables with ongoing updates |
+| **append_only** | Insert all output rows without deduplication | Event logs, immutable data streams |
+| **delete_insert** | Delete matching rows by key, then insert new ones | Periodic full-slice replacements |
+| **scd2** | Slowly Changing Dimension Type 2 — track historical changes with valid_from/valid_to timestamps | Dimension tables where you need history |
+| **snapshot** | Full table snapshot with a snapshot timestamp column | Periodic full snapshots for auditing |
+
+Setting a merge strategy in SQL:
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+-- @watermark_column: updated_at
+
+SELECT * FROM {{ ref('bronze.raw_orders') }}
+{% if is_incremental() %}
+WHERE updated_at > '{{ watermark_value }}'
+{% endif %}
+```
+
+<Callout type="warning">
+The `incremental` and `delete_insert` strategies require a `unique_key`. The
+`incremental` strategy also requires a `watermark_column` to know which rows are new.
+Missing these will cause the pipeline to fail.
+</Callout>
+
+---
+
+## Quality Tests
+
+Quality tests are **SQL queries that validate pipeline output** before it merges into
+production. A quality test **passes** when it returns **zero rows** — any rows returned
+indicate a problem.
+
+### Severity levels
+
+| Severity | On failure |
+|---|---|
+| **error** | Run fails, data is NOT merged. The Nessie branch is discarded. |
+| **warn** | Run succeeds, data IS merged. A warning is logged. |
+
+### Examples
+
+```sql filename="no_null_ids.sql (severity: error)"
+-- Ensure every order has an ID
+SELECT * FROM {{ this }}
+WHERE order_id IS NULL
+```
+
+```sql filename="reasonable_amounts.sql (severity: warn)"
+-- Flag suspiciously large orders (but don't block)
+SELECT * FROM {{ this }}
+WHERE amount > 1000000
+```
+
+<Callout type="info">
+Quality tests run **inside the isolated Nessie branch**, on the data that was just
+written. The `{{ this }}` template variable refers to the pipeline's output table on
+that branch. If an error-severity test fails, the branch is not merged — production
+data stays clean.
+</Callout>
+
+---
+
+## Triggers
+
+Triggers define **what causes a pipeline to run**. A pipeline can have multiple triggers.
+
+| Trigger type | Description | Example |
+|---|---|---|
+| **`cron`** | Run on a time-based schedule | `0 */6 * * *` (every 6 hours) |
+| **`pipeline_success`** | Run when another pipeline succeeds | Run Silver after Bronze completes |
+| **`landing_zone_upload`** | Run when files are uploaded to a landing zone | Ingest new CSV files automatically |
+| **`webhook`** | Run when an external HTTP webhook is received | Triggered by an external system |
+| **`file_pattern`** | Run when files matching a pattern appear | `orders_*.csv` |
+| **`cron_dependency`** | Cron schedule that also waits for upstream pipelines | Scheduled but dependency-aware |
+
+### Cron expressions
+
+RAT uses standard 5-field cron expressions:
+
+```
+┌─── minute (0-59)
+│ ┌─── hour (0-23)
+│ │ ┌─── day of month (1-31)
+│ │ │ ┌─── month (1-12)
+│ │ │ │ ┌─── day of week (0-6, Sunday=0)
+│ │ │ │ │
+* * * * *
+```
+
+Common examples:
+
+| Expression | Meaning |
+|---|---|
+| `0 * * * *` | Every hour, on the hour |
+| `0 6 * * *` | Daily at 6:00 AM |
+| `0 0 * * 1` | Every Monday at midnight |
+| `*/15 * * * *` | Every 15 minutes |
+| `0 6,18 * * *` | Twice daily at 6 AM and 6 PM |
+
+---
+
+## Versioning
+
+Pipeline versioning in RAT works like a simplified version control system:
+
+1. **Edit** — Make changes to your pipeline code (autosaved as a draft)
+2. **Publish** — Create a versioned snapshot (v1, v2, v3, ...)
+3. **Run** — Runs always execute the latest published version
+4. **Rollback** — Restore any previous published version as the active one
+
+<Callout type="info">
+Only published versions can be executed. If you save a draft but do not publish, runs
+will continue using the last published version.
+</Callout>
+
+---
+
+## Landing Zones
+
+A **landing zone** is a file upload area that serves as the entry point for external data
+into RAT.
+
+### How it works
+
+1. Create a landing zone in the Portal (give it a name)
+2. Upload files (CSV, Parquet, JSON, etc.) via drag-and-drop
+3. Files are stored in MinIO (S3)
+4. A Bronze pipeline reads the files using `{{ landing_zone('zone_name') }}`
+5. Optionally, set a `landing_zone_upload` trigger to run the pipeline automatically when
+   new files arrive
+
+```sql filename="bronze/ingest_orders.sql"
+-- Reads all files from the 'order_uploads' landing zone
+SELECT *
+FROM {{ landing_zone('order_uploads') }}
+```
+
+<Callout type="info">
+Landing zones support file previews — after uploading, you can inspect the data before
+running a pipeline. This is useful for verifying file format and column names.
+</Callout>
+
+---
+
+## Lineage
+
+**Lineage** is the dependency graph that shows how data flows through your platform.
+RAT builds it automatically by parsing `ref()` and `landing_zone()` calls in your
+pipeline code.
+
+### What lineage shows
+
+- Which tables a pipeline **reads from** (upstream dependencies)
+- Which table a pipeline **writes to** (downstream output)
+- The full chain from raw ingestion (Bronze) through to business-ready (Gold)
+
+### Why it matters
+
+- **Impact analysis** — Before changing a Silver pipeline, see which Gold tables depend
+  on it
+- **Root cause analysis** — When a Gold table has bad data, trace it back to the source
+- **Documentation** — The DAG is always up-to-date because it is generated from code
+- **Scheduling** — The `pipeline_success` trigger uses lineage to chain dependent
+  pipelines
+
+<Mermaid chart={`
+graph LR
+    LZ1[order_uploads] --> B1[bronze.raw_orders]
+    LZ2[product_feed] --> B2[bronze.raw_products]
+    B1 --> S1[silver.clean_orders]
+    B2 --> S2[silver.clean_products]
+    S1 --> G1[gold.daily_revenue]
+    S1 --> G2[gold.customer_ltv]
+    S2 --> G1
+
+    style LZ1 fill:#1a1a2e,stroke:#a855f7,color:#e5e5e5
+    style LZ2 fill:#1a1a2e,stroke:#a855f7,color:#e5e5e5
+    style B1 fill:#1a1a2e,stroke:#f59e0b,color:#e5e5e5
+    style B2 fill:#1a1a2e,stroke:#f59e0b,color:#e5e5e5
+    style S1 fill:#1a1a2e,stroke:#3b82f6,color:#e5e5e5
+    style S2 fill:#1a1a2e,stroke:#3b82f6,color:#e5e5e5
+    style G1 fill:#1a1a2e,stroke:#22c55e,color:#e5e5e5
+    style G2 fill:#1a1a2e,stroke:#22c55e,color:#e5e5e5
+`} />
+
+In this example, `gold.daily_revenue` depends on both `silver.clean_orders` and
+`silver.clean_products`, which in turn depend on their respective Bronze tables and
+landing zones. Changing the schema of `bronze.raw_orders` would visibly impact all
+downstream consumers.
+
+---
+
+## Concept Summary
+
+| Concept | What it is | Key thing to remember |
+|---|---|---|
+| **Namespace** | Logical grouping | Like a database schema |
+| **Layer** | Quality tier (Bronze/Silver/Gold) | Data gets cleaner as it flows up |
+| **Pipeline** | SQL or Python transformation | Addressed as `namespace.layer.name` |
+| **Run** | Single pipeline execution | Isolated on its own Nessie branch |
+| **Table** | Apache Iceberg table in MinIO | Open format, time-travel capable |
+| **Merge Strategy** | How output merges into the table | 6 strategies for different patterns |
+| **Quality Test** | SQL validation on pipeline output | Zero rows returned = pass |
+| **Trigger** | What starts a pipeline run | 6 types (cron, event, upload, etc.) |
+| **Versioning** | Published snapshots of pipeline code | Rollback to any previous version |
+| **Landing Zone** | File upload area for ingestion | Entry point for external data |
+| **Lineage** | Dependency DAG between pipelines | Built automatically from ref() calls |
+
+---
+
+## Next Steps
+
+<Cards>
+  <Card title="Your First Pipeline" href="/getting-started/first-pipeline">
+    Put these concepts into practice
+  </Card>
+  <Card title="Portal Tour" href="/getting-started/portal-tour">
+    See where each concept lives in the UI
+  </Card>
+  <Card title="SQL Pipeline Guide" href="/guides/sql-pipelines">
+    Deep dive into SQL pipelines with Jinja templating
+  </Card>
+  <Card title="Merge Strategies Guide" href="/guides/merge-strategies">
+    Learn when to use each merge strategy
+  </Card>
+</Cards>

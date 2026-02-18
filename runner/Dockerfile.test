@@ -1,0 +1,9 @@
+# Test image — deps pre-installed, source mounted at runtime.
+# Build: docker build -f runner/Dockerfile.test -t rat-runner-test runner/
+# Run:   docker run --rm -v $(pwd)/runner/src:/app/src -v $(pwd)/runner/tests:/app/tests rat-runner-test
+FROM python:3.12-slim
+WORKDIR /app
+RUN pip install --no-cache-dir uv
+COPY pyproject.toml .
+RUN uv pip install --system --no-cache -e '.[dev]'
+CMD ["pytest", "-v"]

@@ -1,0 +1,304 @@
+import { Callout } from 'nextra/components'
+
+# Tables
+
+Table endpoints let you browse, inspect, and document the Iceberg tables in your data lake. Tables are automatically created when pipelines write data — you do not create tables manually. These endpoints proxy to **ratq** (the DuckDB query sidecar) for schema introspection and data preview.
+
+---
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/tables` | List all tables |
+| `GET` | `/api/v1/tables/{ns}/{layer}/{name}` | Get table details and schema |
+| `GET` | `/api/v1/tables/{ns}/{layer}/{name}/preview` | Preview table data |
+| `PUT` | `/api/v1/tables/{ns}/{layer}/{name}/metadata` | Update table metadata |
+
+---
+
+## List Tables
+
+```
+GET /api/v1/tables
+```
+
+Returns a list of all tables in the data lake, enriched with metadata descriptions when a TableMetadataStore is configured.
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `namespace` | `string` | — | Filter by namespace |
+| `layer` | `string` | — | Filter by layer (`bronze`, `silver`, `gold`) |
+
+### Request
+
+```bash
+curl "http://localhost:8080/api/v1/tables?namespace=default&layer=silver"
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "tables": [
+    {
+      "namespace": "default",
+      "layer": "silver",
+      "name": "orders",
+      "row_count": 12340,
+      "size_bytes": 524288,
+      "description": "Cleaned orders table"
+    },
+    {
+      "namespace": "default",
+      "layer": "silver",
+      "name": "customers",
+      "row_count": 5600,
+      "size_bytes": 210000,
+      "description": null
+    }
+  ],
+  "total": 2
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `tables` | `array` | List of table objects |
+| `tables[].namespace` | `string` | Namespace the table belongs to |
+| `tables[].layer` | `string` | Data layer |
+| `tables[].name` | `string` | Table name |
+| `tables[].row_count` | `integer` | Number of rows in the table |
+| `tables[].size_bytes` | `integer` | Table size in bytes |
+| `tables[].description` | `string\|null` | Table description from metadata (if set) |
+| `total` | `integer` | Total number of matching tables |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `500` | `INTERNAL` | ratq sidecar not configured |
+| `503` | `UNAVAILABLE` | ratq sidecar is unreachable |
+
+---
+
+## Get Table
+
+```
+GET /api/v1/tables/{ns}/{layer}/{name}
+```
+
+Returns detailed information about a single table, including its full column schema and metadata.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Table name |
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/tables/default/silver/orders
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "namespace": "default",
+  "layer": "silver",
+  "name": "orders",
+  "row_count": 12340,
+  "size_bytes": 524288,
+  "description": "Cleaned orders table",
+  "owner": "user-id",
+  "columns": [
+    { "name": "id", "type": "VARCHAR", "description": "Primary key" },
+    { "name": "customer_id", "type": "INTEGER", "description": "FK to customers table" },
+    { "name": "amount", "type": "DECIMAL(14,2)", "description": "Order total" },
+    { "name": "status", "type": "VARCHAR", "description": "Order status" },
+    { "name": "created_at", "type": "TIMESTAMP", "description": null }
+  ]
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `namespace` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Table name |
+| `row_count` | `integer` | Number of rows |
+| `size_bytes` | `integer` | Table size in bytes |
+| `description` | `string\|null` | Table description |
+| `owner` | `string\|null` | Owner user ID |
+| `columns` | `array` | Column definitions |
+| `columns[].name` | `string` | Column name |
+| `columns[].type` | `string` | DuckDB column type |
+| `columns[].description` | `string\|null` | Column description (from metadata) |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Table not found |
+| `500` | `INTERNAL` | ratq sidecar not configured |
+| `503` | `UNAVAILABLE` | ratq sidecar is unreachable |
+
+---
+
+## Preview Table Data
+
+```
+GET /api/v1/tables/{ns}/{layer}/{name}/preview
+```
+
+Returns the first N rows of a table for quick inspection. Uses DuckDB to scan the Iceberg table directly.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Table name |
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `limit` | `integer` | `50` | Number of rows to return (max 1000) |
+
+### Request
+
+```bash
+curl "http://localhost:8080/api/v1/tables/default/silver/orders/preview?limit=10"
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "columns": [
+    { "name": "id", "type": "VARCHAR" },
+    { "name": "amount", "type": "DECIMAL(14,2)" },
+    { "name": "status", "type": "VARCHAR" }
+  ],
+  "rows": [
+    ["ORD-001", 129.99, "completed"],
+    ["ORD-002", 45.50, "pending"],
+    ["ORD-003", 89.00, "completed"]
+  ],
+  "total_rows": 3,
+  "duration_ms": 12
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `columns` | `array` | Column definitions |
+| `columns[].name` | `string` | Column name |
+| `columns[].type` | `string` | DuckDB column type |
+| `rows` | `array` | Result rows as arrays of values |
+| `total_rows` | `integer` | Number of rows returned |
+| `duration_ms` | `integer` | Query execution time in milliseconds |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Table not found |
+| `500` | `INTERNAL` | ratq sidecar not configured |
+| `503` | `UNAVAILABLE` | ratq sidecar is unreachable |
+
+---
+
+## Update Table Metadata
+
+```
+PUT /api/v1/tables/{ns}/{layer}/{name}/metadata
+```
+
+Updates the metadata for a table — description, owner, and column descriptions. This is a partial update; only provided fields are changed. Only available when a TableMetadataStore is configured.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Table name |
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `description` | `string` | No | Table description |
+| `owner` | `string` | No | Owner user ID |
+| `column_descriptions` | `object` | No | Map of column name to description |
+
+### Request
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/tables/default/silver/orders/metadata \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "Cleaned orders from raw data",
+    "owner": "user-id",
+    "column_descriptions": {
+      "id": "Primary key",
+      "amount": "Order total in USD",
+      "status": "Order lifecycle status"
+    }
+  }'
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "namespace": "default",
+  "layer": "silver",
+  "name": "orders",
+  "description": "Cleaned orders from raw data",
+  "owner": "user-id",
+  "column_descriptions": {
+    "id": "Primary key",
+    "amount": "Order total in USD",
+    "status": "Order lifecycle status"
+  }
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `namespace` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Table name |
+| `description` | `string` | Table description |
+| `owner` | `string` | Owner user ID |
+| `column_descriptions` | `object` | Map of column names to descriptions |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Invalid request body |
+| `404` | `NOT_FOUND` | Table not found |
+| `503` | `UNAVAILABLE` | TableMetadataStore not configured |
+
+<Callout type="info">
+Table metadata is stored separately from the Iceberg table itself. The metadata is managed by ratd in Postgres and enriched onto table responses when available. Column descriptions appear in the portal's table detail view and schema browser.
+</Callout>

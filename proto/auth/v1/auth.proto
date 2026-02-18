@@ -1,0 +1,52 @@
+syntax = "proto3";
+package ratatouille.auth.v1;
+
+option go_package = "github.com/rat-data/rat/platform/gen/auth/v1;authv1";
+
+// Field reservation policy: see common/v1/common.proto.
+// When removing fields, always add `reserved` for both the number and name.
+
+// AuthService handles authentication and authorization.
+// Implemented by the auth plugin container.
+// Called by ratd middleware on every authenticated request.
+service AuthService {
+  // Authenticate a bearer token and return the user identity.
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+
+  // Check if a user is allowed to perform an action on a resource.
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
+}
+
+// AuthenticateRequest validates a bearer token and returns the user identity.
+message AuthenticateRequest {
+  string token = 1;               // Bearer token from the Authorization header (e.g., JWT, opaque token)
+}
+
+// AuthenticateResponse indicates whether the token was valid and, if so, the user identity.
+message AuthenticateResponse {
+  bool authenticated = 1;         // true if the token was valid and the user is authenticated
+  UserIdentity user = 2;          // populated when authenticated=true; nil otherwise
+  string error_message = 3;       // human-readable error when authenticated=false (e.g., "token expired")
+}
+
+// UserIdentity represents an authenticated user's identity claims.
+message UserIdentity {
+  string user_id = 1;             // unique user identifier (e.g., UUID or Keycloak sub)
+  string email = 2;               // user's email address
+  string display_name = 3;        // human-readable display name
+  repeated string roles = 4;      // assigned roles (e.g., ["admin", "editor"])
+}
+
+// AuthorizeRequest checks if a user is permitted to perform an action on a resource.
+message AuthorizeRequest {
+  string user_id = 1;             // user ID to check authorization for
+  string action = 2;              // action to check: "read", "write", "delete", "admin"
+  string resource_type = 3;       // type of resource: "pipeline", "namespace", "run"
+  string resource_id = 4;         // unique identifier of the resource
+}
+
+// AuthorizeResponse indicates whether the action is permitted.
+message AuthorizeResponse {
+  bool allowed = 1;               // true if the action is permitted
+  string reason = 2;              // human-readable denial reason (empty when allowed=true)
+}

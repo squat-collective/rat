@@ -1,0 +1,61 @@
+# Go
+platform/ratd
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+.next/
+portal/.next/
+sdk-typescript/dist/
+
+# Proto generated (committed for CI/Docker — regenerate with `make proto`)
+# runner/src/rat_runner/gen/
+# query/src/rat_query/gen/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Docs build output
+website/out/
+website/next-env.d.ts
+
+# Docker
+*.tar
+
+# Core dumps
+core.*
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Internal review docs
+docs/code-review/
+
+# Website build
+website/.next/
+
+# Generated license reports (produced by CI)
+THIRD-PARTY-NOTICES.md
+licenses/
+
+# Backups
+backups/

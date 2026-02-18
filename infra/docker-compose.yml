@@ -1,0 +1,350 @@
+##
+## 🐀 RAT — Community Edition
+## docker compose up → 7 services, full platform
+##
+## Credentials are read from environment variables with dev defaults.
+## For production, create infra/.env (see infra/.env.example).
+##
+
+x-s3-credentials: &s3-credentials
+  S3_ENDPOINT: minio:9000
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+  S3_BUCKET: rat
+  S3_USE_SSL: "false"
+  S3_REGION: us-east-1
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+
+  # ── Platform (Go) ─────────────────────────────────────────────
+  ratd:
+    build:
+      context: ../platform
+      dockerfile: Dockerfile
+    init: true
+    ports:
+      - "8080:8080"          # REST API (public)
+      # gRPC port 8081 is internal-only (container network)
+    environment:
+      # Listen on all interfaces inside the container (required for Docker port mapping)
+      RAT_LISTEN_ADDR: "0.0.0.0:8080"
+      # Postgres
+      DATABASE_URL: postgres://${POSTGRES_USER:-rat}:${POSTGRES_PASSWORD:-rat}@postgres:5432/rat?sslmode=disable
+      # S3 (MinIO) — required for file storage (editor, upload, pipeline code)
+      <<: *s3-credentials
+      # Nessie
+      NESSIE_URL: http://nessie:19120/api/v1
+      # Query service
+      RATQ_ADDR: http://ratq:50051
+      # Runner
+      RUNNER_ADDR: http://runner:50052
+      # Edition
+      EDITION: community
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      nessie: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/ratd", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    # Security hardening
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+          pids: 100
+    logging: *default-logging
+    networks:
+      - frontend
+      - backend
+
+  # ── Query Service (Python) ────────────────────────────────────
+  ratq:
+    build:
+      context: ../query
+      dockerfile: Dockerfile
+    init: true
+    # gRPC port 50051 is internal-only (container network)
+    environment:
+      GRPC_PORT: "50051"
+      # S3 — same creds as ratd, for DuckDB table reads
+      <<: *s3-credentials
+      NESSIE_URL: http://nessie:19120/api/v1
+    depends_on:
+      minio: { condition: service_healthy }
+      nessie: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import grpc; ch=grpc.insecure_channel('localhost:50051'); grpc.channel_ready_future(ch).result(timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    # Security hardening
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp
+      - /home/query/.duckdb:uid=1000,gid=1000,exec    # DuckDB extension install dir
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+          pids: 100
+    logging: *default-logging
+    networks:
+      - backend
+
+  # ── Runner (Python) ──────────────────────────────────────────
+  runner:
+    build:
+      context: ../runner
+      dockerfile: Dockerfile
+    init: true
+    # gRPC port 50052 is internal-only (container network)
+    environment:
+      GRPC_PORT: "50052"
+      # Push-based status callbacks — runner POSTs terminal status to ratd
+      # instead of waiting for ratd to poll. Eliminates N gRPC calls/interval.
+      RATD_CALLBACK_URL: http://ratd:8080
+      # S3 — same creds as ratd, for pipeline writes to Iceberg/Parquet
+      <<: *s3-credentials
+      NESSIE_URL: http://nessie:19120/api/v1
+    depends_on:
+      minio: { condition: service_healthy }
+      nessie: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import grpc; ch=grpc.insecure_channel('localhost:50052'); grpc.channel_ready_future(ch).result(timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    # Security hardening
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp
+      - /home/runner/.duckdb:uid=1000,gid=1000,exec    # DuckDB extension install dir
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+          pids: 100
+    logging: *default-logging
+    networks:
+      - backend
+
+  # ── Portal (Next.js) ─────────────────────────────────────────
+  portal:
+    build:
+      context: ..
+      dockerfile: portal/Dockerfile
+    init: true
+    ports:
+      - "3000:3000"         # Web IDE
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+      API_URL: http://ratd:8080        # server-side
+    depends_on:
+      ratd: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    # Security hardening
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+          pids: 100
+    logging: *default-logging
+    networks:
+      - frontend
+      - backend
+
+  # ── Postgres ──────────────────────────────────────────────────
+  postgres:
+    image: postgres:16.4-alpine
+    ports:
+      - "127.0.0.1:5432:5432"   # localhost-only for dev access
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rat}
+      POSTGRES_DB: rat
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rat}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    # Security hardening (no read_only — needs writable filesystem)
+    # Postgres needs CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE for init
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+          pids: 100
+    logging: *default-logging
+    networks:
+      - backend
+
+  # ── MinIO (S3) ───────────────────────────────────────────────
+  minio:
+    image: minio/minio:RELEASE.2024-06-13T22-53-53Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API (localhost-only, presigned URLs use localhost)
+      - "127.0.0.1:9001:9001"   # Console (localhost-only)
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    # Security hardening (no read_only — needs writable filesystem)
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+          pids: 100
+    logging: *default-logging
+    networks:
+      - backend
+
+  # ── MinIO Init (enable bucket versioning) ────────────────────
+  minio-init:
+    image: minio/mc:RELEASE.2024-06-12T14-34-03Z
+    depends_on:
+      minio: { condition: service_healthy }
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $$S3_ACCESS_KEY $$S3_SECRET_KEY &&
+      mc mb --ignore-existing local/rat &&
+      mc version enable local/rat &&
+      mc ilm rule add local/rat --noncurrent-expire-days 7 --prefix '' || true
+      "
+    restart: on-failure
+    # Security hardening
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+          pids: 100
+    logging: *default-logging
+    networks:
+      - backend
+
+  # ── Nessie (Iceberg Catalog) ─────────────────────────────────
+  nessie:
+    image: ghcr.io/projectnessie/nessie:0.99.0
+    ports:
+      - "127.0.0.1:19120:19120"  # REST catalog API (localhost-only for dev)
+    environment:
+      # Persist catalog metadata in Postgres (survives restarts).
+      - nessie.version.store.type=JDBC
+      - quarkus.datasource.jdbc.url=jdbc:postgresql://postgres:5432/rat
+      - quarkus.datasource.username=${POSTGRES_USER:-rat}
+      - quarkus.datasource.password=${POSTGRES_PASSWORD:-rat}
+      # Iceberg REST catalog
+      - nessie.catalog.default-warehouse=warehouse
+      - nessie.catalog.warehouses.warehouse.location=s3://rat/
+      - nessie.catalog.service.s3.default-options.region=us-east-1
+      - nessie.catalog.service.s3.default-options.path-style-access=true
+      - nessie.catalog.service.s3.default-options.endpoint=http://minio:9000/
+      # S3 auth — URN references a Quarkus config secret (official pattern)
+      - nessie.catalog.service.s3.default-options.access-key=urn:nessie-secret:quarkus:nessie.catalog.secrets.access-key
+      - nessie.catalog.secrets.access-key.name=${S3_ACCESS_KEY:-minioadmin}
+      - nessie.catalog.secrets.access-key.secret=${S3_SECRET_KEY:-minioadmin}
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      # Nessie (Quarkus) exposes Smallrye Health on /q/health/ready.
+      # The UBI-based image includes curl; fall back to the v2 config endpoint.
+      test: ["CMD-SHELL", "curl -f http://localhost:19120/q/health/ready 2>/dev/null || curl -f http://localhost:19120/api/v2/config 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    # Security hardening (no read_only — needs writable filesystem for Quarkus)
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+          pids: 100
+    logging: *default-logging
+    networks:
+      - backend
+
+volumes:
+  postgres_data:
+  minio_data:
+
+networks:
+  frontend:
+    name: rat_frontend
+  backend:
+    name: infra_default

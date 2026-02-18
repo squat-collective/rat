@@ -1,0 +1,372 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Mermaid } from '@/components/mermaid'
+
+# Pipeline Triggers
+
+Pipeline triggers are the event-driven automation system in RAT. Unlike [schedules](/guides/scheduling) (which are time-based only), triggers respond to a variety of events: file uploads, cron ticks, upstream pipeline completions, webhooks, file pattern matches, and cron-with-dependency checks.
+
+---
+
+## Trigger Types Overview
+
+RAT supports **6 trigger types**:
+
+| Type | Fires When | Config Fields |
+|---|---|---|
+| `landing_zone_upload` | A file is uploaded to a specific landing zone | `zone_namespace`, `zone_name` |
+| `cron` | A cron schedule is due | `cron_expr` (5-field) |
+| `pipeline_success` | Another pipeline completes successfully | `pipeline_namespace`, `pipeline_layer`, `pipeline_name` |
+| `webhook` | An HTTP request hits the trigger URL with valid token | *(auto-generated URL + token)* |
+| `file_pattern` | An uploaded filename matches a glob pattern | `zone_namespace`, `zone_name`, `pattern` |
+| `cron_dependency` | Cron is due **and** all dependency pipelines have new data | `cron_expr`, `dependencies[]` |
+
+Every trigger also has these common fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | boolean | Toggle the trigger on/off without deleting it |
+| `cooldown_seconds` | integer | Minimum seconds between consecutive firings |
+| `last_triggered_at` | timestamp | When the trigger last fired (used for cooldown + dependency checks) |
+
+---
+
+## Creating Triggers
+
+<Steps>
+
+### Open your pipeline in the Portal
+
+Navigate to the pipeline you want to automate and click the **Settings** tab.
+
+### Scroll to the Triggers section
+
+Below the schedule settings, you will find the **Triggers** panel.
+
+### Click "Add Trigger"
+
+Select the trigger type from the dropdown. The configuration form adapts based on the selected type.
+
+### Configure the trigger
+
+Fill in the type-specific fields (see detailed sections below for each type).
+
+### Set cooldown (optional)
+
+Enter a `cooldown_seconds` value to prevent the trigger from firing too rapidly. Default is `0` (no cooldown).
+
+### Save
+
+Click **Save**. The trigger is immediately active (unless you unchecked "Enabled").
+
+</Steps>
+
+---
+
+## Trigger Type Details
+
+### 1. Landing Zone Upload
+
+Fires when **any file** is uploaded to a specific landing zone. Ideal for event-driven ingestion pipelines.
+
+```json filename="Trigger Config"
+{
+  "type": "landing_zone_upload",
+  "config": {
+    "zone_namespace": "default",
+    "zone_name": "raw_orders"
+  },
+  "cooldown_seconds": 60,
+  "enabled": true
+}
+```
+
+**Use case**: A Bronze pipeline that ingests CSV files as they arrive in the `raw_orders` landing zone.
+
+<Callout type="info">
+If multiple files are uploaded in quick succession, the cooldown prevents the pipeline from firing for each individual file. Set the cooldown to a value that allows a batch of files to accumulate before processing.
+</Callout>
+
+### 2. Cron
+
+Fires on a cron schedule. Functionally equivalent to the legacy schedule system, but uses the unified trigger infrastructure with cooldown support.
+
+```json filename="Trigger Config"
+{
+  "type": "cron",
+  "config": {
+    "cron_expr": "0 */6 * * *"
+  },
+  "enabled": true
+}
+```
+
+The `cron_expr` field uses the standard 5-field cron format (minute, hour, day-of-month, month, day-of-week).
+
+**Use case**: Run a Silver pipeline every 6 hours to process accumulated Bronze data.
+
+### 3. Pipeline Success
+
+Fires when a specific upstream pipeline completes **successfully**. Failed or cancelled runs do not trigger downstream pipelines.
+
+```json filename="Trigger Config"
+{
+  "type": "pipeline_success",
+  "config": {
+    "pipeline_namespace": "default",
+    "pipeline_layer": "bronze",
+    "pipeline_name": "raw_orders"
+  },
+  "cooldown_seconds": 0,
+  "enabled": true
+}
+```
+
+**Use case**: A Silver pipeline that cleans orders should run immediately after the Bronze ingestion pipeline succeeds.
+
+### 4. Webhook
+
+Creates an HTTP endpoint that fires the pipeline when called with a valid token. RAT auto-generates the URL and bearer token when you create this trigger type.
+
+```json filename="Trigger Config"
+{
+  "type": "webhook",
+  "config": {},
+  "enabled": true
+}
+```
+
+After creation, the API returns:
+
+```json filename="Webhook Response"
+{
+  "id": "trigger-uuid",
+  "webhook_url": "http://localhost:8080/api/v1/triggers/trigger-uuid/fire",
+  "webhook_token": "rat_wh_a1b2c3d4e5f6..."
+}
+```
+
+Call the webhook:
+
+```bash filename="Terminal"
+curl -X POST http://localhost:8080/api/v1/triggers/{trigger-id}/fire \
+  -H "Authorization: Bearer rat_wh_a1b2c3d4e5f6..."
+```
+
+<Callout type="warning">
+**Security**: The webhook token is shown **only once** when the trigger is created. RAT stores only the SHA-256 hash of the token, so it cannot be retrieved later. If you lose the token, delete the trigger and create a new one.
+</Callout>
+
+**Use case**: External systems (CI/CD, Airflow, custom scripts) that need to trigger RAT pipelines programmatically.
+
+### 5. File Pattern
+
+Fires when an uploaded filename matches a glob pattern within a landing zone. More selective than `landing_zone_upload`, which fires on **any** upload.
+
+```json filename="Trigger Config"
+{
+  "type": "file_pattern",
+  "config": {
+    "zone_namespace": "default",
+    "zone_name": "raw_events",
+    "pattern": "events_*.parquet"
+  },
+  "cooldown_seconds": 30,
+  "enabled": true
+}
+```
+
+The `pattern` field supports standard glob syntax:
+- `*` matches any characters (except `/`)
+- `?` matches a single character
+- `[abc]` matches any character in the set
+
+**Use case**: A landing zone receives both `.parquet` and `.csv` files, but you only want to trigger on Parquet uploads.
+
+### 6. Cron Dependency
+
+The most sophisticated trigger type. It combines a cron schedule with dependency checking: the trigger fires only when **both** conditions are met:
+
+1. The cron schedule is due
+2. **All** listed dependency pipelines have completed successfully **since the trigger last fired**
+
+```json filename="Trigger Config"
+{
+  "type": "cron_dependency",
+  "config": {
+    "cron_expr": "0 * * * *",
+    "dependencies": [
+      {
+        "namespace": "default",
+        "layer": "silver",
+        "name": "clean_orders"
+      },
+      {
+        "namespace": "default",
+        "layer": "silver",
+        "name": "clean_customers"
+      }
+    ]
+  },
+  "enabled": true
+}
+```
+
+**How dependency checking works**:
+
+1. At each cron tick, the evaluator checks if the schedule is due.
+2. If due, it looks up the latest successful run of **each** dependency pipeline.
+3. For each dependency, it checks if that run's `finished_at` is **after** the trigger's `last_triggered_at`.
+4. If **all** dependencies have new successful data, the trigger fires.
+5. If any dependency has not produced new data since the last trigger, it skips.
+
+<Callout type="info">
+The evaluator also reacts instantly to `run_completed` events via Postgres LISTEN/NOTIFY. When a dependency pipeline finishes, RAT re-evaluates all `cron_dependency` triggers within sub-second latency rather than waiting for the next 30-second poll.
+</Callout>
+
+**Use case**: A Gold aggregation pipeline that should run hourly, but only if both upstream Silver pipelines have produced fresh data.
+
+---
+
+## Trigger Evaluation Flow
+
+<Mermaid chart={`flowchart TD
+    A[Trigger Evaluator Tick] --> B{Trigger enabled?}
+    B -- No --> Z[Skip]
+    B -- Yes --> C{Cooldown elapsed?}
+    C -- No --> Z
+    C -- Yes --> D{Trigger type?}
+    D -- cron --> E{Cron schedule due?}
+    E -- No --> Z
+    E -- Yes --> K[Fire pipeline run]
+    D -- cron_dependency --> F{Cron schedule due?}
+    F -- No --> Z
+    F -- Yes --> G{All dependencies have new data?}
+    G -- No --> Z
+    G -- Yes --> K
+    D -- landing_zone_upload --> H{File uploaded to zone?}
+    H -- No --> Z
+    H -- Yes --> K
+    D -- pipeline_success --> I{Upstream pipeline succeeded?}
+    I -- No --> Z
+    I -- Yes --> K
+    D -- webhook --> J{HTTP request with valid token?}
+    J -- No --> Z
+    J -- Yes --> K
+    D -- file_pattern --> L{Filename matches glob?}
+    L -- No --> Z
+    L -- Yes --> K
+    K --> M[Create Run record]
+    M --> N[Submit to Executor]
+    N --> O[Update last_triggered_at]
+`} />
+
+---
+
+## Cooldown Periods
+
+The `cooldown_seconds` field prevents a trigger from firing more frequently than the specified interval. This is evaluated by comparing `last_triggered_at + cooldown_seconds` against the current time.
+
+**When to use cooldown**:
+
+| Trigger Type | Recommended Cooldown | Why |
+|---|---|---|
+| `landing_zone_upload` | 30–300s | Batch multiple file uploads into one run |
+| `file_pattern` | 30–300s | Same as above, for pattern-matched files |
+| `pipeline_success` | 0s | Usually want immediate chaining |
+| `cron` | 0s | Cron spacing is the natural interval |
+| `cron_dependency` | 0s | Cron spacing + dependency gating is enough |
+| `webhook` | 0–60s | Depends on caller frequency |
+
+**Example**: A landing zone receives 20 CSV files over 2 minutes. With `cooldown_seconds: 120`, the trigger fires once for the first file, then waits 2 minutes before it can fire again. By that time, all 20 files are present and the pipeline processes them all in a single run.
+
+---
+
+## Managing Triggers via API
+
+### Create a trigger
+
+```bash filename="Terminal"
+curl -X POST http://localhost:8080/api/v1/pipelines/{ns}/{layer}/{name}/triggers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "pipeline_success",
+    "config": {
+      "pipeline_namespace": "default",
+      "pipeline_layer": "bronze",
+      "pipeline_name": "raw_orders"
+    },
+    "cooldown_seconds": 0,
+    "enabled": true
+  }'
+```
+
+### List triggers for a pipeline
+
+```bash filename="Terminal"
+curl http://localhost:8080/api/v1/pipelines/{ns}/{layer}/{name}/triggers
+```
+
+### Update a trigger
+
+```bash filename="Terminal"
+curl -X PATCH http://localhost:8080/api/v1/triggers/{trigger-id} \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": false,
+    "cooldown_seconds": 120
+  }'
+```
+
+### Delete a trigger
+
+```bash filename="Terminal"
+curl -X DELETE http://localhost:8080/api/v1/triggers/{trigger-id}
+```
+
+---
+
+## Building Trigger Chains
+
+Triggers can be combined to create sophisticated automation pipelines:
+
+```
+Landing Zone Upload
+       │
+       ▼
+  Bronze Pipeline (ingests raw CSV)
+       │
+       ▼ (pipeline_success trigger)
+  Silver Pipeline (cleans + deduplicates)
+       │
+       ▼ (cron_dependency trigger, hourly)
+  Gold Pipeline (aggregates for dashboard)
+```
+
+In this pattern:
+1. A file upload triggers the Bronze pipeline immediately.
+2. A `pipeline_success` trigger chains the Silver pipeline to run after Bronze succeeds.
+3. A `cron_dependency` trigger runs the Gold pipeline hourly, but only if Silver has produced new data.
+
+<Callout type="warning">
+Be careful with trigger chains that could create loops. If Pipeline A triggers Pipeline B, and Pipeline B triggers Pipeline A, you will create an infinite loop. RAT does not currently detect circular trigger dependencies — the cooldown period is your safety valve.
+</Callout>
+
+---
+
+## Troubleshooting
+
+### Trigger is enabled but never fires
+
+1. **Check cooldown** — if `cooldown_seconds` is high, the trigger may be in its cooldown window
+2. **Check `last_triggered_at`** — a very recent timestamp means cooldown is active
+3. **For cron triggers** — verify the cron expression at [crontab.guru](https://crontab.guru/)
+4. **For `cron_dependency`** — verify that all dependency pipelines have recent successful runs
+5. **Check ratd logs** — `docker compose logs ratd | grep "trigger evaluator"`
+
+### Trigger fires too often
+
+Increase the `cooldown_seconds` value. For landing zone triggers, a cooldown of 60-300 seconds is typical.
+
+### Webhook returns 401
+
+The token is invalid or missing. Webhook tokens are shown only once at creation time. Delete the trigger and create a new one if you have lost the token.

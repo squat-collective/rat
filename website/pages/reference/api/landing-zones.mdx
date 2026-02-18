@@ -1,0 +1,659 @@
+import { Callout } from 'nextra/components'
+
+# Landing Zones
+
+Landing zones are standalone file drop areas for raw data uploads. They provide a structured way to ingest external files (CSV, JSON, Parquet) into the platform before pipeline processing. Files are stored in S3 at `{namespace}/landing/{zoneName}/{filename}`.
+
+Landing zones can be connected to pipelines via triggers — when a file is uploaded, it can automatically trigger a bronze pipeline to ingest the data.
+
+---
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/landing-zones` | List all landing zones |
+| `POST` | `/api/v1/landing-zones` | Create a landing zone |
+| `GET` | `/api/v1/landing-zones/{ns}/{name}` | Get landing zone details |
+| `PUT` | `/api/v1/landing-zones/{ns}/{name}` | Update a landing zone |
+| `DELETE` | `/api/v1/landing-zones/{ns}/{name}` | Delete a landing zone |
+| `GET` | `/api/v1/landing-zones/{ns}/{name}/files` | List files in a zone |
+| `POST` | `/api/v1/landing-zones/{ns}/{name}/files` | Upload a file |
+| `GET` | `/api/v1/landing-zones/{ns}/{name}/files/{id}` | Get file metadata |
+| `DELETE` | `/api/v1/landing-zones/{ns}/{name}/files/{id}` | Delete a file |
+| `GET` | `/api/v1/landing-zones/{ns}/{name}/samples` | List sample files |
+| `POST` | `/api/v1/landing-zones/{ns}/{name}/samples` | Upload a sample file |
+| `DELETE` | `/api/v1/landing-zones/{ns}/{name}/samples/{filename}` | Delete a sample file |
+| `GET` | `/api/v1/landing-zones/{ns}/{name}/lifecycle` | Get lifecycle settings |
+| `PUT` | `/api/v1/landing-zones/{ns}/{name}/lifecycle` | Update lifecycle settings |
+
+---
+
+## List Landing Zones
+
+```
+GET /api/v1/landing-zones
+```
+
+Returns a list of all landing zones with file statistics (file count and total size).
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `namespace` | `string` | — | Filter by namespace |
+
+### Request
+
+```bash
+curl "http://localhost:8080/api/v1/landing-zones?namespace=default"
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "zones": [
+    {
+      "id": "zone-uuid",
+      "namespace": "default",
+      "name": "raw-uploads",
+      "description": "CSV files from partners",
+      "file_count": 5,
+      "total_bytes": 51200,
+      "created_at": "2026-02-13T10:00:00Z",
+      "updated_at": "2026-02-13T10:00:00Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `zones` | `array` | List of landing zone objects |
+| `zones[].id` | `string` | Zone UUID |
+| `zones[].namespace` | `string` | Namespace |
+| `zones[].name` | `string` | Zone name |
+| `zones[].description` | `string` | Zone description |
+| `zones[].file_count` | `integer` | Number of files in the zone |
+| `zones[].total_bytes` | `integer` | Total size of all files in bytes |
+| `zones[].created_at` | `string` | ISO 8601 creation timestamp |
+| `zones[].updated_at` | `string` | ISO 8601 last update timestamp |
+| `total` | `integer` | Total number of zones |
+
+---
+
+## Create Landing Zone
+
+```
+POST /api/v1/landing-zones
+```
+
+Creates a new landing zone. The zone's S3 prefix is created automatically.
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | `string` | Yes | Target namespace |
+| `name` | `string` | Yes | Zone name (lowercase, alphanumeric, hyphens) |
+| `description` | `string` | No | Human-readable description |
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/landing-zones \
+  -H "Content-Type: application/json" \
+  -d '{
+    "namespace": "default",
+    "name": "raw-uploads",
+    "description": "CSV files from partners"
+  }'
+```
+
+### Response — `201 Created`
+
+```json
+{
+  "id": "zone-uuid",
+  "namespace": "default",
+  "name": "raw-uploads",
+  "description": "CSV files from partners",
+  "created_at": "2026-02-13T10:00:00Z"
+}
+```
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Missing or invalid namespace/name |
+| `409` | `ALREADY_EXISTS` | A zone with the same namespace and name already exists |
+
+---
+
+## Get Landing Zone
+
+```
+GET /api/v1/landing-zones/{ns}/{name}
+```
+
+Returns detailed information about a single landing zone, including file statistics.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `name` | `string` | Zone name |
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/landing-zones/default/raw-uploads
+```
+
+### Response — `200 OK`
+
+Returns the full landing zone object (same shape as items in the list response).
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Landing zone not found |
+
+---
+
+## Update Landing Zone
+
+```
+PUT /api/v1/landing-zones/{ns}/{name}
+```
+
+Updates a landing zone's mutable fields. This is a partial update.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `name` | `string` | Zone name |
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `description` | `string` | No | Updated description |
+| `owner` | `string` | No | Owner user ID |
+| `expected_schema` | `string` | No | Expected column schema (e.g., `id:int,name:varchar,amount:decimal`) |
+
+### Request
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/landing-zones/default/raw-uploads \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "Updated description",
+    "owner": "user-id",
+    "expected_schema": "id:int,name:varchar,amount:decimal"
+  }'
+```
+
+### Response — `200 OK`
+
+Returns the full landing zone object with updated fields.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Invalid request body |
+| `404` | `NOT_FOUND` | Landing zone not found |
+
+---
+
+## Delete Landing Zone
+
+```
+DELETE /api/v1/landing-zones/{ns}/{name}
+```
+
+Deletes a landing zone and all its files from S3 (including the `_samples/` folder), then removes the zone from the database.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `name` | `string` | Zone name |
+
+### Request
+
+```bash
+curl -X DELETE http://localhost:8080/api/v1/landing-zones/default/raw-uploads
+```
+
+### Response — `204 No Content`
+
+No response body.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Landing zone not found |
+
+---
+
+## List Files
+
+```
+GET /api/v1/landing-zones/{ns}/{name}/files
+```
+
+Lists all files uploaded to a landing zone.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `name` | `string` | Zone name |
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/landing-zones/default/raw-uploads/files
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "files": [
+    {
+      "id": "file-uuid",
+      "zone_id": "zone-uuid",
+      "filename": "20260213_100500_orders.csv",
+      "s3_path": "default/landing/raw-uploads/20260213_100500_orders.csv",
+      "size_bytes": 1024,
+      "content_type": "text/csv",
+      "uploaded_at": "2026-02-13T10:05:00Z"
+    }
+  ],
+  "total": 5
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `files` | `array` | List of file objects |
+| `files[].id` | `string` | File UUID |
+| `files[].zone_id` | `string` | Parent zone UUID |
+| `files[].filename` | `string` | Filename (with timestamp prefix) |
+| `files[].s3_path` | `string` | Full S3 path |
+| `files[].size_bytes` | `integer` | File size in bytes |
+| `files[].content_type` | `string` | MIME type |
+| `files[].uploaded_at` | `string` | ISO 8601 upload timestamp |
+| `total` | `integer` | Total number of files |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Landing zone not found |
+
+---
+
+## Upload File
+
+```
+POST /api/v1/landing-zones/{ns}/{name}/files
+```
+
+Uploads a file to a landing zone via multipart form data. The filename is taken from the multipart header and prepended with a UTC timestamp to avoid collisions. Maximum file size is **32 MB**.
+
+When triggers are configured, file uploads asynchronously evaluate matching `landing_zone_upload` and `file_pattern` triggers.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `name` | `string` | Zone name |
+
+### Form Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `file` | `binary` | Yes | File to upload |
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/landing-zones/default/raw-uploads/files \
+  -F "file=@/local/path/to/orders.csv"
+```
+
+### Response — `201 Created`
+
+```json
+{
+  "id": "file-uuid",
+  "zone_id": "zone-uuid",
+  "filename": "20260213_100500_orders.csv",
+  "s3_path": "default/landing/raw-uploads/20260213_100500_orders.csv",
+  "size_bytes": 1024,
+  "content_type": "text/csv",
+  "uploaded_at": "2026-02-13T10:05:00Z"
+}
+```
+
+<Callout type="info">
+Filenames are automatically prefixed with a UTC timestamp (`YYYYMMDD_HHMMSS_`) to prevent collisions when multiple files with the same name are uploaded. The original filename is preserved after the prefix.
+</Callout>
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Missing `file` form field |
+| `404` | `NOT_FOUND` | Landing zone not found |
+| `413` | `INVALID_ARGUMENT` | File exceeds 32 MB size limit |
+
+---
+
+## Get File Metadata
+
+```
+GET /api/v1/landing-zones/{ns}/{name}/files/{id}
+```
+
+Returns metadata for a single file.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `name` | `string` | Zone name |
+| `id` | `string` | File UUID |
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/landing-zones/default/raw-uploads/files/file-uuid
+```
+
+### Response — `200 OK`
+
+Returns the full file metadata object (same shape as items in the list response).
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | File or landing zone not found |
+
+---
+
+## Delete File
+
+```
+DELETE /api/v1/landing-zones/{ns}/{name}/files/{id}
+```
+
+Deletes a file from both S3 and the database.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `name` | `string` | Zone name |
+| `id` | `string` | File UUID |
+
+### Request
+
+```bash
+curl -X DELETE http://localhost:8080/api/v1/landing-zones/default/raw-uploads/files/file-uuid
+```
+
+### Response — `204 No Content`
+
+No response body.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | File or landing zone not found |
+
+---
+
+## List Sample Files
+
+```
+GET /api/v1/landing-zones/{ns}/{name}/samples
+```
+
+Lists sample files stored in the `_samples/` subfolder of the landing zone's S3 prefix. Samples are curated reference files used for pipeline previews and schema inference — unlike regular uploads, they are not append-only.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `name` | `string` | Zone name |
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/landing-zones/default/raw-uploads/samples
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "files": [
+    {
+      "path": "default/landing/raw-uploads/_samples/sample.csv",
+      "size": 512,
+      "modified": "2026-02-13T10:00:00Z",
+      "type": ""
+    }
+  ],
+  "total": 1
+}
+```
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Landing zone not found |
+
+---
+
+## Upload Sample File
+
+```
+POST /api/v1/landing-zones/{ns}/{name}/samples
+```
+
+Uploads a sample file via multipart form data. The filename is used as-is (no timestamp prefix). Uploading a sample with the same name as an existing one will overwrite it.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `name` | `string` | Zone name |
+
+### Form Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `file` | `binary` | Yes | Sample file to upload |
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/landing-zones/default/raw-uploads/samples \
+  -F "file=@/local/path/to/sample.csv"
+```
+
+### Response — `201 Created`
+
+```json
+{
+  "path": "default/landing/raw-uploads/_samples/sample.csv",
+  "filename": "sample.csv",
+  "size": 512,
+  "status": "uploaded"
+}
+```
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Missing `file` form field |
+| `404` | `NOT_FOUND` | Landing zone not found |
+| `413` | `INVALID_ARGUMENT` | File exceeds 32 MB size limit |
+
+---
+
+## Delete Sample File
+
+```
+DELETE /api/v1/landing-zones/{ns}/{name}/samples/{filename}
+```
+
+Deletes a sample file from S3.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `name` | `string` | Zone name |
+| `filename` | `string` | Sample filename |
+
+### Request
+
+```bash
+curl -X DELETE http://localhost:8080/api/v1/landing-zones/default/raw-uploads/samples/sample.csv
+```
+
+### Response — `204 No Content`
+
+No response body.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Landing zone or sample file not found |
+
+---
+
+## Get Lifecycle Settings
+
+```
+GET /api/v1/landing-zones/{ns}/{name}/lifecycle
+```
+
+Returns the lifecycle settings for a landing zone, which control automatic cleanup of processed files.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `name` | `string` | Zone name |
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/landing-zones/default/raw-uploads/lifecycle
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "processed_max_age_days": 30,
+  "auto_purge": true
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `processed_max_age_days` | `integer` | Maximum age (in days) for processed files before automatic cleanup |
+| `auto_purge` | `boolean` | Whether the reaper automatically deletes expired processed files |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Landing zone not found |
+
+---
+
+## Update Lifecycle Settings
+
+```
+PUT /api/v1/landing-zones/{ns}/{name}/lifecycle
+```
+
+Updates the lifecycle settings for a landing zone.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `name` | `string` | Zone name |
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `processed_max_age_days` | `integer` | No | Maximum age for processed files (in days) |
+| `auto_purge` | `boolean` | No | Enable/disable automatic cleanup |
+
+### Request
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/landing-zones/default/raw-uploads/lifecycle \
+  -H "Content-Type: application/json" \
+  -d '{
+    "processed_max_age_days": 14,
+    "auto_purge": true
+  }'
+```
+
+### Response — `204 No Content`
+
+No response body.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Invalid settings (e.g., negative age) |
+| `404` | `NOT_FOUND` | Landing zone not found |
+
+<Callout type="info">
+Lifecycle settings are enforced by the reaper daemon. When `auto_purge` is enabled, the reaper automatically deletes files older than `processed_max_age_days` from the landing zone during its periodic cleanup runs. See the [Retention](/reference/api/retention) documentation for reaper configuration.
+</Callout>

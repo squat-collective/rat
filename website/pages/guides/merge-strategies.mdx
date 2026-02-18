@@ -1,0 +1,472 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Merge Strategies
+
+Merge strategies control how RAT combines new pipeline results with existing data in your Iceberg tables. Choosing the right strategy is critical for data correctness, idempotency, and performance.
+
+RAT supports 6 merge strategies, each designed for a specific pattern.
+
+## Decision Tree
+
+Not sure which strategy to use? Follow this flowchart:
+
+<Mermaid chart={`
+flowchart TD
+    A[Start] --> B{Does your table\nneed history?}
+    B -->|Track changes\nover time| C{Need to track\nALL historical\nversions?}
+    B -->|No, just\nlatest state| D{Have a\nunique key?}
+    C -->|Yes, SCD Type 2| SCD2[scd2]
+    C -->|No, just\nappend events| E{Need dedup?}
+    E -->|No| APPEND[append_only]
+    E -->|Yes| INC[incremental]
+    D -->|Yes| F{Full reload\nor partial?}
+    D -->|No| G{Partitioned\ndata?}
+    F -->|Full reload\nevery run| FULL[full_refresh]
+    F -->|Only new/changed\nrows| H{Need to delete\nold rows first?}
+    H -->|Yes, clean\nslate per batch| DELINS[delete_insert]
+    H -->|No, merge\nupsert| INC2[incremental]
+    G -->|Yes, overwrite\nby partition| SNAP[snapshot]
+    G -->|No| FULL2[full_refresh]
+
+    style SCD2 fill:#22c55e,color:#000
+    style APPEND fill:#22c55e,color:#000
+    style INC fill:#22c55e,color:#000
+    style FULL fill:#22c55e,color:#000
+    style DELINS fill:#22c55e,color:#000
+    style INC2 fill:#22c55e,color:#000
+    style SNAP fill:#22c55e,color:#000
+    style FULL2 fill:#22c55e,color:#000
+`} />
+
+## Strategy Comparison
+
+| Strategy | Unique Key | Dedup | Idempotent | Use Case |
+|---|:---:|:---:|:---:|---|
+| `full_refresh` | - | - | Yes | Small tables, aggregations, snapshots |
+| `incremental` | Required | Yes (last wins) | Yes | Large tables with upserts |
+| `append_only` | - | - | No | Event logs, audit trails |
+| `delete_insert` | Required | No | Yes | Batch loads keyed by date/source |
+| `scd2` | Required | - | Yes | Dimension tables with history |
+| `snapshot` | - | - | Yes | Partitioned tables with partial refresh |
+
+---
+
+## full_refresh
+
+**Drop everything and recreate.** The entire target table is replaced with the pipeline's output on every run.
+
+### How It Works
+
+<Mermaid chart={`
+flowchart LR
+    A[Pipeline Output\n100 rows] --> B[Replace\nEntire Table]
+    B --> C[Target Table\n100 rows]
+    D[Previous Data\n500 rows] -.->|Discarded| X[Gone]
+
+    style X fill:#ef4444,color:#fff
+`} />
+
+### Configuration
+
+No special configuration needed — this is the default strategy.
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: full_refresh
+-- or simply omit @merge_strategy entirely
+
+SELECT
+    order_date,
+    COUNT(*) AS order_count,
+    SUM(total_amount) AS revenue
+FROM {{ ref('silver.clean_orders') }}
+GROUP BY order_date
+```
+
+### When to Use
+
+- **Aggregation / Gold tables** — Summary tables that are recomputed from source
+- **Small tables** — Reference data, lookup tables, dimension tables that are small enough to fully reload
+- **Development** — Quick iteration when you do not care about history
+
+### Properties
+
+- **Idempotent**: Yes. Running twice produces the same result.
+- **Required annotations**: None
+- **Performance**: Rewrites the entire table every run. Fine for small tables, expensive for large ones.
+
+<Callout type="info">
+`full_refresh` is the safest strategy. When in doubt, start here. You can switch to `incremental` later when the table grows large enough to warrant it.
+</Callout>
+
+---
+
+## incremental
+
+**Upsert new rows into the existing table.** New rows are deduplicated by `unique_key` (last row wins via `ROW_NUMBER`), then merged into the target table. Existing rows with matching keys are updated; new keys are inserted.
+
+### How It Works
+
+<Mermaid chart={`
+flowchart LR
+    A[Pipeline Output\n50 rows] --> B[Dedup by\nunique_key]
+    B --> C[40 unique rows\nlast row wins]
+    C --> D[Merge into\nTarget Table]
+    E[Existing Table\n1000 rows] --> D
+    D --> F[Target Table\n1020 rows\n20 new + 20 updated]
+
+    style B fill:#a855f7,color:#fff
+`} />
+
+### Configuration
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+-- @watermark_column: updated_at
+
+SELECT
+    order_id,
+    customer_id,
+    status,
+    total_amount,
+    updated_at
+FROM {{ ref('bronze.raw_orders') }}
+{% if is_incremental() %}
+WHERE updated_at > '{{ watermark_value }}'
+{% endif %}
+```
+
+### Dedup Behavior
+
+When multiple rows in the pipeline output share the same `unique_key`, RAT keeps only **the last row** using `ROW_NUMBER() OVER (PARTITION BY unique_key ORDER BY unique_key)`. This means the row that appears last in the result set wins.
+
+For composite keys, separate column names with commas:
+
+```sql
+-- @unique_key: order_id, product_id
+```
+
+### When to Use
+
+- **Large fact tables** — Orders, events, transactions that grow over time
+- **CDC (Change Data Capture)** — Processing change feeds with upsert semantics
+- **Any table with a natural key** — Where you want "last state wins"
+
+### Properties
+
+- **Idempotent**: Yes. Running the same data twice updates existing rows to the same values.
+- **Required annotations**: `unique_key`
+- **Optional annotations**: `watermark_column` (for filtering new rows)
+- **Performance**: Only processes new/changed rows when used with watermarks.
+
+<Callout type="warning">
+Without the `{% if is_incremental() %}` watermark filter, every run scans all source data. The merge is still correct (idempotent), but you lose the performance benefit of incremental processing.
+</Callout>
+
+---
+
+## append_only
+
+**Unconditionally append rows to the table.** No dedup, no merge, no key matching. Every run adds new rows.
+
+### How It Works
+
+<Mermaid chart={`
+flowchart LR
+    A[Pipeline Output\n100 rows] --> B[Append to\nTarget Table]
+    C[Existing Table\n5000 rows] --> B
+    B --> D[Target Table\n5100 rows]
+`} />
+
+### Configuration
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: append_only
+-- @description: Raw event log — append all incoming events
+
+SELECT
+    event_id,
+    event_type,
+    user_id,
+    payload,
+    created_at,
+    '{{ run_started_at }}' AS _loaded_at
+FROM read_csv_auto(
+    '{{ landing_zone("events") }}',
+    header = true
+)
+```
+
+### When to Use
+
+- **Event logs** — Clickstream, audit logs, IoT sensor readings
+- **Landing zone ingestion** — Raw data that should be appended as-is
+- **Immutable data** — Records that never change once created
+
+### Properties
+
+- **Idempotent**: **No.** Running the same data twice creates duplicate rows. This is the only non-idempotent strategy.
+- **Required annotations**: None
+- **Performance**: Very fast — just appends, no key matching.
+
+<Callout type="error">
+**Be careful with retries.** If a pipeline run fails after writing but before completion, re-running it will append the same data again. Use `append_only` only when duplicates are acceptable or when upstream data is guaranteed to be unique per run (e.g., new files in a landing zone with `archive_landing_zones: true`).
+</Callout>
+
+---
+
+## delete_insert
+
+**Delete all existing rows that match the incoming keys, then insert all new rows without dedup.** Unlike `incremental`, there is no `ROW_NUMBER` dedup — all incoming rows for a key are inserted.
+
+### How It Works
+
+<Mermaid chart={`
+flowchart LR
+    A[Pipeline Output\n50 rows\nkeys: A, B, C] --> B[Delete matching\nkeys from target]
+    C[Existing Table\n1000 rows] --> B
+    B --> D[Table without\nA, B, C rows]
+    A --> E[Insert all 50\nrows as-is]
+    D --> E
+    E --> F[Target Table\n~1000 rows\nwith new A, B, C]
+
+    style B fill:#ef4444,color:#fff
+`} />
+
+### Configuration
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: delete_insert
+-- @unique_key: batch_date
+
+SELECT
+    batch_date,
+    product_id,
+    warehouse_id,
+    quantity_on_hand,
+    last_counted_at
+FROM {{ ref('bronze.raw_inventory') }}
+WHERE batch_date = CURRENT_DATE
+```
+
+### How It Differs from Incremental
+
+| Aspect | `incremental` | `delete_insert` |
+|---|---|---|
+| Dedup | Yes (ROW_NUMBER, last wins) | No dedup |
+| Multiple rows per key | Keeps 1 per key | Keeps all rows per key |
+| Operation | MERGE (upsert) | DELETE matching keys + INSERT |
+| Use case | One row per entity | Multiple rows per key value |
+
+### When to Use
+
+- **Batch reloads** — Replace all data for a given date/batch/source
+- **One-to-many keys** — When a key (like `batch_date`) maps to many rows
+- **Idempotent batch processing** — Re-running a batch replaces it cleanly
+
+### Properties
+
+- **Idempotent**: Yes. Re-running with the same data deletes and re-inserts the same rows.
+- **Required annotations**: `unique_key`
+- **Performance**: Deletes can be expensive if the key matches many rows.
+
+<Callout type="info">
+A common pattern is using `batch_date` or `source_file` as the `unique_key` in `delete_insert`. This lets you reprocess a specific day's data without affecting other days.
+</Callout>
+
+---
+
+## scd2
+
+**Slowly Changing Dimension Type 2.** Tracks full history of changes. When a record changes, the old version is "closed" (its `valid_to` is set to the current timestamp) and a new version is inserted with `valid_to = NULL` (or `9999-12-31`).
+
+### How It Works
+
+<Mermaid chart={`
+flowchart TD
+    A[Pipeline Output\nCustomer 42:\nname = 'Bob Smith'] --> B{Key exists\nin target?}
+    B -->|Yes, and\ndata changed| C[Close old record\nvalid_to = now]
+    C --> D[Insert new record\nvalid_from = now\nvalid_to = NULL]
+    B -->|Yes, but\nno changes| E[No action]
+    B -->|No, new\ncustomer| F[Insert new record\nvalid_from = now\nvalid_to = NULL]
+
+    style C fill:#ef4444,color:#fff
+    style D fill:#22c55e,color:#000
+    style F fill:#22c55e,color:#000
+`} />
+
+### Configuration
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: scd2
+-- @unique_key: customer_id
+-- @scd_valid_from: valid_from
+-- @scd_valid_to: valid_to
+-- @description: Customer dimension with full change history
+
+SELECT
+    customer_id,
+    name,
+    email,
+    segment,
+    region,
+    updated_at
+FROM {{ ref('bronze.raw_customers') }}
+```
+
+The `scd_valid_from` and `scd_valid_to` annotations are optional. They default to `valid_from` and `valid_to` respectively. RAT manages these columns automatically — you do **not** need to include them in your SELECT.
+
+### Resulting Table Structure
+
+After several runs, the target table looks like this:
+
+| customer_id | name | segment | valid_from | valid_to |
+|---|---|---|---|---|
+| 42 | Bob | Basic | 2024-01-15 | 2024-06-01 |
+| 42 | Bob Smith | Premium | 2024-06-01 | 2024-11-20 |
+| 42 | Bob Smith | Enterprise | 2024-11-20 | NULL |
+
+The row with `valid_to = NULL` is the **current** version. To query only current records:
+
+```sql
+SELECT * FROM {{ ref('silver.dim_customers') }}
+WHERE valid_to IS NULL
+```
+
+### When to Use
+
+- **Dimension tables** — Customers, products, employees where you need change history
+- **Compliance** — Regulatory requirements to track when values changed
+- **Historical analysis** — "What was the customer's segment when they placed this order?"
+
+### Properties
+
+- **Idempotent**: Yes. Re-running with unchanged data has no effect. Changed data correctly closes and re-opens records.
+- **Required annotations**: `unique_key`
+- **Optional annotations**: `scd_valid_from` (default: `valid_from`), `scd_valid_to` (default: `valid_to`)
+
+---
+
+## snapshot
+
+**Partition-aware overwrite.** Only replaces partitions that are present in the new data. Partitions not in the pipeline output are left untouched.
+
+### How It Works
+
+<Mermaid chart={`
+flowchart LR
+    A[Pipeline Output\nPartitions:\nregion=US\nregion=EU] --> B[Overwrite only\nUS and EU\npartitions]
+    C[Existing Table\nPartitions:\nregion=US\nregion=EU\nregion=APAC] --> B
+    B --> D[Target Table\nUS: new data\nEU: new data\nAPAC: unchanged]
+
+    style B fill:#a855f7,color:#fff
+`} />
+
+### Configuration
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: snapshot
+-- @partition_column: region
+-- @description: Regional sales data — overwrite only affected regions
+
+SELECT
+    region,
+    product_id,
+    sale_date,
+    quantity,
+    revenue
+FROM {{ ref('bronze.raw_sales') }}
+WHERE region IN ('US', 'EU')
+```
+
+### When to Use
+
+- **Regional data** — Process one region at a time without affecting others
+- **Time-partitioned tables** — Reprocess a specific month without touching other months
+- **Partial refreshes** — Update only the partitions that have new source data
+
+### Properties
+
+- **Idempotent**: Yes. Re-running with the same data for the same partitions produces the same result.
+- **Required annotations**: `partition_column`
+- **Performance**: Only rewrites affected partitions, leaving others untouched.
+
+<Callout type="warning">
+The `partition_column` must exist in both the pipeline output and the target table. RAT determines which partitions to overwrite by looking at the distinct values of `partition_column` in the pipeline output.
+</Callout>
+
+---
+
+## Common Mistakes and Gotchas
+
+### 1. Using `append_only` when you mean `incremental`
+
+```sql
+-- WRONG: append_only with a unique key — you'll get duplicates
+-- @merge_strategy: append_only
+-- @unique_key: order_id   <-- this annotation is ignored!
+
+-- RIGHT: use incremental for dedup by key
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+```
+
+`append_only` ignores `unique_key`. If you want dedup, use `incremental` or `delete_insert`.
+
+### 2. Forgetting watermark filter in incremental
+
+```sql
+-- WRONG: no watermark filter — scans all data every run
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+-- @watermark_column: updated_at
+
+SELECT * FROM {{ ref('bronze.raw_orders') }}
+-- Missing: {% if is_incremental() %} WHERE ... {% endif %}
+```
+
+This is **correct** but **slow**. The merge is still idempotent, but every run reprocesses all rows. Add the watermark filter for performance.
+
+### 3. Using `delete_insert` when you want `incremental`
+
+`delete_insert` does **not** dedup incoming rows. If your pipeline output has 3 rows with `order_id = 42`, all 3 will be inserted. Use `incremental` if you want only the latest row per key.
+
+### 4. Forgetting `partition_column` for `snapshot`
+
+```sql
+-- WRONG: snapshot without partition_column
+-- @merge_strategy: snapshot
+
+-- RIGHT: snapshot requires a partition column
+-- @merge_strategy: snapshot
+-- @partition_column: region
+```
+
+Without `partition_column`, RAT does not know which partitions to overwrite and the pipeline will fail.
+
+### 5. SCD2 columns in SELECT
+
+```sql
+-- WRONG: including valid_from/valid_to in your SELECT
+SELECT customer_id, name, valid_from, valid_to FROM ...
+
+-- RIGHT: RAT manages SCD2 columns automatically
+SELECT customer_id, name FROM ...
+```
+
+RAT adds the `valid_from` and `valid_to` columns automatically during the SCD2 merge process. Including them in your SELECT may cause conflicts.
+
+### 6. Assuming `append_only` is idempotent
+
+Re-running an `append_only` pipeline with the same source data will insert duplicate rows. Use `archive_landing_zones: true` with landing zone sources to ensure files are processed only once:
+
+```sql
+-- @merge_strategy: append_only
+-- @archive_landing_zones: true
+
+SELECT * FROM read_csv_auto('{{ landing_zone("events") }}')
+```
+
+After a successful run, the source files are moved to `_processed/`, so the next run picks up only new files.

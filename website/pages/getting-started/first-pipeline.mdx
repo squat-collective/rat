@@ -1,0 +1,280 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Your First Pipeline
+
+In this tutorial, you will create a data pipeline from scratch, run it, and query the
+results. By the end, you will understand the basic RAT workflow: **write SQL, run, query**.
+
+**Time required:** ~10 minutes
+
+**Prerequisites:** RAT is running ([Installation](/getting-started/installation))
+
+---
+
+## What You Will Build
+
+A simple Bronze pipeline called `raw_orders` that generates sample order data. This is
+the most basic pipeline type — a SQL query that produces rows. RAT will execute it,
+write the results as an Apache Iceberg table, and make it queryable.
+
+---
+
+## Step by Step
+
+<Steps>
+
+### Open the Portal
+
+Navigate to **[http://localhost:3000](http://localhost:3000)** in your browser. You should
+see the RAT dashboard.
+
+### Go to the Pipelines page
+
+Click **Pipelines** in the left sidebar. This page lists all pipelines in your platform.
+Right now, it should be empty.
+
+### Create a new pipeline
+
+Click the **+ New Pipeline** button in the top-right corner. A dialog will appear asking
+for the pipeline details:
+
+| Field | Value | Description |
+|---|---|---|
+| **Namespace** | `default` | Logical grouping for your pipelines |
+| **Layer** | `bronze` | The medallion layer (bronze = raw data) |
+| **Name** | `raw_orders` | A descriptive name for the pipeline |
+| **Type** | `sql` | The pipeline language (SQL or Python) |
+
+Click **Create** to confirm.
+
+<Callout type="info">
+The full address of your pipeline is `default.bronze.raw_orders`. Every pipeline in RAT
+is uniquely identified by its `namespace.layer.name` triple.
+</Callout>
+
+### Write the pipeline SQL
+
+After creation, you are taken to the pipeline detail page with the **Code** tab open.
+You will see a CodeMirror SQL editor. Replace any placeholder content with the following:
+
+```sql filename="pipeline.sql"
+SELECT
+    1 AS order_id,
+    'Alice' AS customer,
+    99.99 AS amount,
+    current_timestamp AS created_at
+
+UNION ALL
+
+SELECT
+    2 AS order_id,
+    'Bob' AS customer,
+    149.50 AS amount,
+    current_timestamp AS created_at
+
+UNION ALL
+
+SELECT
+    3 AS order_id,
+    'Charlie' AS customer,
+    75.00 AS amount,
+    current_timestamp AS created_at
+```
+
+This SQL generates three sample order rows. In a real pipeline, you would typically
+read from a Bronze table (using `ref()`) or ingest files from a landing zone (using
+`landing_zone()`), but static data works perfectly for learning the basics.
+
+### Save the pipeline
+
+Press **Ctrl+S** (or **Cmd+S** on macOS) to save. You should see a brief confirmation
+toast in the bottom-right corner.
+
+<Callout type="warning">
+RAT autosaves drafts, but you should always explicitly save before running. Unsaved
+changes are not picked up by the pipeline executor.
+</Callout>
+
+### Preview the output
+
+Before running the pipeline for real, you can preview what it will produce. Press
+**Ctrl+Shift+Enter** (or **Cmd+Shift+Enter** on macOS).
+
+The preview panel will open below the editor, showing a table with your three rows:
+
+| order_id | customer | amount | created_at |
+|---|---|---|---|
+| 1 | Alice | 99.99 | 2026-02-16 12:00:00 |
+| 2 | Bob | 149.50 | 2026-02-16 12:00:00 |
+| 3 | Charlie | 75.00 | 2026-02-16 12:00:00 |
+
+<Callout type="info">
+Preview executes the SQL in a read-only DuckDB session (via ratq). It shows you the
+output shape and data without actually writing anything to the Iceberg catalog. Use it
+to iterate quickly on your SQL.
+</Callout>
+
+### Publish the pipeline
+
+Click the **Publish** button in the toolbar above the editor. Publishing creates a
+versioned snapshot of your pipeline code. This is the version that will execute when you
+trigger a run.
+
+<Callout type="info">
+You can always roll back to a previous published version from the **Overview** tab.
+Publishing is like committing — it captures a point-in-time snapshot of your pipeline.
+</Callout>
+
+### Run the pipeline
+
+Click the **Run** button (the play icon) in the toolbar. A confirmation dialog may appear
+asking you to confirm a manual trigger. Click **Confirm**.
+
+RAT will:
+1. Create a new run with status **pending**
+2. Send the pipeline to the runner service for execution
+3. The runner creates an isolated Nessie branch
+4. Execute your SQL via DuckDB
+5. Write the results as an Iceberg table in MinIO
+6. Run any quality tests (none yet for this pipeline)
+7. Merge the branch into the main catalog
+8. Mark the run as **success**
+
+### Watch the run
+
+You will be automatically taken to the **Run Detail** page (or navigate there via **Runs**
+in the sidebar). Here you can see:
+
+- **Status badge** — transitions from `pending` to `running` to `success`
+- **Live logs** — streamed in real-time via SSE (Server-Sent Events)
+- **Duration** — how long the run took
+- **Trigger** — shows `manual` since you clicked Run
+
+The logs will look something like:
+
+```
+[INFO]  Starting pipeline: default.bronze.raw_orders
+[INFO]  Creating branch: run-abc123
+[INFO]  Executing SQL pipeline...
+[INFO]  Query produced 3 rows
+[INFO]  Writing to Iceberg table: default.bronze.raw_orders
+[INFO]  No quality tests configured — skipping
+[INFO]  Merging branch: run-abc123 → main
+[INFO]  Pipeline completed successfully in 2.3s
+```
+
+<Callout type="info">
+If the run shows **failed** status, check the logs for error details. Common issues
+include syntax errors in the SQL or services still initializing. You can re-run the
+pipeline after fixing any issues.
+</Callout>
+
+### Query the results
+
+Navigate to **Query Console** in the left sidebar. This opens the interactive SQL editor
+powered by DuckDB (via the ratq service).
+
+Type the following query and press **Ctrl+Enter** (or click **Run Query**):
+
+```sql filename="Query Console"
+SELECT * FROM "default"."bronze"."raw_orders"
+```
+
+You should see the three rows you created:
+
+| order_id | customer | amount | created_at |
+|---|---|---|---|
+| 1 | Alice | 99.99 | 2026-02-16 12:00:00 |
+| 2 | Bob | 149.50 | 2026-02-16 12:00:00 |
+| 3 | Charlie | 75.00 | 2026-02-16 12:00:00 |
+
+<Callout type="warning">
+Table names in RAT follow the pattern `"namespace"."layer"."pipeline_name"`. The double
+quotes are required because DuckDB uses them for identifier quoting. Without quotes, you
+may get case-sensitivity errors.
+</Callout>
+
+You can run any SQL against your tables — aggregations, joins, filters:
+
+```sql filename="Query Console"
+SELECT
+    customer,
+    amount,
+    RANK() OVER (ORDER BY amount DESC) AS rank
+FROM "default"."bronze"."raw_orders"
+ORDER BY amount DESC
+```
+
+### Explore the table
+
+Navigate to **Explorer** in the left sidebar. You will see your tables grouped by
+namespace and layer:
+
+```
+default/
+  bronze/
+    raw_orders (3 rows)
+```
+
+Click on **raw_orders** to open the Table Detail page. Here you can see:
+
+- **Schema tab** — column names, types, and nullability
+- **Docs tab** — editable documentation for the table (add descriptions for each column)
+- **Preview tab** — a quick look at sample data
+
+</Steps>
+
+---
+
+## What Just Happened?
+
+Let's trace what RAT did behind the scenes when you clicked **Run**:
+
+1. **Portal** sent an HTTP request to **ratd** (the API server) to trigger the run
+2. **ratd** created a run record in **Postgres** and dispatched it to the **runner** via gRPC
+3. The **runner** asked **Nessie** to create an isolated branch for this run
+4. The **runner** spun up a DuckDB instance with Iceberg and S3 extensions configured
+5. DuckDB executed your SQL and produced an Arrow table with 3 rows
+6. The **runner** wrote the Arrow table as Parquet files to **MinIO** (S3) via PyIceberg
+7. Since no quality tests were defined, the runner skipped the testing phase
+8. The **runner** told **Nessie** to merge the branch back to main
+9. The **runner** reported success back to **ratd**, which updated **Postgres**
+10. The **Portal** received the status update and displayed the green success badge
+
+---
+
+## Next Steps
+
+Now that you have a working pipeline, here are some things to try:
+
+<Cards>
+  <Card title="Add a Silver pipeline" href="/guides/silver-pipeline">
+    Create a Silver layer pipeline that reads from your Bronze table using ref()
+  </Card>
+  <Card title="Add quality tests" href="/guides/quality-tests">
+    Gate your pipeline merges with SQL quality tests
+  </Card>
+  <Card title="Set up a schedule" href="/guides/scheduling">
+    Run your pipeline automatically on a cron schedule
+  </Card>
+  <Card title="Core Concepts" href="/getting-started/concepts">
+    Understand namespaces, layers, merge strategies, and more
+  </Card>
+</Cards>
+
+---
+
+## Quick Reference
+
+| Action | Shortcut |
+|---|---|
+| Save pipeline | `Ctrl+S` / `Cmd+S` |
+| Preview output | `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` |
+| Run query (Query Console) | `Ctrl+Enter` / `Cmd+Enter` |
+
+| Concept | Example |
+|---|---|
+| Pipeline address | `default.bronze.raw_orders` |
+| Table reference in SQL | `"default"."bronze"."raw_orders"` |
+| Reference in pipeline SQL | `{{ ref('bronze.raw_orders') }}` |

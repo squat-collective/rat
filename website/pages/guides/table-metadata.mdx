@@ -1,0 +1,250 @@
+import { Callout, Steps } from 'nextra/components'
+
+# Table Metadata
+
+RAT lets you document your tables with descriptions, owners, and per-column descriptions. This metadata is stored in Postgres (separate from the Iceberg table data) and is displayed throughout the Portal — in the Explorer, Query Console schema browser, and Lineage graph.
+
+---
+
+## Why Document Tables?
+
+As your data platform grows, keeping track of what each table and column represents becomes critical:
+
+- **Discoverability** — new team members can understand what data is available
+- **Trust** — column descriptions clarify data semantics (e.g., "Is `amount` in cents or dollars?")
+- **Ownership** — knowing who owns a table helps with questions and issue resolution
+- **Self-service** — well-documented tables reduce the need for tribal knowledge
+
+---
+
+## Table Descriptions
+
+Every Iceberg table in RAT can have a text description explaining what it contains and how it should be used.
+
+### Editing in the Explorer
+
+<Steps>
+
+### Navigate to the table
+
+In the Portal sidebar, open **Explorer** and navigate to the table (namespace > layer > table name).
+
+### Click the table name
+
+The table detail view shows the current description (or a placeholder if none is set).
+
+### Click "Edit"
+
+An inline editor opens. Write your description using plain text. Markdown is supported for formatting.
+
+### Save
+
+Click **Save**. The description is stored immediately in Postgres.
+
+</Steps>
+
+### Example description
+
+```
+Customer orders after deduplication and type casting.
+
+Source: bronze.ingest_orders (via CSV upload)
+Grain: one row per order_id
+Update frequency: hourly via cron trigger
+Contains: order details, amounts in USD (decimal), status enum
+```
+
+### Setting via API
+
+```bash filename="Terminal"
+curl -X PUT http://localhost:8080/api/v1/metadata/{namespace}/{layer}/{table_name} \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "Customer orders after deduplication and type casting.",
+    "owner": "data-team"
+  }'
+```
+
+---
+
+## Column Descriptions
+
+Individual columns can be annotated with descriptions that explain their meaning, format, and any important caveats.
+
+### Editing column descriptions
+
+In the table detail view within the Explorer, each column row has a description field. Click the description cell to edit inline.
+
+```bash filename="API"
+curl -X PUT http://localhost:8080/api/v1/metadata/{namespace}/{layer}/{table_name} \
+  -H "Content-Type: application/json" \
+  -d '{
+    "column_descriptions": {
+      "order_id": "Unique order identifier from the source system. Never null.",
+      "customer_id": "FK to clean_customers.customer_id",
+      "total_amount": "Order total in USD as DECIMAL(10,2). Includes tax, excludes shipping.",
+      "status": "Order status enum: pending, confirmed, shipped, delivered, cancelled",
+      "updated_at": "Last modification timestamp from source system. Used as watermark for incremental processing."
+    }
+  }'
+```
+
+### Column description display
+
+Column descriptions appear in multiple places:
+
+| Location | How it appears |
+|---|---|
+| **Explorer** table detail | Description column next to each field |
+| **Query Console** schema browser | Tooltip when hovering over a column name |
+| **Lineage** node detail | Shown when clicking a table node |
+
+---
+
+## Table Ownership
+
+Each table can have an `owner` field indicating the person or team responsible for the table's data quality and maintenance.
+
+```bash filename="Terminal"
+curl -X PUT http://localhost:8080/api/v1/metadata/{namespace}/{layer}/{table_name} \
+  -H "Content-Type: application/json" \
+  -d '{
+    "owner": "analytics-team"
+  }'
+```
+
+<Callout type="info">
+In the Community Edition (single-user), the owner field is informational only. In the Pro Edition with multi-user support, table ownership integrates with the access control system.
+</Callout>
+
+---
+
+## How Metadata is Stored
+
+Table metadata lives in the `table_metadata` Postgres table, separate from the Iceberg catalog:
+
+```sql filename="Postgres Schema"
+CREATE TABLE table_metadata (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    namespace TEXT NOT NULL,
+    layer TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    owner TEXT,
+    column_descriptions JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (namespace, layer, name)
+);
+```
+
+Key design decisions:
+
+- **Separate from Iceberg** — Iceberg tables are ephemeral (created/replaced by pipeline runs). Metadata is persistent documentation that survives table recreation.
+- **JSONB for column descriptions** — allows adding/removing column descriptions without schema migrations. The key is the column name, the value is the description string.
+- **No cascading delete** — if a table is dropped and recreated, the metadata is preserved. This prevents accidental loss of documentation.
+
+---
+
+## `.meta.yaml` Files
+
+In addition to the Postgres-stored metadata, RAT supports `.meta.yaml` files that can be placed alongside pipeline source files in S3:
+
+```
+{namespace}/pipelines/{layer}/{name}/
+├── pipeline.sql
+├── config.yaml
+└── .meta.yaml          ← table metadata file
+```
+
+### Format
+
+```yaml filename=".meta.yaml"
+description: |
+  Customer orders after deduplication and type casting.
+  Source: bronze.ingest_orders
+  Grain: one row per order_id
+owner: data-team
+columns:
+  order_id: "Unique order identifier from the source system"
+  customer_id: "FK to clean_customers.customer_id"
+  total_amount: "Order total in USD as DECIMAL(10,2)"
+  status: "Order status: pending, confirmed, shipped, delivered, cancelled"
+  updated_at: "Last modification timestamp, used as watermark"
+```
+
+### How `.meta.yaml` works
+
+1. When you view a table in the Explorer, RAT reads the `.meta.yaml` file from S3 (if it exists)
+2. If the Postgres `table_metadata` record also exists, values are **merged** with Postgres taking priority
+3. Editing metadata in the Portal always writes to Postgres, not to `.meta.yaml`
+
+This allows you to commit `.meta.yaml` files to version control as part of your pipeline code, while the Portal provides a convenient editing interface.
+
+### Reading `.meta.yaml` via API
+
+```bash filename="Terminal"
+# Get metadata for a table (combines Postgres + .meta.yaml)
+curl http://localhost:8080/api/v1/metadata/{namespace}/{layer}/{table_name}
+
+# Get raw .meta.yaml content
+curl http://localhost:8080/api/v1/pipelines/{namespace}/{layer}/{name}/meta
+```
+
+---
+
+## Metadata API Reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/metadata/{ns}/{layer}/{name}` | Get table metadata (merged Postgres + .meta.yaml) |
+| `PUT` | `/api/v1/metadata/{ns}/{layer}/{name}` | Create or update table metadata |
+| `GET` | `/api/v1/pipelines/{ns}/{layer}/{name}/meta` | Read raw .meta.yaml file |
+| `PUT` | `/api/v1/pipelines/{ns}/{layer}/{name}/meta` | Write .meta.yaml file |
+
+---
+
+## Best Practices
+
+### Document at creation time
+
+When you create a new pipeline, add a description and column descriptions immediately. It takes 2 minutes now and saves hours of confusion later.
+
+### Use consistent naming
+
+Adopt conventions for common column descriptions:
+
+```yaml filename="Convention examples"
+# Primary keys
+order_id: "PK — unique order identifier"
+
+# Foreign keys
+customer_id: "FK → clean_customers.customer_id"
+
+# Timestamps
+created_at: "Row creation time (UTC)"
+updated_at: "Last modification time (UTC), used as incremental watermark"
+
+# Money
+total_amount: "Amount in USD, DECIMAL(10,2), includes tax"
+
+# Status fields
+status: "Enum: pending | confirmed | shipped | delivered | cancelled"
+```
+
+### Keep `.meta.yaml` in sync
+
+If you use `.meta.yaml` files alongside Postgres metadata, keep them reasonably in sync. The Portal always shows the merged view, but discrepancies can be confusing when reading the raw files.
+
+### Use descriptions to document assumptions
+
+Column descriptions are the right place to document business rules, edge cases, and assumptions:
+
+```yaml filename=".meta.yaml"
+columns:
+  total_amount: |
+    Order total in USD as DECIMAL(10,2).
+    Includes sales tax. Excludes shipping and handling.
+    Negative values indicate refunds.
+    NULL means the order was created but not yet priced.
+```

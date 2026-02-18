@@ -1,0 +1,26 @@
+launch_id,mission_name,launch_date,vehicle,launch_site,country,orbit,outcome,payload_mass_kg,mission_type
+L001,Starlink Group 6-1,2023-02-17,Falcon 9,Cape Canaveral SLC-40,USA,LEO,success,17400,Communication
+L002,Crew-6,2023-03-02,Falcon 9,Kennedy Space Center LC-39A,USA,LEO,success,12055,Crewed
+L003,OneWeb-16,2023-03-09,Falcon 9,Cape Canaveral SLC-40,USA,LEO,success,6000,Communication
+L004,Transporter-7,2023-04-15,Falcon 9,Vandenberg SLC-4E,USA,SSO,success,5200,Rideshare
+L005,ViaSat-3 Americas,2023-04-30,Falcon Heavy,Kennedy Space Center LC-39A,USA,GTO,success,6400,Communication
+L006,Arabsat BADR-8,2023-05-22,Ariane 5,Guiana Space Centre ELA-3,France,GTO,success,5600,Communication
+L007,Euclid,2023-07-01,Falcon 9,Cape Canaveral SLC-40,USA,L2,success,2160,Science
+L008,Luna-25,2023-08-10,Soyuz-2.1b,Vostochny Site 1S,Russia,Lunar,failure,1750,Science
+L009,Chandrayaan-3,2023-07-14,LVM3,Satish Dhawan SLP,India,Lunar,success,3900,Science
+L010,SLIM,2023-09-06,H-IIA,Tanegashima LA-Y1,Japan,Lunar,success,700,Science
+L011,Psyche,2023-10-13,Falcon Heavy,Kennedy Space Center LC-39A,USA,Helio,success,2608,Science
+L012,Starlink Group 6-28,2023-10-29,Falcon 9,Cape Canaveral SLC-40,USA,LEO,success,17400,Communication
+L013,Gaganyaan TV-D1,2023-10-21,GSLV Mk III,Satish Dhawan SLP,India,Suborbital,success,4700,Test
+L014,Starship IFT-2,2023-11-18,Starship,Starbase OLP-A,USA,Suborbital,partial_failure,0,Test
+L015,Vega-C Return,2023-12-05,Vega-C,Guiana Space Centre ZLV,France,SSO,success,2350,Earth Observation
+L016,GSAT-20,2024-01-17,Falcon 9,Cape Canaveral SLC-40,USA,GTO,success,4700,Communication
+L017,Axiom-3,2024-01-18,Falcon 9,Kennedy Space Center LC-39A,USA,LEO,success,12055,Crewed
+L018,PACE,2024-02-08,Falcon 9,Cape Canaveral SLC-40,USA,LEO,success,1700,Earth Observation
+L019,IM-1 Odysseus,2024-02-15,Falcon 9,Kennedy Space Center LC-39A,USA,Lunar,success,1908,Science
+L020,Starship IFT-3,2024-03-14,Starship,Starbase OLP-A,USA,Suborbital,partial_failure,0,Test
+L021,Europa Clipper,2024-10-14,Falcon Heavy,Kennedy Space Center LC-39A,USA,Jupiter,success,6065,Science
+L022,Proba-3,2024-12-05,PSLV-XL,Satish Dhawan FLP,India,HEO,success,550,Science
+L023,Starship IFT-6,2024-11-19,Starship,Starbase OLP-A,USA,Suborbital,success,0,Test
+L024,Ariane 6 Maiden,2024-07-09,Ariane 6,Guiana Space Centre ELA-4,France,LEO,success,11500,Test
+L025,Crew-9,2024-09-28,Falcon 9,Cape Canaveral SLC-40,USA,LEO,success,12055,Crewed

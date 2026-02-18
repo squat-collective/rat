@@ -1,0 +1,28 @@
+# Portal .dockerignore
+# Note: portal build context is the repo root (see infra/docker-compose.yml),
+# so the root .dockerignore applies during builds. This file serves as
+# documentation and applies if the build context changes to portal/.
+
+# Git
+**/.git
+**/.gitignore
+
+# Secrets / env
+**/.env*
+
+# Docs
+**/README.md
+**/CLAUDE.md
+
+# Dependencies (reinstalled in Docker)
+node_modules/
+
+# Next.js build output (rebuild in Docker)
+.next/
+out/
+
+# Test / coverage
+coverage/
+
+# TypeScript build info
+*.tsbuildinfo

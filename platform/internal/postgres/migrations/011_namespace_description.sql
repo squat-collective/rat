@@ -1,0 +1,1 @@
+ALTER TABLE namespaces ADD COLUMN description TEXT NOT NULL DEFAULT '';

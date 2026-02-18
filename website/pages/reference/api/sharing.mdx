@@ -1,0 +1,262 @@
+import { Callout } from 'nextra/components'
+
+# Sharing
+
+<Callout type="warning">
+Sharing is a **Pro Edition** feature. In the Community Edition, these endpoints return `501 Not Implemented`. To enable sharing, deploy the sharing plugin via the Pro compose overlay.
+</Callout>
+
+Sharing endpoints manage access grants and ownership transfers for platform resources. They enable multi-user collaboration by allowing resource owners to grant read, write, or admin permissions to other users.
+
+All sharing endpoints require authentication.
+
+---
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/sharing` | Grant access to a resource |
+| `GET` | `/api/v1/sharing` | List access grants for a resource |
+| `DELETE` | `/api/v1/sharing/{id}` | Revoke an access grant |
+| `POST` | `/api/v1/sharing/transfer` | Transfer resource ownership |
+
+---
+
+## Permission Levels
+
+| Permission | Description |
+|---|---|
+| `read` | View the resource (pipeline details, run history, table data) |
+| `write` | Modify the resource, trigger runs, edit files |
+| `admin` | Full control including sharing with others and deletion |
+
+Permissions are cumulative: `admin` includes `write`, which includes `read`.
+
+---
+
+## Grant Access
+
+```
+POST /api/v1/sharing
+```
+
+Grants a user access to a resource at the specified permission level.
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `grantee_id` | `string` | Yes | User ID to grant access to |
+| `resource_type` | `string` | Yes | Resource type: `pipeline`, `namespace`, `landing_zone` |
+| `resource_id` | `string` | Yes | Resource UUID |
+| `permission` | `string` | Yes | Permission level: `read`, `write`, or `admin` |
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/sharing \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "grantee_id": "user-123",
+    "resource_type": "pipeline",
+    "resource_id": "pipeline-uuid",
+    "permission": "read"
+  }'
+```
+
+### Response — `201 Created`
+
+```json
+{
+  "id": "grant-uuid",
+  "grantor_id": "owner-user-id",
+  "grantee_id": "user-123",
+  "resource_type": "pipeline",
+  "resource_id": "pipeline-uuid",
+  "permission": "read",
+  "created_at": "2026-02-15T10:00:00Z"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | Grant UUID |
+| `grantor_id` | `string` | User ID who created the grant |
+| `grantee_id` | `string` | User ID who received the grant |
+| `resource_type` | `string` | Resource type |
+| `resource_id` | `string` | Resource UUID |
+| `permission` | `string` | Permission level |
+| `created_at` | `string` | ISO 8601 creation timestamp |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Missing required fields or invalid permission level |
+| `401` | `AUTHENTICATION` | Authentication required |
+| `403` | `AUTHORIZATION` | You do not have permission to share this resource (need `admin` permission) |
+| `404` | `NOT_FOUND` | Resource not found |
+| `501` | `UNAVAILABLE` | Sharing not available (Community Edition) |
+
+---
+
+## List Access Grants
+
+```
+GET /api/v1/sharing
+```
+
+Returns all access grants for a specific resource.
+
+### Query Parameters
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `resource_type` | `string` | Yes | Resource type: `pipeline`, `namespace`, `landing_zone` |
+| `resource_id` | `string` | Yes | Resource UUID |
+
+### Request
+
+```bash
+curl "http://localhost:8080/api/v1/sharing?resource_type=pipeline&resource_id=pipeline-uuid" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "grants": [
+    {
+      "id": "grant-uuid-1",
+      "grantor_id": "owner-user-id",
+      "grantee_id": "user-123",
+      "resource_type": "pipeline",
+      "resource_id": "pipeline-uuid",
+      "permission": "read",
+      "created_at": "2026-02-15T10:00:00Z"
+    },
+    {
+      "id": "grant-uuid-2",
+      "grantor_id": "owner-user-id",
+      "grantee_id": "user-456",
+      "resource_type": "pipeline",
+      "resource_id": "pipeline-uuid",
+      "permission": "write",
+      "created_at": "2026-02-15T11:00:00Z"
+    }
+  ],
+  "total": 2
+}
+```
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Missing `resource_type` or `resource_id` |
+| `401` | `AUTHENTICATION` | Authentication required |
+| `501` | `UNAVAILABLE` | Sharing not available (Community Edition) |
+
+---
+
+## Revoke Access
+
+```
+DELETE /api/v1/sharing/{id}
+```
+
+Revokes an access grant. Only the grant creator or the resource owner can revoke a grant.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | `string` | Grant UUID |
+
+### Request
+
+```bash
+curl -X DELETE http://localhost:8080/api/v1/sharing/grant-uuid \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Response — `204 No Content`
+
+No response body.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `401` | `AUTHENTICATION` | Authentication required |
+| `403` | `AUTHORIZATION` | Only the grant creator or resource owner can revoke |
+| `404` | `NOT_FOUND` | Grant not found |
+| `501` | `UNAVAILABLE` | Sharing not available (Community Edition) |
+
+---
+
+## Transfer Ownership
+
+```
+POST /api/v1/sharing/transfer
+```
+
+Transfers ownership of a resource to another user. Only the current owner can transfer ownership. Currently supports `pipeline` resource type only.
+
+### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `resource_type` | `string` | Yes | Resource type (currently only `pipeline`) |
+| `resource_id` | `string` | Yes | Resource UUID |
+| `to_user_id` | `string` | Yes | User ID of the new owner |
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/sharing/transfer \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "resource_type": "pipeline",
+    "resource_id": "pipeline-uuid",
+    "to_user_id": "user-456"
+  }'
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "transferred": true,
+  "resource_id": "pipeline-uuid",
+  "new_owner": "user-456"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `transferred` | `boolean` | Always `true` on success |
+| `resource_id` | `string` | Resource UUID |
+| `new_owner` | `string` | User ID of the new owner |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Unsupported resource type (only `pipeline` is supported) |
+| `401` | `AUTHENTICATION` | Authentication required |
+| `403` | `AUTHORIZATION` | Only the current owner can transfer ownership |
+| `404` | `NOT_FOUND` | Resource not found |
+| `501` | `UNAVAILABLE` | Sharing not available (Community Edition) |
+
+<Callout type="info">
+Ownership transfer is atomic — the old owner loses `admin` permission and the new owner gains it in a single operation. Existing grants from other users are preserved.
+</Callout>

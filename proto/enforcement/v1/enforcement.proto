@@ -1,0 +1,46 @@
+syntax = "proto3";
+package ratatouille.enforcement.v1;
+
+option go_package = "github.com/rat-data/rat/platform/gen/enforcement/v1;enforcementv1";
+
+// Field reservation policy: see common/v1/common.proto.
+// When removing fields, always add `reserved` for both the number and name.
+
+// EnforcementService handles fine-grained access control and credential vending.
+// Implemented by the enforcement plugin container.
+// Called by ratd to check access and vend scoped S3 credentials.
+service EnforcementService {
+  // Check if a user can access a specific resource.
+  rpc CanAccess(CanAccessRequest) returns (CanAccessResponse);
+
+  // Get scoped S3 credentials for a user within a namespace.
+  rpc GetCredentials(GetCredentialsRequest) returns (GetCredentialsResponse);
+}
+
+// CanAccessRequest checks fine-grained access control for a user on a resource.
+message CanAccessRequest {
+  string user_id = 1;             // user ID to check access for
+  string resource_type = 2;       // type of resource: "pipeline", "namespace", "table"
+  string resource_id = 3;         // unique identifier of the resource
+  string action = 4;              // action to check: "read", "write", "delete", "admin"
+}
+
+// CanAccessResponse indicates whether the user is permitted to perform the action.
+message CanAccessResponse {
+  bool allowed = 1;               // true if the user is permitted
+  string reason = 2;              // human-readable denial reason (empty when allowed=true)
+}
+
+// GetCredentialsRequest requests scoped S3 credentials for a user within a namespace.
+message GetCredentialsRequest {
+  string user_id = 1;             // user ID requesting credentials
+  string namespace = 2;           // scope credentials to this namespace's S3 prefix
+}
+
+// GetCredentialsResponse returns scoped, temporary S3 credentials.
+message GetCredentialsResponse {
+  string access_key = 1;           // temporary S3 access key ID
+  string secret_key = 2 [debug_redact = true];     // temporary S3 secret access key
+  string session_token = 3 [debug_redact = true];   // STS session token
+  int64 expires_at = 4;            // Unix timestamp when credentials expire
+}

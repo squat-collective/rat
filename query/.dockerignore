@@ -1,0 +1,26 @@
+# Git
+**/.git
+**/.gitignore
+
+# Secrets / env
+**/.env*
+
+# Docs
+**/README.md
+**/CLAUDE.md
+
+# Tests
+tests/
+
+# Python caches
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Build artifacts
+*.egg-info/
+dist/
+build/

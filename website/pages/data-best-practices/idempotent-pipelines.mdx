@@ -1,0 +1,235 @@
+import { Callout } from 'nextra/components'
+
+# Idempotent Pipelines
+
+An **idempotent** pipeline produces the same result whether it runs once or multiple times with the same input. This property is essential for reliable data pipelines — you should be able to re-run any pipeline without worrying about duplicated data, incorrect counts, or corrupted tables.
+
+---
+
+## Why Idempotency Matters
+
+Pipelines re-run more often than you might expect:
+
+- **Scheduler catch-up** — after a `ratd` restart, the catch-up-once policy fires a run
+- **Manual retries** — you re-run a failed pipeline after fixing the root cause
+- **Trigger storms** — a rapid series of file uploads fires the same pipeline multiple times
+- **Testing** — during development, you run the same pipeline repeatedly
+
+If your pipeline is not idempotent, these re-runs can cause:
+
+- **Duplicate rows** — the same data inserted multiple times
+- **Incorrect aggregates** — counts and sums inflated by duplicates
+- **Data inconsistency** — different results depending on how many times the pipeline ran
+
+---
+
+## Merge Strategy Idempotency
+
+Not all merge strategies in RAT are naturally idempotent. Here is a summary:
+
+| Merge Strategy | Idempotent? | Why |
+|---|---|---|
+| `full_refresh` | **Yes** | Completely replaces the table every run. Same input = same output. |
+| `incremental` | **Yes** | Uses `unique_key` to upsert (insert-or-update). Running twice with same data updates existing rows, does not duplicate. |
+| `delete_insert` | **Yes** | Deletes matching rows by `unique_key`, then inserts. Same input = same result. |
+| `scd2` | **Yes** | Tracks changes via `valid_from`/`valid_to`. Reprocessing the same data does not create new history records. |
+| `snapshot` | **Conditional** | Idempotent if the `partition_column` value is deterministic (e.g., a date from the data). Not idempotent if using `current_timestamp`. |
+| `append_only` | **No** | Every run appends rows regardless of whether they already exist. |
+
+---
+
+## The Danger of `append_only`
+
+`append_only` is the only merge strategy that is inherently **not idempotent**. Each run appends all rows from the query, even if those exact rows were already appended in a previous run.
+
+```sql filename="Dangerous: append_only without dedup"
+-- @merge_strategy: append_only
+
+SELECT *
+FROM {{ landing_zone('raw_events') }}
+```
+
+If this pipeline runs twice on the same landing zone files, every event is duplicated.
+
+### When is `append_only` safe?
+
+`append_only` is appropriate when:
+
+1. **Source data is guaranteed unique per run** — each run processes new files that are then archived (using `archive_landing_zones: true`)
+2. **Downstream consumers handle deduplication** — the Silver layer deduplicates with `incremental` merge
+3. **You want an immutable event log** — and duplicates are acceptable or handled elsewhere
+
+<Callout type="warning">
+If you use `append_only` for Bronze ingestion, always pair it with a downstream Silver pipeline that deduplicates using `incremental` or `delete_insert` with a `unique_key`.
+</Callout>
+
+---
+
+## Common Idempotency Patterns
+
+### Pattern 1: Full Refresh (Simplest)
+
+The safest approach. Every run replaces the entire table with fresh data from the query.
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: full_refresh
+
+SELECT
+    order_id,
+    customer_id,
+    total_amount,
+    status,
+    updated_at
+FROM {{ ref('bronze.raw_orders') }}
+WHERE order_id IS NOT NULL
+```
+
+**Trade-off**: For large tables, full refresh is expensive because it rewrites all data every run. Use for Gold tables (typically smaller) or when the source data is small enough.
+
+### Pattern 2: Incremental with Unique Key
+
+The most common pattern for Silver tables. Uses `unique_key` to identify rows and `watermark_column` to process only new/changed data.
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+-- @watermark_column: updated_at
+
+SELECT
+    order_id,
+    customer_id,
+    total_amount,
+    status,
+    updated_at
+FROM {{ ref('bronze.raw_orders') }}
+{% if is_incremental() %}
+WHERE updated_at > '{{ watermark_value }}'
+{% endif %}
+```
+
+**How it stays idempotent**: If the pipeline runs twice with the same `watermark_value`, it reads the same rows and upserts them. The second run updates existing rows to the same values — the result is identical.
+
+### Pattern 3: Delete-Insert with Unique Key
+
+Similar to incremental, but explicitly deletes matching rows before inserting. Useful when you want to guarantee no stale data from partial updates.
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: delete_insert
+-- @unique_key: order_id
+-- @watermark_column: updated_at
+
+SELECT
+    order_id,
+    customer_id,
+    total_amount,
+    status,
+    updated_at
+FROM {{ ref('bronze.raw_orders') }}
+{% if is_incremental() %}
+WHERE updated_at > '{{ watermark_value }}'
+{% endif %}
+```
+
+### Pattern 4: Append-Only with Deduplication Downstream
+
+When you need Bronze to capture every raw event (including potential duplicates), use `append_only` in Bronze and deduplicate in Silver.
+
+```sql filename="bronze/raw_events/pipeline.sql"
+-- @merge_strategy: append_only
+-- @archive_landing_zones: true
+
+SELECT *, current_timestamp AS _ingested_at
+FROM {{ landing_zone('events') }}
+```
+
+```sql filename="silver/clean_events/pipeline.sql"
+-- @merge_strategy: incremental
+-- @unique_key: event_id
+-- @watermark_column: event_timestamp
+
+SELECT DISTINCT ON (event_id)
+    event_id,
+    event_type,
+    user_id,
+    payload,
+    event_timestamp
+FROM {{ ref('bronze.raw_events') }}
+{% if is_incremental() %}
+WHERE event_timestamp > '{{ watermark_value }}'
+{% endif %}
+ORDER BY event_id, _ingested_at DESC
+```
+
+### Pattern 5: Snapshot with Deterministic Partition
+
+Snapshot is idempotent when the partition column value comes from the data, not from runtime.
+
+```sql filename="Idempotent snapshot"
+-- @merge_strategy: snapshot
+-- @partition_column: report_date
+
+SELECT
+    report_date,
+    region,
+    total_sales,
+    total_orders
+FROM {{ ref('silver.regional_sales') }}
+WHERE report_date = CURRENT_DATE - INTERVAL '1 day'
+```
+
+Re-running this pipeline for the same `report_date` replaces the same partition with the same data.
+
+```sql filename="Non-idempotent snapshot (avoid)"
+-- @merge_strategy: snapshot
+-- @partition_column: snapshot_ts
+
+SELECT
+    current_timestamp AS snapshot_ts,  -- different every run!
+    region,
+    total_sales
+FROM {{ ref('silver.regional_sales') }}
+```
+
+This creates a new partition every run because `snapshot_ts` changes each time.
+
+---
+
+## Testing Idempotency
+
+The simplest test: run your pipeline twice on the same data and compare the results.
+
+### Manual test
+
+1. Run the pipeline once
+2. Note the row count and a few key metrics
+3. Run the pipeline again (same data, no changes)
+4. Compare: row count should be identical, metrics should be identical
+
+### Quality test
+
+Create a quality test that detects duplicates on your unique key:
+
+```sql filename="tests/quality/no_duplicate_orders.sql"
+-- @severity: error
+-- @description: Ensure no duplicate order_ids exist
+
+SELECT order_id, COUNT(*) AS cnt
+FROM {{ ref('silver.clean_orders') }}
+GROUP BY order_id
+HAVING COUNT(*) > 1
+```
+
+This test returns violation rows (duplicate order_ids). If it returns zero rows, the pipeline is idempotent with respect to uniqueness.
+
+---
+
+## Checklist
+
+Use this checklist to verify your pipeline's idempotency:
+
+- [ ] Does the pipeline have a `unique_key` if using `incremental`, `delete_insert`, or `scd2`?
+- [ ] If using `append_only`, is there a downstream deduplication step?
+- [ ] If using `snapshot`, is the `partition_column` deterministic (from data, not runtime)?
+- [ ] Can the pipeline be run twice on the same data without changing the output?
+- [ ] Is there a quality test that checks for duplicate keys?
+- [ ] Does the pipeline avoid `current_timestamp` in the result columns (or is it used only for metadata)?

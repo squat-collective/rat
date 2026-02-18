@@ -1,0 +1,303 @@
+import { Callout, Tabs } from 'nextra/components'
+import { Mermaid } from '@/components/mermaid'
+
+# SCD2 History Tracking
+
+**Slowly Changing Dimensions Type 2 (SCD2)** is a technique for tracking the full history of changes to a record over time. Instead of overwriting a row when its attributes change, SCD2 creates a **new version** with validity timestamps, preserving the complete history.
+
+---
+
+## What is SCD2?
+
+In a standard incremental merge, when a customer changes their address, the old address is overwritten:
+
+| customer_id | name | address | updated_at |
+|---|---|---|---|
+| 42 | Jane Smith | 456 Oak Ave | 2026-02-15 |
+
+With SCD2, both the old and new versions are kept:
+
+| customer_id | name | address | valid_from | valid_to |
+|---|---|---|---|---|
+| 42 | Jane Smith | 123 Elm St | 2025-01-15 | 2026-02-15 |
+| 42 | Jane Smith | 456 Oak Ave | 2026-02-15 | 9999-12-31 |
+
+The `valid_from` and `valid_to` columns define the time range during which each version was the "current" record. The current version always has `valid_to = 9999-12-31` (a far-future sentinel value meaning "still active").
+
+---
+
+## When to Use SCD2
+
+Use SCD2 when you need to:
+
+- **Answer historical questions** — "What was this customer's address when they placed order #1234?"
+- **Track attribute changes** — customer tier changes, product price changes, employee department transfers
+- **Audit trail** — compliance requirements that mandate preserving all versions of a record
+- **Point-in-time reporting** — recreate what a dashboard would have shown on a specific date
+
+### SCD2 vs Other Strategies
+
+| Strategy | History? | Use When |
+|---|---|---|
+| `full_refresh` | No | Small tables, no history needed |
+| `incremental` | No | Large tables with updates, only current state needed |
+| `delete_insert` | No | Replacing changed rows, no history |
+| `append_only` | Partial | Immutable event logs (not dimension tables) |
+| `scd2` | **Yes** | Dimension tables where change history matters |
+| `snapshot` | **Yes** | Daily/periodic full snapshots (different pattern) |
+
+<Callout type="info">
+SCD2 is most appropriate for **dimension tables** — customers, products, employees, locations. For **fact tables** (events, transactions), `incremental` or `append_only` is usually more appropriate since facts are immutable.
+</Callout>
+
+---
+
+## RAT's SCD2 Implementation
+
+RAT implements SCD2 as a merge strategy. When configured, the runner:
+
+1. Reads the incoming data (new/changed records)
+2. Compares against existing records using the `unique_key`
+3. For **new records**: inserts them with `valid_from = current_timestamp`, `valid_to = 9999-12-31`
+4. For **changed records**: closes the current version (sets `valid_to = current_timestamp`) and inserts a new version with `valid_from = current_timestamp`, `valid_to = 9999-12-31`
+5. For **unchanged records**: no action (the existing version remains as-is)
+
+### Configuration
+
+```yaml filename="config.yaml"
+merge_strategy: scd2
+unique_key:
+  - customer_id
+scd_valid_from: valid_from     # column name for validity start (default: valid_from)
+scd_valid_to: valid_to         # column name for validity end (default: valid_to)
+```
+
+Or via source annotations:
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: scd2
+-- @unique_key: customer_id
+-- @scd_valid_from: valid_from
+-- @scd_valid_to: valid_to
+```
+
+### Required Configuration
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `merge_strategy` | Yes | — | Must be `scd2` |
+| `unique_key` | Yes | — | Column(s) that identify a unique record (business key) |
+| `scd_valid_from` | No | `valid_from` | Name of the validity start column |
+| `scd_valid_to` | No | `valid_to` | Name of the validity end column |
+
+<Callout type="warning">
+The `valid_from` and `valid_to` columns are **managed by RAT** — they are added automatically during the SCD2 merge. Your pipeline SQL should **not** include these columns in the SELECT output. RAT will add them.
+</Callout>
+
+---
+
+## Full Example: Tracking Customer Address Changes
+
+### Source Data (Silver input)
+
+Suppose your Bronze layer has a `raw_customers` table that receives daily customer snapshots from an upstream system. Customers may change their address, email, or tier.
+
+### Pipeline
+
+```sql filename="silver/customer_history/pipeline.sql"
+-- @merge_strategy: scd2
+-- @unique_key: customer_id
+
+SELECT
+    CAST(customer_id AS INTEGER) AS customer_id,
+    TRIM(name) AS customer_name,
+    LOWER(TRIM(email)) AS customer_email,
+    TRIM(address) AS address,
+    TRIM(city) AS city,
+    UPPER(TRIM(state)) AS state,
+    TRIM(zip_code) AS zip_code,
+    TRIM(tier) AS customer_tier
+FROM {{ ref('bronze.raw_customers') }}
+WHERE customer_id IS NOT NULL
+```
+
+### Initial Run (Day 1)
+
+Source data:
+
+| customer_id | name | address | tier |
+|---|---|---|---|
+| 42 | Jane Smith | 123 Elm St | silver |
+| 17 | Bob Jones | 789 Pine Rd | gold |
+
+Result after first run:
+
+| customer_id | customer_name | address | customer_tier | valid_from | valid_to |
+|---|---|---|---|---|---|
+| 42 | Jane Smith | 123 Elm St | silver | 2026-02-15 10:00:00 | 9999-12-31 00:00:00 |
+| 17 | Bob Jones | 789 Pine Rd | gold | 2026-02-15 10:00:00 | 9999-12-31 00:00:00 |
+
+### Second Run (Day 2) — Jane Changed Address
+
+Source data:
+
+| customer_id | name | address | tier |
+|---|---|---|---|
+| 42 | Jane Smith | 456 Oak Ave | silver |
+| 17 | Bob Jones | 789 Pine Rd | gold |
+
+Result after second run:
+
+| customer_id | customer_name | address | customer_tier | valid_from | valid_to |
+|---|---|---|---|---|---|
+| 42 | Jane Smith | 123 Elm St | silver | 2026-02-15 10:00:00 | **2026-02-16 10:00:00** |
+| 42 | Jane Smith | **456 Oak Ave** | silver | **2026-02-16 10:00:00** | 9999-12-31 00:00:00 |
+| 17 | Bob Jones | 789 Pine Rd | gold | 2026-02-15 10:00:00 | 9999-12-31 00:00:00 |
+
+Jane's old record was **closed** (valid_to set to the current run time), and a **new record** was inserted with the updated address.
+
+### Third Run (Day 3) — Jane Upgraded Tier
+
+Source data:
+
+| customer_id | name | address | tier |
+|---|---|---|---|
+| 42 | Jane Smith | 456 Oak Ave | gold |
+| 17 | Bob Jones | 789 Pine Rd | gold |
+
+Result after third run:
+
+| customer_id | customer_name | address | customer_tier | valid_from | valid_to |
+|---|---|---|---|---|---|
+| 42 | Jane Smith | 123 Elm St | silver | 2026-02-15 10:00:00 | 2026-02-16 10:00:00 |
+| 42 | Jane Smith | 456 Oak Ave | silver | 2026-02-16 10:00:00 | **2026-02-17 10:00:00** |
+| 42 | Jane Smith | 456 Oak Ave | **gold** | **2026-02-17 10:00:00** | 9999-12-31 00:00:00 |
+| 17 | Bob Jones | 789 Pine Rd | gold | 2026-02-15 10:00:00 | 9999-12-31 00:00:00 |
+
+Now Jane has three historical versions: original, address change, tier upgrade.
+
+---
+
+## Querying SCD2 Data
+
+### Get Current Records
+
+```sql filename="Query Console"
+SELECT *
+FROM "default"."silver"."customer_history"
+WHERE valid_to = TIMESTAMP '9999-12-31 00:00:00'
+```
+
+The sentinel value `9999-12-31` always identifies the current (active) version.
+
+### Point-in-Time Query
+
+"What was Jane's address on February 16th?"
+
+```sql filename="Query Console"
+SELECT *
+FROM "default"."silver"."customer_history"
+WHERE customer_id = 42
+  AND valid_from <= TIMESTAMP '2026-02-16 12:00:00'
+  AND valid_to > TIMESTAMP '2026-02-16 12:00:00'
+```
+
+This returns the version that was active at noon on February 16th: `456 Oak Ave, tier=silver`.
+
+### Join with Fact Table at Transaction Time
+
+"Show each order with the customer's address at the time of the order."
+
+```sql filename="Query Console"
+SELECT
+    o.order_id,
+    o.order_date,
+    o.total_amount,
+    c.customer_name,
+    c.address,
+    c.customer_tier
+FROM "default"."silver"."clean_orders" o
+JOIN "default"."silver"."customer_history" c
+    ON o.customer_id = c.customer_id
+    AND o.order_date >= c.valid_from
+    AND o.order_date < c.valid_to
+```
+
+This is the primary value of SCD2 — joining facts to the correct dimension version at transaction time.
+
+### View Change History
+
+"Show all changes for customer 42."
+
+```sql filename="Query Console"
+SELECT
+    customer_id,
+    customer_name,
+    address,
+    customer_tier,
+    valid_from,
+    valid_to,
+    CASE WHEN valid_to = TIMESTAMP '9999-12-31' THEN 'current' ELSE 'historical' END AS version_status
+FROM "default"."silver"."customer_history"
+WHERE customer_id = 42
+ORDER BY valid_from
+```
+
+---
+
+## Composite Unique Keys
+
+SCD2 supports composite unique keys for tables where a single column is not sufficient:
+
+```yaml filename="config.yaml"
+merge_strategy: scd2
+unique_key:
+  - product_id
+  - region
+```
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: scd2
+-- @unique_key: product_id, region
+
+SELECT
+    product_id,
+    region,
+    price,
+    currency
+FROM {{ ref('bronze.regional_prices') }}
+```
+
+Each unique combination of `(product_id, region)` is tracked independently for SCD2 history.
+
+---
+
+## SCD2 and Idempotency
+
+RAT's SCD2 implementation is **idempotent**. If you run the pipeline twice with the same source data:
+
+1. First run: inserts new records or creates new versions for changed records
+2. Second run: compares incoming data against current versions. Since nothing changed, no new versions are created.
+
+The comparison is done on all non-key, non-SCD columns. If every column value is identical to the current version, the record is considered unchanged.
+
+---
+
+## Performance Considerations
+
+SCD2 tables grow monotonically — every change adds a new row, and old versions are never deleted. For high-churn dimension tables, this can lead to large tables over time.
+
+**Mitigations**:
+
+- **Partition by a time column** — add `partition_by` on `valid_from` with a `month` transform to improve query performance
+- **Filter on `valid_to`** — most queries only need current records. Always include `WHERE valid_to = '9999-12-31'` when you don't need history
+- **Archival** — periodically create a snapshot of very old historical records and remove them from the active SCD2 table
+
+```yaml filename="config.yaml"
+merge_strategy: scd2
+unique_key:
+  - customer_id
+partition_by:
+  - column: valid_from
+    transform: month
+```

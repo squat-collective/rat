@@ -1,0 +1,350 @@
+import { Callout, Tabs } from 'nextra/components'
+
+# Testing Strategy
+
+Quality tests are SQL queries that run after each pipeline execution. A quality test returns **violation rows** — if the query returns zero rows, the test passes. If it returns one or more rows, the test fails.
+
+Quality tests run on the **ephemeral Nessie branch** before data is merged to main. If a test with `severity: error` fails, the branch is discarded and no bad data reaches production.
+
+---
+
+## How Quality Tests Work
+
+1. Pipeline writes data to an ephemeral branch
+2. Quality tests run against the data on that branch
+3. If all `error`-severity tests pass, the branch is merged to main
+4. If any `error`-severity test fails, the branch is **deleted** — data never reaches main
+5. `warn`-severity test failures are logged but do **not** block the merge
+
+### Test File Location
+
+Quality tests live in the pipeline's `tests/quality/` directory on S3:
+
+```
+{namespace}/pipelines/{layer}/{name}/
+├── pipeline.sql
+├── config.yaml
+└── tests/
+    └── quality/
+        ├── not_null_order_id.sql
+        ├── unique_order_id.sql
+        ├── valid_status.sql
+        └── freshness_check.sql
+```
+
+### Test Anatomy
+
+Every quality test is a SQL file that returns violation rows:
+
+```sql filename="tests/quality/not_null_order_id.sql"
+-- @severity: error
+-- @description: order_id must never be NULL
+-- @tags: completeness
+-- @remediation: Check source data for missing order IDs
+
+SELECT order_id, customer_id, updated_at
+FROM {{ ref('silver.clean_orders') }}
+WHERE order_id IS NULL
+```
+
+### Annotations
+
+| Annotation | Required | Values | Description |
+|---|---|---|---|
+| `@severity` | No | `error`, `warn` | `error` blocks merge, `warn` only logs. Default: `error` |
+| `@description` | No | Free text | Human-readable description of what the test checks |
+| `@tags` | No | Comma-separated | Categorization tags (e.g., `completeness`, `accuracy`, `timeliness`) |
+| `@remediation` | No | Free text | Guidance on how to fix violations when the test fails |
+
+---
+
+## Quality Test Patterns
+
+### Not Null Tests
+
+The most basic quality test. Ensures critical columns are never NULL.
+
+```sql filename="tests/quality/not_null_order_id.sql"
+-- @severity: error
+-- @description: order_id is the primary key and must never be NULL
+
+SELECT *
+FROM {{ ref('silver.clean_orders') }}
+WHERE order_id IS NULL
+```
+
+**Multi-column variant** — check several columns at once:
+
+```sql filename="tests/quality/required_fields.sql"
+-- @severity: error
+-- @description: All required fields must be populated
+
+SELECT order_id, customer_id, total_amount, order_date
+FROM {{ ref('silver.clean_orders') }}
+WHERE order_id IS NULL
+   OR customer_id IS NULL
+   OR total_amount IS NULL
+   OR order_date IS NULL
+```
+
+### Unique Tests
+
+Ensures a column (or combination of columns) contains no duplicates.
+
+```sql filename="tests/quality/unique_order_id.sql"
+-- @severity: error
+-- @description: order_id must be unique across the table
+
+SELECT order_id, COUNT(*) AS duplicate_count
+FROM {{ ref('silver.clean_orders') }}
+GROUP BY order_id
+HAVING COUNT(*) > 1
+```
+
+**Composite unique key**:
+
+```sql filename="tests/quality/unique_product_region.sql"
+-- @severity: error
+-- @description: Each product-region combination must be unique
+
+SELECT product_id, region, COUNT(*) AS cnt
+FROM {{ ref('silver.regional_prices') }}
+GROUP BY product_id, region
+HAVING COUNT(*) > 1
+```
+
+### Accepted Values
+
+Ensures a column only contains values from a known set.
+
+```sql filename="tests/quality/valid_status.sql"
+-- @severity: error
+-- @description: status must be one of the known enum values
+-- @tags: accuracy
+
+SELECT order_id, status
+FROM {{ ref('silver.clean_orders') }}
+WHERE status NOT IN ('PENDING', 'CONFIRMED', 'SHIPPED', 'DELIVERED', 'CANCELLED', 'REFUNDED')
+```
+
+**With pattern matching** for less strict validation:
+
+```sql filename="tests/quality/valid_email_format.sql"
+-- @severity: warn
+-- @description: customer_email should have a valid format
+-- @tags: accuracy
+
+SELECT customer_id, customer_email
+FROM {{ ref('silver.clean_customers') }}
+WHERE customer_email IS NOT NULL
+  AND customer_email NOT LIKE '%@%.%'
+```
+
+### Referential Integrity
+
+Ensures foreign key relationships are valid across tables.
+
+```sql filename="tests/quality/valid_customer_fk.sql"
+-- @severity: error
+-- @description: Every order must reference an existing customer
+-- @tags: integrity
+
+SELECT o.order_id, o.customer_id
+FROM {{ ref('silver.clean_orders') }} o
+LEFT JOIN {{ ref('silver.clean_customers') }} c
+    ON o.customer_id = c.customer_id
+WHERE c.customer_id IS NULL
+  AND o.customer_id IS NOT NULL
+```
+
+**Cross-layer referential integrity**:
+
+```sql filename="tests/quality/gold_references_valid.sql"
+-- @severity: error
+-- @description: All customer_ids in daily_revenue must exist in clean_customers
+-- @tags: integrity
+
+SELECT dr.customer_id
+FROM {{ ref('gold.daily_revenue') }} dr
+LEFT JOIN {{ ref('silver.clean_customers') }} c
+    ON dr.customer_id = c.customer_id
+WHERE c.customer_id IS NULL
+  AND dr.customer_id IS NOT NULL
+```
+
+### Row Count Checks
+
+Validates that the table has a reasonable number of rows — catches cases where a pipeline accidentally produces too few or too many records.
+
+```sql filename="tests/quality/min_row_count.sql"
+-- @severity: error
+-- @description: Table must have at least 100 rows (prevents accidental truncation)
+-- @tags: completeness
+-- @remediation: Check if source data was empty or pipeline filter was too aggressive
+
+SELECT 'row_count_violation' AS violation,
+       COUNT(*) AS actual_count,
+       100 AS expected_minimum
+FROM {{ ref('silver.clean_orders') }}
+HAVING COUNT(*) < 100
+```
+
+**Relative row count check** (compare to source):
+
+```sql filename="tests/quality/row_count_ratio.sql"
+-- @severity: warn
+-- @description: Silver should retain at least 90% of Bronze rows
+
+WITH counts AS (
+    SELECT
+        (SELECT COUNT(*) FROM {{ ref('bronze.ingest_orders') }}) AS bronze_count,
+        (SELECT COUNT(*) FROM {{ ref('silver.clean_orders') }}) AS silver_count
+)
+SELECT
+    bronze_count,
+    silver_count,
+    ROUND(silver_count * 100.0 / NULLIF(bronze_count, 0), 2) AS retention_pct
+FROM counts
+WHERE silver_count < bronze_count * 0.9
+```
+
+### Freshness Checks
+
+Validates that the data is recent — catches stale pipelines or broken upstream sources.
+
+```sql filename="tests/quality/data_freshness.sql"
+-- @severity: warn
+-- @description: Most recent order should be within the last 24 hours
+-- @tags: timeliness
+
+SELECT
+    MAX(updated_at) AS most_recent,
+    CURRENT_TIMESTAMP AS checked_at,
+    DATEDIFF('hour', MAX(updated_at), CURRENT_TIMESTAMP) AS hours_stale
+FROM {{ ref('silver.clean_orders') }}
+HAVING DATEDIFF('hour', MAX(updated_at), CURRENT_TIMESTAMP) > 24
+```
+
+### Range / Bounds Checks
+
+Validates that numeric or date values fall within expected ranges.
+
+```sql filename="tests/quality/valid_amount_range.sql"
+-- @severity: error
+-- @description: total_amount must be positive and under $1,000,000
+-- @tags: accuracy
+
+SELECT order_id, total_amount
+FROM {{ ref('silver.clean_orders') }}
+WHERE total_amount <= 0
+   OR total_amount >= 1000000
+```
+
+```sql filename="tests/quality/valid_dates.sql"
+-- @severity: error
+-- @description: order_date must not be in the future
+
+SELECT order_id, order_date
+FROM {{ ref('silver.clean_orders') }}
+WHERE order_date > CURRENT_DATE
+```
+
+---
+
+## Severity Strategy
+
+Choosing the right severity for each test is important. `error` blocks the merge and prevents bad data from reaching production. `warn` logs the issue but allows the data through.
+
+### Use `error` (blocking) for:
+
+- **Primary key violations** — duplicates or NULLs on unique keys
+- **Referential integrity** — broken foreign key relationships
+- **Data type violations** — values that violate domain constraints (negative amounts, impossible dates)
+- **Critical business rules** — rules that would produce incorrect business metrics
+
+### Use `warn` (non-blocking) for:
+
+- **Data quality metrics** — percentage of NULLs in optional columns
+- **Freshness checks** — stale data is concerning but should not block other updates
+- **Soft validations** — email format, phone number format, address completeness
+- **Row count anomalies** — unexpected volume changes (might be legitimate seasonal variation)
+- **Experimental rules** — new tests you want to monitor before enforcing
+
+<Callout type="info">
+Start with `warn` severity for new tests. Monitor the results over a few days. Once you are confident the test catches real issues (not false positives), promote it to `error`.
+</Callout>
+
+---
+
+## Test Organization
+
+### Naming Convention
+
+Name quality test files descriptively:
+
+```
+tests/quality/
+├── not_null_order_id.sql          # Completeness: NOT NULL check
+├── unique_order_id.sql            # Uniqueness: no duplicates
+├── valid_status_values.sql        # Accuracy: accepted values
+├── valid_customer_fk.sql          # Integrity: FK reference
+├── min_row_count.sql              # Completeness: minimum rows
+├── data_freshness_24h.sql         # Timeliness: max age
+├── amount_range_check.sql         # Accuracy: value bounds
+└── no_future_dates.sql            # Accuracy: date bounds
+```
+
+### Tagging
+
+Use `@tags` to categorize tests for filtering and reporting:
+
+| Tag | Category | Examples |
+|---|---|---|
+| `completeness` | Are all required values present? | NOT NULL, row count |
+| `accuracy` | Are values correct and valid? | Accepted values, ranges |
+| `integrity` | Are relationships consistent? | FK checks, cross-table |
+| `timeliness` | Is data fresh? | Freshness, staleness |
+| `uniqueness` | Are keys unique? | Duplicate checks |
+| `consistency` | Do related values agree? | Cross-column, cross-table |
+
+### Test Count Guidelines
+
+A typical pipeline should have:
+
+| Layer | Tests Per Pipeline | Focus |
+|---|---|---|
+| **Bronze** | 1-3 | NOT NULL on key fields, row count minimum |
+| **Silver** | 3-8 | Uniqueness, accepted values, FK integrity, ranges |
+| **Gold** | 2-5 | Row count, freshness, aggregate sanity checks |
+
+<Callout type="warning">
+Do not create hundreds of tests per pipeline. Each test runs a SQL query against the full dataset, adding execution time. Focus on the most impactful checks.
+</Callout>
+
+---
+
+## Quality Test Results
+
+After each run, quality test results are visible in:
+
+1. **Run detail page** — shows pass/fail status for each test with violation counts
+2. **Run logs** — detailed log output with sample violation rows
+3. **API** — `GET /api/v1/runs/{run_id}` includes `quality_results`
+
+Sample violation rows are included in the results (up to 3 rows) to help debug failures without querying the full table. Cell values are truncated to 40 characters to reduce PII exposure risk.
+
+```json filename="Quality Result"
+{
+  "test_name": "valid_customer_fk",
+  "test_file": "default/pipelines/silver/clean_orders/tests/quality/valid_customer_fk.sql",
+  "severity": "error",
+  "status": "fail",
+  "row_count": 5,
+  "message": "5 violation(s) found",
+  "duration_ms": 142,
+  "description": "Every order must reference an existing customer",
+  "sample_rows": "order_id | customer_id\n---------+------------\n1042     | 999\n1043     | 998\n1044     | 997",
+  "tags": ["integrity"],
+  "remediation": "Check source data for missing customer records"
+}
+```

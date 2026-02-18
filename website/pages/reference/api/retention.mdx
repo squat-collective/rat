@@ -1,0 +1,322 @@
+import { Callout } from 'nextra/components'
+
+# Retention
+
+Retention endpoints manage the reaper daemon — a background process that automatically cleans up old runs, logs, quality results, soft-deleted pipelines, stuck runs, orphan Nessie branches, landing zone files, and audit log entries. Retention can be configured at the system level and overridden per pipeline.
+
+---
+
+## Endpoints
+
+### System Retention (Admin)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/admin/retention/config` | Get system retention config |
+| `PUT` | `/api/v1/admin/retention/config` | Update system retention config |
+| `GET` | `/api/v1/admin/retention/status` | Get reaper last-run statistics |
+| `POST` | `/api/v1/admin/retention/run` | Trigger a manual reaper run |
+
+### Per-Pipeline Retention
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/pipelines/{ns}/{layer}/{name}/retention` | Get pipeline retention config |
+| `PUT` | `/api/v1/pipelines/{ns}/{layer}/{name}/retention` | Set per-pipeline retention overrides |
+
+---
+
+## Get System Retention Config
+
+```
+GET /api/v1/admin/retention/config
+```
+
+Returns the system-wide retention configuration used by the reaper daemon.
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/admin/retention/config
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "config": {
+    "runs_max_per_pipeline": 100,
+    "runs_max_age_days": 90,
+    "logs_max_age_days": 30,
+    "quality_results_max_per_test": 100,
+    "soft_delete_purge_days": 30,
+    "stuck_run_timeout_minutes": 120,
+    "audit_log_max_age_days": 365,
+    "nessie_orphan_branch_max_age_hours": 6,
+    "reaper_interval_minutes": 60,
+    "iceberg_snapshot_max_age_days": 7,
+    "iceberg_orphan_file_max_age_days": 3
+  }
+}
+```
+
+### Config Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `runs_max_per_pipeline` | `integer` | `100` | Maximum number of runs to keep per pipeline |
+| `runs_max_age_days` | `integer` | `90` | Delete runs older than this many days |
+| `logs_max_age_days` | `integer` | `30` | Delete run logs older than this many days |
+| `quality_results_max_per_test` | `integer` | `100` | Maximum quality test results to keep per test |
+| `soft_delete_purge_days` | `integer` | `30` | Permanently delete soft-deleted pipelines after this many days |
+| `stuck_run_timeout_minutes` | `integer` | `120` | Mark runs as failed if stuck in `running` state for this long |
+| `audit_log_max_age_days` | `integer` | `365` | Delete audit log entries older than this many days |
+| `nessie_orphan_branch_max_age_hours` | `integer` | `6` | Clean up orphan Nessie branches older than this many hours |
+| `reaper_interval_minutes` | `integer` | `60` | How often the reaper runs (in minutes) |
+| `iceberg_snapshot_max_age_days` | `integer` | `7` | Expire Iceberg snapshots older than this many days |
+| `iceberg_orphan_file_max_age_days` | `integer` | `3` | Delete orphan Iceberg data files older than this many days |
+
+---
+
+## Update System Retention Config
+
+```
+PUT /api/v1/admin/retention/config
+```
+
+Updates the system-wide retention configuration. All fields are optional — only provided fields are updated.
+
+### Request Body
+
+Same shape as the `config` object in the GET response. All fields are optional.
+
+### Request
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/admin/retention/config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "runs_max_per_pipeline": 50,
+    "runs_max_age_days": 60,
+    "logs_max_age_days": 14,
+    "reaper_interval_minutes": 30
+  }'
+```
+
+### Response — `200 OK`
+
+Returns the full updated config object.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Invalid config values (`runs_max_per_pipeline` < 1 or `reaper_interval_minutes` < 1) |
+
+---
+
+## Get Reaper Status
+
+```
+GET /api/v1/admin/retention/status
+```
+
+Returns statistics from the reaper's last run, including how many items were cleaned up in each category.
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/admin/retention/status
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "last_run_at": "2026-02-16T10:00:00Z",
+  "runs_pruned": 42,
+  "logs_pruned": 150,
+  "quality_pruned": 0,
+  "pipelines_purged": 1,
+  "runs_failed": 3,
+  "branches_cleaned": 7,
+  "lz_files_cleaned": 28,
+  "audit_pruned": 0,
+  "updated_at": "2026-02-16T10:01:23Z"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `last_run_at` | `string` | ISO 8601 timestamp of the last reaper run |
+| `runs_pruned` | `integer` | Number of old runs deleted |
+| `logs_pruned` | `integer` | Number of old log entries deleted |
+| `quality_pruned` | `integer` | Number of old quality test results deleted |
+| `pipelines_purged` | `integer` | Number of soft-deleted pipelines permanently removed |
+| `runs_failed` | `integer` | Number of stuck runs marked as failed |
+| `branches_cleaned` | `integer` | Number of orphan Nessie branches deleted |
+| `lz_files_cleaned` | `integer` | Number of expired landing zone files cleaned up |
+| `audit_pruned` | `integer` | Number of old audit log entries deleted |
+| `updated_at` | `string` | ISO 8601 timestamp of when the status was last updated |
+
+---
+
+## Trigger Manual Reaper Run
+
+```
+POST /api/v1/admin/retention/run
+```
+
+Triggers a manual reaper run outside the normal schedule. The response is returned after the reaper completes.
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/admin/retention/run
+```
+
+### Response — `202 Accepted`
+
+Returns the reaper status object (same shape as `GET /admin/retention/status`) with updated statistics from the run that just completed.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `503` | `UNAVAILABLE` | Reaper not configured |
+
+<Callout type="info">
+Manual reaper runs execute synchronously — the API call blocks until the reaper finishes all cleanup tasks. This can take several seconds depending on the amount of data to clean up.
+</Callout>
+
+---
+
+## Get Pipeline Retention Config
+
+```
+GET /api/v1/pipelines/{ns}/{layer}/{name}/retention
+```
+
+Returns the retention configuration for a specific pipeline, showing the system defaults, per-pipeline overrides, and the effective (merged) values.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Pipeline name |
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/pipelines/default/silver/orders/retention
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "system": {
+    "runs_max_per_pipeline": 100,
+    "runs_max_age_days": 90,
+    "logs_max_age_days": 30,
+    "quality_results_max_per_test": 100,
+    "soft_delete_purge_days": 30,
+    "stuck_run_timeout_minutes": 120,
+    "audit_log_max_age_days": 365,
+    "nessie_orphan_branch_max_age_hours": 6,
+    "reaper_interval_minutes": 60,
+    "iceberg_snapshot_max_age_days": 7,
+    "iceberg_orphan_file_max_age_days": 3
+  },
+  "overrides": {
+    "runs_max_per_pipeline": 50,
+    "logs_max_age_days": 7
+  },
+  "effective": {
+    "runs_max_per_pipeline": 50,
+    "runs_max_age_days": 90,
+    "logs_max_age_days": 7,
+    "quality_results_max_per_test": 100,
+    "soft_delete_purge_days": 30,
+    "stuck_run_timeout_minutes": 120,
+    "audit_log_max_age_days": 365,
+    "nessie_orphan_branch_max_age_hours": 6,
+    "reaper_interval_minutes": 60,
+    "iceberg_snapshot_max_age_days": 7,
+    "iceberg_orphan_file_max_age_days": 3
+  }
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `system` | `object` | System-wide retention config |
+| `overrides` | `object\|null` | Per-pipeline overrides (`null` when no overrides are set) |
+| `effective` | `object` | Merged result — overrides take precedence over system defaults |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `404` | `NOT_FOUND` | Pipeline not found |
+
+---
+
+## Set Pipeline Retention Overrides
+
+```
+PUT /api/v1/pipelines/{ns}/{layer}/{name}/retention
+```
+
+Sets per-pipeline retention overrides. Only provided fields are overridden — omitted fields fall back to the system config.
+
+### Path Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `ns` | `string` | Namespace |
+| `layer` | `string` | Data layer |
+| `name` | `string` | Pipeline name |
+
+### Request Body
+
+Partial `RetentionConfig` — only include the fields you want to override.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `runs_max_per_pipeline` | `integer` | No | Override maximum runs to keep |
+| `runs_max_age_days` | `integer` | No | Override maximum run age |
+| `logs_max_age_days` | `integer` | No | Override maximum log age |
+| `quality_results_max_per_test` | `integer` | No | Override maximum quality results |
+
+### Request
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/pipelines/default/silver/orders/retention \
+  -H "Content-Type: application/json" \
+  -d '{
+    "runs_max_per_pipeline": 50,
+    "logs_max_age_days": 7
+  }'
+```
+
+### Response — `204 No Content`
+
+No response body.
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Invalid config values |
+| `404` | `NOT_FOUND` | Pipeline not found |
+
+<Callout type="info">
+To remove all per-pipeline overrides and revert to system defaults, send an empty object: `{}`. The reaper will then use only the system retention config for this pipeline.
+</Callout>

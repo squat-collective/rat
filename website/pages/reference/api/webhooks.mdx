@@ -1,0 +1,192 @@
+import { Callout } from 'nextra/components'
+
+# Webhooks
+
+The webhook endpoint allows external systems to trigger pipeline runs via HTTP. Webhooks are authenticated using a dedicated token (separate from the main API authentication) and are designed for integration with CI/CD systems, external schedulers, and third-party services.
+
+---
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/webhooks` | Trigger a pipeline run via webhook token |
+
+---
+
+## Setting Up Webhooks
+
+Webhooks are created as a trigger type on a pipeline. See [Triggers](/reference/api/triggers) for the full trigger CRUD API.
+
+### Step 1: Create a Webhook Trigger
+
+```bash
+curl -X POST http://localhost:8080/api/v1/pipelines/default/silver/orders/triggers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "webhook",
+    "config": {},
+    "enabled": true,
+    "cooldown_seconds": 60
+  }'
+```
+
+The response includes the plaintext token (shown **once**):
+
+```json
+{
+  "id": "trigger-uuid",
+  "type": "webhook",
+  "config": { "token_hash": "sha256hex..." },
+  "webhook_url": "http://localhost:8080/api/v1/webhooks",
+  "webhook_token": "a1b2c3d4e5f6...64-char-hex",
+  "enabled": true,
+  "cooldown_seconds": 60
+}
+```
+
+<Callout type="warning">
+Save the `webhook_token` immediately. It is returned **only once** and is never stored in plaintext. If lost, delete the trigger and create a new one.
+</Callout>
+
+### Step 2: Call the Webhook
+
+Use the token to trigger the pipeline:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/webhooks \
+  -H "X-Webhook-Token: a1b2c3d4e5f6...64-char-hex"
+```
+
+---
+
+## Fire Webhook
+
+```
+POST /api/v1/webhooks
+```
+
+Triggers a pipeline run using a webhook token. The endpoint looks up the token, finds the associated trigger and pipeline, and creates a new run.
+
+### Authentication
+
+The webhook token must be provided via one of two headers:
+
+| Header | Example |
+|---|---|
+| `X-Webhook-Token` | `X-Webhook-Token: a1b2c3d4e5f6...` |
+| `Authorization` | `Authorization: Bearer a1b2c3d4e5f6...` |
+
+<Callout type="info">
+The webhook endpoint is mounted **outside** the main auth middleware. The webhook token IS the authentication — no API key or JWT bearer token is required. This makes it safe to call from external systems that do not have platform credentials.
+</Callout>
+
+### Request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/webhooks \
+  -H "X-Webhook-Token: a1b2c3d4e5f6...64-char-hex"
+```
+
+Or using the `Authorization` header:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/webhooks \
+  -H "Authorization: Bearer a1b2c3d4e5f6...64-char-hex"
+```
+
+### Response — `201 Created`
+
+```json
+{
+  "run_id": "run-uuid"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `run_id` | `string` | UUID of the created pipeline run |
+
+### Error Responses
+
+| Status | Code | Description |
+|---|---|---|
+| `400` | `INVALID_ARGUMENT` | Missing token header (neither `X-Webhook-Token` nor `Authorization: Bearer` provided) |
+| `404` | `NOT_FOUND` | Token not found or invalid |
+| `429` | `RATE_LIMITED` | Cooldown is active — too soon since the last trigger firing |
+
+---
+
+## Security
+
+### Token Handling
+
+- Tokens are **64-character hex strings** generated using a cryptographically secure random number generator
+- The plaintext token is returned only at creation time — RAT stores only the **SHA-256 hash** in the database
+- On each webhook request, the plaintext token is hashed before the database lookup
+- After retrieval, the stored hash is verified again via **constant-time comparison** to guard against timing side-channel attacks
+
+### Rate Limiting
+
+Webhook endpoints have their own **separate rate limiter** independent of the main API rate limiting:
+
+- Each webhook trigger has a configurable `cooldown_seconds` value
+- Requests within the cooldown window receive a `429` response
+- The cooldown is per-trigger (per-token), not global
+
+### Best Practices
+
+| Practice | Description |
+|---|---|
+| Use `X-Webhook-Token` header | Prefer the dedicated header over `Authorization: Bearer` to avoid confusion with JWT tokens |
+| Set appropriate cooldowns | Prevent accidental rapid-fire triggers from CI/CD systems |
+| Rotate tokens periodically | Delete and recreate webhook triggers to generate new tokens |
+| Use HTTPS in production | Always use HTTPS to prevent token interception in transit |
+| Store tokens as secrets | Keep webhook tokens in your CI/CD secret store, not in code |
+
+---
+
+## Integration Examples
+
+### GitHub Actions
+
+```yaml filename=".github/workflows/trigger-pipeline.yml"
+name: Trigger RAT Pipeline
+on:
+  push:
+    branches: [main]
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger pipeline
+        run: |
+          curl -X POST ${{ secrets.RAT_WEBHOOK_URL }} \
+            -H "X-Webhook-Token: ${{ secrets.RAT_WEBHOOK_TOKEN }}" \
+            --fail --silent --show-error
+```
+
+### cURL (manual trigger)
+
+```bash
+curl -X POST http://localhost:8080/api/v1/webhooks \
+  -H "X-Webhook-Token: $RAT_WEBHOOK_TOKEN" \
+  -w "\nHTTP Status: %{http_code}\n"
+```
+
+### Python Script
+
+```python filename="trigger_pipeline.py"
+import os
+import requests
+
+response = requests.post(
+    "http://localhost:8080/api/v1/webhooks",
+    headers={"X-Webhook-Token": os.environ["RAT_WEBHOOK_TOKEN"]},
+)
+response.raise_for_status()
+print(f"Run created: {response.json()['run_id']}")
+```

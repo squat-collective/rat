@@ -1,0 +1,291 @@
+import { Callout, Tabs } from 'nextra/components'
+
+# Partitioning
+
+Partitioning divides a table's data into separate physical segments based on column values. When queries filter on the partition column, only the relevant segments are scanned — dramatically reducing I/O and query time for large tables.
+
+---
+
+## Why Partition?
+
+Without partitioning, every query scans **all** data files in a table. For a table with 10 million rows, even a simple `WHERE order_date = '2026-02-15'` must read through every file to find matching rows.
+
+With partitioning on `order_date`, each date's data lives in its own set of files. The query engine reads only the files for February 15th and skips everything else. This is called **partition pruning**.
+
+### When to Partition
+
+| Partition? | Scenario |
+|---|---|
+| **Yes** | Tables with millions of rows that are frequently filtered by a date or category column |
+| **Yes** | Snapshot strategy tables (partitioning is required for `snapshot`) |
+| **Yes** | Time-series data where most queries filter by date range |
+| **No** | Small tables (under 100K rows) — overhead exceeds benefit |
+| **No** | Tables queried without any column filter (full scans regardless) |
+| **No** | High-cardinality partition keys (e.g., `user_id` with millions of values) — too many small partitions |
+
+<Callout type="info">
+A good rule of thumb: partition when each partition contains at least 100K-1M rows. Thousands of tiny partitions (under 1000 rows each) actually **hurt** performance because of metadata overhead.
+</Callout>
+
+---
+
+## RAT's Partition Support
+
+RAT supports two complementary partitioning mechanisms:
+
+### 1. `partition_column` (for `snapshot` strategy)
+
+The `partition_column` tells the `snapshot` merge strategy which column to use for partition-level overwriting. When a new snapshot arrives, only the partition matching the column value is replaced.
+
+```yaml filename="config.yaml"
+merge_strategy: snapshot
+partition_column: report_date
+```
+
+### 2. `partition_by` (for Iceberg table partitioning)
+
+The `partition_by` field defines the Iceberg partition spec — how the underlying data files are physically organized on S3. This works with **any** merge strategy.
+
+```yaml filename="config.yaml"
+merge_strategy: incremental
+unique_key:
+  - order_id
+watermark_column: updated_at
+partition_by:
+  - column: order_date
+    transform: month
+```
+
+---
+
+## Supported Transforms
+
+RAT supports the following Iceberg partition transforms:
+
+| Transform | Description | Example | Partition Value |
+|---|---|---|---|
+| `identity` | Exact column value | `region = 'US'` | `US` |
+| `day` | Date truncated to day | `2026-02-15 14:30:00` | `2026-02-15` |
+| `month` | Date truncated to month | `2026-02-15 14:30:00` | `2026-02` |
+| `year` | Date truncated to year | `2026-02-15 14:30:00` | `2026` |
+| `hour` | Date truncated to hour | `2026-02-15 14:30:00` | `2026-02-15-14` |
+
+### Choosing a Transform
+
+| Transform | Best For | Typical Partition Size |
+|---|---|---|
+| `identity` | Low-cardinality categorical columns (country, status, region) | Varies by category count |
+| `day` | High-volume daily data (events, transactions) | 1 partition per day |
+| `month` | Moderate-volume data, long-term retention queries | 1 partition per month |
+| `year` | Low-volume data, multi-year analysis | 1 partition per year |
+| `hour` | Very high-volume streaming/near-real-time data | 1 partition per hour |
+
+<Callout type="warning">
+Avoid `hour` partitioning unless you have very high data volumes (millions of rows per day). Hourly partitioning creates 8,760 partitions per year, which can degrade metadata performance.
+</Callout>
+
+---
+
+## Configuration Examples
+
+### Example 1: Monthly Partition on Order Date
+
+```yaml filename="config.yaml"
+merge_strategy: incremental
+unique_key:
+  - order_id
+watermark_column: updated_at
+partition_by:
+  - column: order_date
+    transform: month
+```
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+-- @watermark_column: updated_at
+
+SELECT
+    order_id,
+    customer_id,
+    total_amount,
+    order_date,
+    updated_at
+FROM {{ ref('bronze.raw_orders') }}
+{% if is_incremental() %}
+WHERE updated_at > '{{ watermark_value }}'
+{% endif %}
+```
+
+Data files on S3:
+
+```
+default/silver/clean_orders/
+├── order_date_month=2026-01/
+│   ├── 00000-0-abc.parquet
+│   └── 00000-1-def.parquet
+├── order_date_month=2026-02/
+│   ├── 00000-0-ghi.parquet
+│   └── 00000-1-jkl.parquet
+```
+
+### Example 2: Multi-Column Partitioning
+
+You can partition by multiple columns:
+
+```yaml filename="config.yaml"
+merge_strategy: full_refresh
+partition_by:
+  - column: country
+    transform: identity
+  - column: order_date
+    transform: month
+```
+
+This creates a two-level partition hierarchy:
+
+```
+default/gold/regional_orders/
+├── country=US/
+│   ├── order_date_month=2026-01/
+│   │   └── 00000-0-abc.parquet
+│   └── order_date_month=2026-02/
+│       └── 00000-0-def.parquet
+├── country=UK/
+│   ├── order_date_month=2026-01/
+│   └── order_date_month=2026-02/
+```
+
+### Example 3: Snapshot with Partition Column
+
+The `snapshot` strategy requires a `partition_column`. When the pipeline runs, it replaces only the partition matching the value produced by the query:
+
+```yaml filename="config.yaml"
+merge_strategy: snapshot
+partition_column: report_date
+```
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: snapshot
+-- @partition_column: report_date
+
+SELECT
+    CURRENT_DATE - INTERVAL '1 day' AS report_date,
+    region,
+    SUM(total_amount) AS total_sales,
+    COUNT(DISTINCT order_id) AS order_count
+FROM {{ ref('silver.clean_orders') }}
+WHERE order_date = CURRENT_DATE - INTERVAL '1 day'
+GROUP BY region
+```
+
+Each run creates or replaces a single partition (yesterday's date). Historical partitions from previous days are preserved.
+
+### Example 4: Identity Partition for Categories
+
+```yaml filename="config.yaml"
+merge_strategy: full_refresh
+partition_by:
+  - column: category
+    transform: identity
+```
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: full_refresh
+
+SELECT
+    product_id,
+    product_name,
+    category,
+    list_price,
+    stock_quantity
+FROM {{ ref('silver.clean_products') }}
+```
+
+Queries filtering by `category` will only scan the relevant partition:
+
+```sql filename="Query Console"
+-- Only scans the 'Electronics' partition
+SELECT * FROM "default"."gold"."products_by_category"
+WHERE category = 'Electronics'
+```
+
+---
+
+## Partition Pruning in Queries
+
+Partition pruning happens automatically when your query includes a filter on the partition column. DuckDB and Iceberg handle this transparently.
+
+### Effective partition pruning
+
+```sql
+-- Scans only the 2026-02 partition
+SELECT * FROM "default"."silver"."clean_orders"
+WHERE order_date >= '2026-02-01' AND order_date < '2026-03-01'
+
+-- Scans only the 'US' partition
+SELECT * FROM "default"."gold"."regional_orders"
+WHERE country = 'US'
+```
+
+### Ineffective partition pruning
+
+```sql
+-- Cannot prune: function wrapping the partition column
+SELECT * FROM "default"."silver"."clean_orders"
+WHERE YEAR(order_date) = 2026
+
+-- Cannot prune: no filter on partition column
+SELECT * FROM "default"."silver"."clean_orders"
+WHERE customer_id = 42
+```
+
+<Callout type="info">
+For partition pruning to work, the filter must be on the **raw partition column** with a direct comparison. Wrapping the column in a function (like `YEAR()`, `MONTH()`) prevents the query engine from applying pruning.
+</Callout>
+
+---
+
+## When NOT to Partition
+
+### Small tables
+
+Tables under 100K rows do not benefit from partitioning. The overhead of maintaining partition metadata exceeds any scan-time savings.
+
+### High-cardinality partition keys
+
+Partitioning on a column with millions of unique values (e.g., `user_id`, `transaction_id`) creates millions of tiny partitions. This causes:
+
+- Excessive metadata in the Iceberg catalog
+- Slower table operations (listing, compaction)
+- Tiny data files that are inefficient to read
+
+### Queries that never filter on the partition
+
+If your primary query patterns do full table scans or filter on non-partition columns, partitioning adds overhead without benefit.
+
+---
+
+## Changing Partition Scheme
+
+Changing the `partition_by` configuration on an existing table requires a full refresh to reorganize the data files:
+
+1. Update `config.yaml` with the new `partition_by` spec
+2. Temporarily change `merge_strategy` to `full_refresh`
+3. Run the pipeline once — this rewrites all data with the new partition layout
+4. Change `merge_strategy` back to the desired strategy
+5. Publish the updated pipeline
+
+<Callout type="warning">
+Changing the partition scheme on a large table can take significant time because all data files must be rewritten. Plan for this during maintenance windows.
+</Callout>
+
+---
+
+## Best Practices
+
+1. **Partition by the column you filter most** — usually a date column for time-series data
+2. **Use `month` as the default transform** — provides a good balance between partition count and size
+3. **Monitor partition count** — aim for dozens to low hundreds of partitions, not thousands
+4. **Match partition granularity to query patterns** — if you always query by day, partition by day; if by month, partition by month
+5. **Combine with `partition_column` for snapshots** — the snapshot strategy requires it, and it gives you idempotent partition-level overwriting

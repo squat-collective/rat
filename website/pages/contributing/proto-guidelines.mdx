@@ -1,0 +1,421 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Proto Guidelines
+
+RAT uses Protocol Buffers (protobuf) for service-to-service communication via ConnectRPC. All `.proto` files live in the `proto/` directory and are the source of truth for gRPC service definitions, message types, and API contracts.
+
+---
+
+## Tooling
+
+| Tool | Version | Purpose |
+|---|---|---|
+| **buf** | 1.35+ | Linting, breaking change detection, code generation |
+| **ConnectRPC** | Latest | gRPC framework (Go + Python + TypeScript) |
+| **protoc** | — | Not used directly (buf handles compilation) |
+
+All proto operations are containerized through Make targets:
+
+```bash filename="Terminal"
+make proto    # generate Go + Python code from proto files
+make lint     # includes buf lint
+```
+
+---
+
+## File Layout
+
+```
+proto/
+├── buf.yaml                          # buf workspace configuration
+├── buf.gen.yaml                      # code generation targets
+├── runner/v1/runner.proto            # Runner service (4 RPCs)
+├── query/v1/query.proto              # Query service (4 RPCs)
+├── plugin/v1/plugin.proto            # Base PluginService (HealthCheck)
+├── auth/v1/auth.proto                # Auth plugin (Authenticate, Authorize)
+├── sharing/v1/sharing.proto          # Sharing plugin (4 RPCs)
+├── enforcement/v1/enforcement.proto  # Enforcement plugin (2 RPCs)
+└── common/v1/common.proto            # Shared types (Timestamp, Layer, RunStatus)
+```
+
+### Generated Code Output
+
+Code generation outputs to:
+
+| Language | Output Directory | Used By |
+|---|---|---|
+| Go | `platform/gen/` | ratd |
+| Python | `runner/src/rat_runner/gen/` | runner |
+| Python | `query/src/rat_query/gen/` | ratq |
+
+<Callout type="info">
+Generated code is **not committed** to the repository. It is generated on-demand with `make proto` and gitignored. The `make setup` target runs `make proto` as part of first-time setup.
+</Callout>
+
+---
+
+## Conventions
+
+### Package Naming
+
+Every proto file belongs to a versioned package:
+
+```protobuf filename="proto/runner/v1/runner.proto"
+syntax = "proto3";
+package ratatouille.runner.v1;
+```
+
+**Rules:**
+- Root namespace: `ratatouille`
+- Service name: `runner`, `query`, `plugin`, `auth`, `sharing`, `enforcement`, `common`
+- Version: `v1`, `v2`, etc.
+- Full pattern: `ratatouille.{service}.{version}`
+
+### Service Naming
+
+Services use verb-noun naming for RPCs:
+
+```protobuf filename="proto/runner/v1/runner.proto"
+service RunnerService {
+  rpc SubmitPipeline(SubmitPipelineRequest) returns (SubmitPipelineResponse);
+  rpc GetRunStatus(GetRunStatusRequest) returns (GetRunStatusResponse);
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry);
+  rpc CancelRun(CancelRunRequest) returns (CancelRunResponse);
+}
+```
+
+**Naming patterns:**
+- `Get` — retrieve a single resource
+- `List` — retrieve multiple resources
+- `Create` / `Submit` — create a new resource or start an operation
+- `Update` — modify an existing resource
+- `Delete` / `Cancel` — remove a resource or stop an operation
+- `Stream` — server-side streaming
+
+### Message Naming
+
+Every RPC has its own dedicated Request and Response messages:
+
+```protobuf filename="Do"
+rpc SubmitPipeline(SubmitPipelineRequest) returns (SubmitPipelineResponse);
+rpc GetRunStatus(GetRunStatusRequest) returns (GetRunStatusResponse);
+```
+
+```protobuf filename="Don't — shared request types"
+rpc SubmitPipeline(PipelineRequest) returns (PipelineResponse);
+rpc GetRunStatus(PipelineRequest) returns (RunStatusResponse);  // reusing PipelineRequest
+```
+
+<Callout type="warning">
+Never share request or response messages between RPCs. Even if two RPCs take the same fields today, they will diverge as the API evolves. Dedicated messages per RPC allow independent evolution without breaking changes.
+</Callout>
+
+### Field Naming
+
+Fields use `snake_case`:
+
+```protobuf filename="Do"
+message SubmitPipelineRequest {
+  string namespace = 1;
+  string layer = 2;
+  string pipeline_name = 3;
+  string trigger = 4;
+}
+```
+
+```protobuf filename="Don't"
+message SubmitPipelineRequest {
+  string Namespace = 1;     // PascalCase
+  string pipelineName = 3;  // camelCase
+}
+```
+
+### Field Numbers
+
+- Numbers 1-15 use 1 byte on the wire (use for frequently-set fields)
+- Numbers 16-2047 use 2 bytes
+- Never reuse a field number after removing a field — use `reserved`
+
+```protobuf filename="Reserving removed fields"
+message Pipeline {
+  reserved 4, 7;
+  reserved "old_field_name", "deprecated_field";
+
+  string namespace = 1;
+  string layer = 2;
+  string name = 3;
+  // field 4 was removed (old_field_name)
+  string owner = 5;
+}
+```
+
+---
+
+## Service Definitions
+
+### RunnerService (4 RPCs)
+
+```protobuf filename="proto/runner/v1/runner.proto"
+service RunnerService {
+  // Submit a pipeline for execution. Returns a run handle immediately.
+  rpc SubmitPipeline(SubmitPipelineRequest) returns (SubmitPipelineResponse);
+
+  // Get the current status of a run (pending, running, completed, failed).
+  rpc GetRunStatus(GetRunStatusRequest) returns (GetRunStatusResponse);
+
+  // Stream real-time log entries for a run. Server-side streaming.
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry);
+
+  // Cancel a running pipeline. No-op if already completed.
+  rpc CancelRun(CancelRunRequest) returns (CancelRunResponse);
+}
+```
+
+### QueryService (4 RPCs)
+
+```protobuf filename="proto/query/v1/query.proto"
+service QueryService {
+  // Execute a read-only SQL query via DuckDB.
+  rpc ExecuteQuery(ExecuteQueryRequest) returns (ExecuteQueryResponse);
+
+  // Get the schema (columns, types) of an Iceberg table.
+  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
+
+  // Preview a pipeline's output using _samples data.
+  rpc PreviewPipeline(PreviewPipelineRequest) returns (PreviewPipelineResponse);
+
+  // Cancel a running query.
+  rpc CancelQuery(CancelQueryRequest) returns (CancelQueryResponse);
+}
+```
+
+### PluginService (Base)
+
+Every plugin implements this base service for health checking:
+
+```protobuf filename="proto/plugin/v1/plugin.proto"
+service PluginService {
+  // Health check — returns plugin status and version.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+```
+
+### Shared Types
+
+Common types used across multiple services:
+
+```protobuf filename="proto/common/v1/common.proto"
+enum Layer {
+  LAYER_UNSPECIFIED = 0;
+  LAYER_BRONZE = 1;
+  LAYER_SILVER = 2;
+  LAYER_GOLD = 3;
+}
+
+enum RunStatus {
+  RUN_STATUS_UNSPECIFIED = 0;
+  RUN_STATUS_PENDING = 1;
+  RUN_STATUS_RUNNING = 2;
+  RUN_STATUS_COMPLETED = 3;
+  RUN_STATUS_FAILED = 4;
+  RUN_STATUS_CANCELLED = 5;
+}
+```
+
+---
+
+## Versioning
+
+### Versioned Packages
+
+Every proto package is versioned (`v1`, `v2`, etc.). This enables backward-compatible evolution:
+
+```
+proto/runner/v1/runner.proto    # current version
+proto/runner/v2/runner.proto    # future version (when breaking changes are needed)
+```
+
+### Rules
+
+1. **Never break an existing proto version**. Adding fields is fine. Removing or renaming fields is breaking.
+2. **Add new fields with new numbers**. Never reuse a field number.
+3. **New enum values can be added** at the end. Never change existing values.
+4. **For breaking changes**, create a new version (`v2`) and support both for a transition period.
+
+### What is a Breaking Change?
+
+| Change | Breaking? | Notes |
+|---|---|---|
+| Add a new field | No | Old clients ignore unknown fields |
+| Add a new RPC | No | Old clients do not call it |
+| Add a new enum value | No | Old clients treat it as the default (0) value |
+| Remove a field | **Yes** | Old clients may still send it |
+| Rename a field | **Yes** | Wire format uses numbers, but generated code changes |
+| Change a field type | **Yes** | Wire format is incompatible |
+| Change a field number | **Yes** | Wire format is incompatible |
+| Remove an RPC | **Yes** | Old clients will get "not found" errors |
+| Remove an enum value | **Yes** | Old clients may still send it |
+
+---
+
+## buf Configuration
+
+### buf.yaml
+
+Defines the workspace and lint rules:
+
+```yaml filename="proto/buf.yaml"
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    - PACKAGE_VERSION_SUFFIX
+breaking:
+  use:
+    - FILE
+```
+
+### buf.gen.yaml
+
+Defines code generation targets:
+
+```yaml filename="proto/buf.gen.yaml"
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/squat-collective/rat/platform/gen
+plugins:
+  # Go
+  - remote: buf.build/protocolbuffers/go
+    out: ../platform/gen
+    opt: paths=source_relative
+  - remote: buf.build/connectrpc/go
+    out: ../platform/gen
+    opt: paths=source_relative
+
+  # Python
+  - remote: buf.build/protocolbuffers/python
+    out: ../runner/src/rat_runner/gen
+  - remote: buf.build/grpc/python
+    out: ../runner/src/rat_runner/gen
+```
+
+---
+
+## Linting and Breaking Change Detection
+
+### buf lint
+
+Checks proto files against style rules. Runs as part of `make lint`:
+
+```bash filename="Terminal"
+make lint    # includes buf lint
+
+# Or run buf lint directly in Docker
+docker run --rm -v $(pwd)/proto:/workspace -w /workspace bufbuild/buf:1.35.0 lint
+```
+
+Common lint errors:
+
+| Error | Fix |
+|---|---|
+| `FIELD_LOWER_SNAKE_CASE` | Rename field to `snake_case` |
+| `SERVICE_SUFFIX` | Service name must end with `Service` |
+| `RPC_REQUEST_RESPONSE_UNIQUE` | Each RPC must have unique Request/Response types |
+| `ENUM_ZERO_VALUE_SUFFIX` | First enum value must end with `_UNSPECIFIED` |
+| `PACKAGE_DIRECTORY_MATCH` | Package name must match directory path |
+
+### buf breaking
+
+Detects backward-incompatible changes against the main branch. Runs in CI:
+
+```bash filename="Terminal"
+docker run --rm -v $(pwd)/proto:/workspace -w /workspace \
+  bufbuild/buf:1.35.0 breaking --against '.git#branch=main'
+```
+
+This compares your current proto files against the `main` branch and reports any breaking changes. PRs that introduce breaking changes are blocked by CI.
+
+---
+
+## Code Generation Workflow
+
+<Steps>
+
+### Edit the proto file
+
+Make your changes to the relevant `.proto` file in `proto/`.
+
+### Run buf lint
+
+```bash filename="Terminal"
+make lint
+```
+
+Fix any lint errors before proceeding.
+
+### Generate code
+
+```bash filename="Terminal"
+make proto
+```
+
+This generates Go and Python stubs from all proto files.
+
+### Write tests for the new RPC
+
+Following TDD, write tests for the new service method before implementing it.
+
+### Implement the service
+
+Implement the generated interface in the relevant service (ratd, runner, or ratq).
+
+### Run tests
+
+```bash filename="Terminal"
+make test-go    # if Go implementation
+make test-py    # if Python implementation
+```
+
+</Steps>
+
+---
+
+## Commenting Proto Files
+
+Comment every service, RPC, message, and non-obvious field:
+
+```protobuf filename="Well-documented proto"
+// RunnerService handles pipeline execution.
+// It is called by ratd to dispatch pipelines to the warm pool executor.
+service RunnerService {
+  // SubmitPipeline starts a new pipeline execution.
+  // Returns immediately with a run handle — use GetRunStatus to poll for completion.
+  rpc SubmitPipeline(SubmitPipelineRequest) returns (SubmitPipelineResponse);
+}
+
+// SubmitPipelineRequest contains all information needed to start a pipeline run.
+message SubmitPipelineRequest {
+  // The namespace containing the pipeline.
+  string namespace = 1;
+
+  // The data layer (bronze, silver, gold).
+  string layer = 2;
+
+  // The pipeline name (unique within namespace + layer).
+  string pipeline_name = 3;
+
+  // What triggered this run. Examples: "manual", "schedule:hourly", "trigger:upstream".
+  string trigger = 4;
+}
+```
+
+<Callout type="info">
+Proto comments are the primary documentation for the gRPC API. They are included in generated code as doc comments, making them visible in IDE autocomplete and documentation tools.
+</Callout>

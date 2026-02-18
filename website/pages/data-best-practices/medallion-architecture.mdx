@@ -1,0 +1,374 @@
+import { Callout, Steps } from 'nextra/components'
+import { Mermaid } from '@/components/mermaid'
+
+# Medallion Architecture
+
+The medallion architecture is a data design pattern that organizes data into three layers — **Bronze**, **Silver**, and **Gold** — each with increasing levels of quality, structure, and business meaning. RAT is built around this pattern: every pipeline belongs to one of these three layers.
+
+---
+
+## The Three Layers
+
+<Mermaid chart={`flowchart LR
+    subgraph Sources
+        S1[CSV Files]
+        S2[API Responses]
+        S3[Parquet Exports]
+    end
+    subgraph Bronze
+        B1[raw_orders]
+        B2[raw_customers]
+        B3[raw_products]
+    end
+    subgraph Silver
+        SV1[clean_orders]
+        SV2[clean_customers]
+        SV3[clean_products]
+    end
+    subgraph Gold
+        G1[daily_revenue]
+        G2[customer_360]
+        G3[product_performance]
+    end
+    S1 --> B1
+    S2 --> B2
+    S3 --> B3
+    B1 --> SV1
+    B2 --> SV2
+    B3 --> SV3
+    SV1 --> G1
+    SV2 --> G2
+    SV3 --> G3
+    SV1 --> G2
+    SV2 --> G2
+`} />
+
+### Bronze — Raw Data
+
+Bronze is the **landing layer**. Data enters here with minimal or no transformation. The goal is to capture the raw source data as faithfully as possible.
+
+**Responsibilities**:
+- Ingest files from landing zones
+- Preserve original data types and values
+- Add ingestion metadata (timestamps, source file names)
+- Light filtering (e.g., skip empty rows)
+- No business logic, no data cleaning
+
+**Merge strategies**: `full_refresh` or `append_only`
+
+```sql filename="bronze/ingest_orders/pipeline.sql"
+-- @merge_strategy: append_only
+
+SELECT
+    *,
+    current_timestamp AS _ingested_at,
+    '{{ run_started_at }}' AS _run_started_at
+FROM {{ landing_zone('raw_orders') }}
+```
+
+### Silver — Cleaned and Conformed
+
+Silver is the **business entity layer**. Data is cleaned, deduplicated, typed, and organized into well-defined business entities.
+
+**Responsibilities**:
+- Deduplicate records (using `unique_key`)
+- Cast data types (strings to dates, decimals, etc.)
+- Standardize formats (dates, currencies, codes)
+- Filter invalid records
+- Rename columns to business-friendly names
+- Join reference data
+- Handle NULLs and defaults
+
+**Merge strategies**: `incremental`, `delete_insert`, `scd2`
+
+```sql filename="silver/clean_orders/pipeline.sql"
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+-- @watermark_column: updated_at
+
+SELECT
+    CAST(order_id AS INTEGER) AS order_id,
+    CAST(customer_id AS INTEGER) AS customer_id,
+    CAST(total_amount AS DECIMAL(10,2)) AS total_amount,
+    UPPER(TRIM(status)) AS status,
+    CAST(order_date AS DATE) AS order_date,
+    CAST(updated_at AS TIMESTAMP) AS updated_at
+FROM {{ ref('bronze.ingest_orders') }}
+WHERE order_id IS NOT NULL
+  AND total_amount IS NOT NULL
+{% if is_incremental() %}
+  AND updated_at > '{{ watermark_value }}'
+{% endif %}
+```
+
+### Gold — Business-Ready Analytics
+
+Gold is the **analytics layer**. Data is aggregated, denormalized, and shaped for specific business use cases — dashboards, reports, ML features.
+
+**Responsibilities**:
+- Aggregate data (sums, counts, averages)
+- Denormalize (join multiple Silver tables into wide tables)
+- Compute business metrics (revenue, churn, conversion rates)
+- Create time-series (daily/weekly/monthly rollups)
+- Build dimension tables for BI tools
+
+**Merge strategies**: `full_refresh` or `snapshot`
+
+```sql filename="gold/daily_revenue/pipeline.sql"
+-- @merge_strategy: full_refresh
+
+SELECT
+    DATE_TRUNC('day', o.order_date) AS revenue_date,
+    COUNT(DISTINCT o.order_id) AS order_count,
+    COUNT(DISTINCT o.customer_id) AS unique_customers,
+    SUM(o.total_amount) AS total_revenue,
+    AVG(o.total_amount) AS avg_order_value
+FROM {{ ref('silver.clean_orders') }} o
+WHERE o.status NOT IN ('cancelled', 'refunded')
+GROUP BY revenue_date
+ORDER BY revenue_date
+```
+
+---
+
+## Why Use Layers?
+
+### 1. Isolation of Concerns
+
+Each layer has a single, clear purpose. A Bronze pipeline should never contain business logic. A Gold pipeline should never handle data cleaning. This separation makes pipelines easier to understand, test, and maintain.
+
+### 2. Incremental Reprocessing
+
+When source data changes or a bug is found, you only need to re-run the affected layer:
+
+- Source schema change? Re-run Bronze.
+- Business rule change? Re-run Silver.
+- New dashboard metric? Add or re-run Gold.
+
+Downstream layers automatically pick up the changes.
+
+### 3. Data Quality Gates
+
+Quality tests between layers act as gates. A Silver pipeline can enforce strict type requirements and NOT NULL constraints. If the data fails, the branch is discarded and Gold tables are not contaminated with bad data.
+
+### 4. Debugging and Auditing
+
+When a Gold metric looks wrong, you can trace the issue through the layers:
+
+1. Check the Gold query logic
+2. Inspect the Silver data for correctness
+3. Examine the Bronze raw data
+4. Look at the landing zone source files
+
+Each layer is independently queryable through the Query Console.
+
+---
+
+## Real-World Example: E-Commerce
+
+Let's walk through a complete e-commerce example with orders, customers, and products flowing through all three layers.
+
+### Source Data
+
+Three CSV files arrive daily in landing zones:
+
+```csv filename="raw_orders landing zone"
+order_id,customer_id,product_id,quantity,unit_price,status,order_date,updated_at
+1001,42,SKU-100,2,29.99,confirmed,2026-02-15,2026-02-15T10:30:00Z
+1002,17,SKU-200,1,149.99,pending,2026-02-15,2026-02-15T11:00:00Z
+1003,42,SKU-100,1,29.99,shipped,2026-02-14,2026-02-15T14:00:00Z
+```
+
+```csv filename="raw_customers landing zone"
+customer_id,name,email,country,created_at
+42,Jane Smith,jane@example.com,US,2025-01-15
+17,Bob Jones,bob@example.com,UK,2025-06-20
+```
+
+```csv filename="raw_products landing zone"
+product_id,name,category,list_price
+SKU-100,Wireless Mouse,Electronics,29.99
+SKU-200,Standing Desk,Furniture,149.99
+```
+
+### Bronze Layer
+
+```sql filename="bronze/ingest_orders/pipeline.sql"
+-- @merge_strategy: append_only
+
+SELECT *, current_timestamp AS _ingested_at
+FROM {{ landing_zone('raw_orders') }}
+```
+
+```sql filename="bronze/ingest_customers/pipeline.sql"
+-- @merge_strategy: full_refresh
+
+SELECT *, current_timestamp AS _ingested_at
+FROM {{ landing_zone('raw_customers') }}
+```
+
+```sql filename="bronze/ingest_products/pipeline.sql"
+-- @merge_strategy: full_refresh
+
+SELECT *, current_timestamp AS _ingested_at
+FROM {{ landing_zone('raw_products') }}
+```
+
+### Silver Layer
+
+```sql filename="silver/clean_orders/pipeline.sql"
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+-- @watermark_column: updated_at
+
+SELECT
+    CAST(order_id AS INTEGER) AS order_id,
+    CAST(customer_id AS INTEGER) AS customer_id,
+    CAST(product_id AS VARCHAR) AS product_id,
+    CAST(quantity AS INTEGER) AS quantity,
+    CAST(unit_price AS DECIMAL(10,2)) AS unit_price,
+    quantity * unit_price AS line_total,
+    UPPER(TRIM(status)) AS status,
+    CAST(order_date AS DATE) AS order_date,
+    CAST(updated_at AS TIMESTAMP) AS updated_at
+FROM {{ ref('bronze.ingest_orders') }}
+WHERE order_id IS NOT NULL
+{% if is_incremental() %}
+  AND updated_at > '{{ watermark_value }}'
+{% endif %}
+```
+
+```sql filename="silver/clean_customers/pipeline.sql"
+-- @merge_strategy: incremental
+-- @unique_key: customer_id
+-- @watermark_column: created_at
+
+SELECT
+    CAST(customer_id AS INTEGER) AS customer_id,
+    TRIM(name) AS customer_name,
+    LOWER(TRIM(email)) AS customer_email,
+    UPPER(TRIM(country)) AS country_code,
+    CAST(created_at AS DATE) AS signup_date
+FROM {{ ref('bronze.ingest_customers') }}
+WHERE customer_id IS NOT NULL
+  AND email IS NOT NULL
+```
+
+```sql filename="silver/clean_products/pipeline.sql"
+-- @merge_strategy: incremental
+-- @unique_key: product_id
+
+SELECT
+    TRIM(product_id) AS product_id,
+    TRIM(name) AS product_name,
+    TRIM(category) AS category,
+    CAST(list_price AS DECIMAL(10,2)) AS list_price
+FROM {{ ref('bronze.ingest_products') }}
+```
+
+### Gold Layer
+
+```sql filename="gold/daily_revenue/pipeline.sql"
+-- @merge_strategy: full_refresh
+
+SELECT
+    o.order_date AS revenue_date,
+    COUNT(DISTINCT o.order_id) AS order_count,
+    COUNT(DISTINCT o.customer_id) AS unique_customers,
+    SUM(o.line_total) AS total_revenue,
+    AVG(o.line_total) AS avg_order_value,
+    SUM(o.quantity) AS total_units_sold
+FROM {{ ref('silver.clean_orders') }} o
+WHERE o.status NOT IN ('CANCELLED', 'REFUNDED')
+GROUP BY o.order_date
+```
+
+```sql filename="gold/customer_360/pipeline.sql"
+-- @merge_strategy: full_refresh
+
+SELECT
+    c.customer_id,
+    c.customer_name,
+    c.customer_email,
+    c.country_code,
+    c.signup_date,
+    COUNT(DISTINCT o.order_id) AS total_orders,
+    SUM(o.line_total) AS lifetime_value,
+    MIN(o.order_date) AS first_order_date,
+    MAX(o.order_date) AS last_order_date,
+    DATEDIFF('day', MAX(o.order_date), CURRENT_DATE) AS days_since_last_order
+FROM {{ ref('silver.clean_customers') }} c
+LEFT JOIN {{ ref('silver.clean_orders') }} o
+    ON c.customer_id = o.customer_id
+    AND o.status NOT IN ('CANCELLED', 'REFUNDED')
+GROUP BY c.customer_id, c.customer_name, c.customer_email,
+         c.country_code, c.signup_date
+```
+
+```sql filename="gold/product_performance/pipeline.sql"
+-- @merge_strategy: full_refresh
+
+SELECT
+    p.product_id,
+    p.product_name,
+    p.category,
+    p.list_price,
+    COUNT(DISTINCT o.order_id) AS times_ordered,
+    SUM(o.quantity) AS total_units_sold,
+    SUM(o.line_total) AS total_revenue,
+    COUNT(DISTINCT o.customer_id) AS unique_buyers
+FROM {{ ref('silver.clean_products') }} p
+LEFT JOIN {{ ref('silver.clean_orders') }} o
+    ON p.product_id = o.product_id
+    AND o.status NOT IN ('CANCELLED', 'REFUNDED')
+GROUP BY p.product_id, p.product_name, p.category, p.list_price
+```
+
+---
+
+## Anti-Patterns
+
+### Skipping layers
+
+**Wrong**: Landing zone CSV directly to Gold aggregation table.
+
+This seems faster but creates problems:
+- No place to fix data quality issues without rewriting the Gold pipeline
+- Cannot reprocess Bronze without affecting Gold
+- No intermediate data for debugging
+
+**Right**: Always go through Bronze, then Silver, then Gold, even if the transformations seem trivial.
+
+### Business logic in Bronze
+
+**Wrong**: Filtering, joining, or computing business metrics in a Bronze pipeline.
+
+```sql filename="Bad: Bronze with business logic"
+-- DON'T DO THIS in Bronze
+SELECT
+    o.*,
+    c.customer_name,
+    o.quantity * o.unit_price AS total  -- business logic!
+FROM {{ landing_zone('raw_orders') }} o
+JOIN {{ landing_zone('raw_customers') }} c  -- joining in Bronze!
+    ON o.customer_id = c.customer_id
+WHERE o.status != 'cancelled'  -- filtering in Bronze!
+```
+
+Bronze should be a faithful copy of the source data. Move joins, calculations, and filters to Silver.
+
+### Wide Gold tables with no clear use case
+
+**Wrong**: Creating a 200-column Gold table "just in case" someone needs it.
+
+Each Gold table should serve a specific analytics use case (a dashboard, a report, an ML feature set). If you find yourself creating a "universal" Gold table, split it into focused tables.
+
+### Circular references between layers
+
+**Wrong**: A Silver pipeline reading from a Gold table, or a Bronze pipeline reading from Silver.
+
+Data should always flow **downward**: Bronze -> Silver -> Gold. Cross-layer references in the wrong direction create dependency cycles and make the lineage graph confusing.
+
+<Callout type="info">
+Within the same layer, pipelines can reference each other. For example, a Silver pipeline can read from another Silver table. But the general flow should still be forward through the layers.
+</Callout>

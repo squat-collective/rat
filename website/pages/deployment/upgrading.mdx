@@ -1,0 +1,284 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '../../components/cards'
+
+# Upgrading
+
+This guide covers how to upgrade RAT to a new version, what to expect during the upgrade process, and how to roll back if something goes wrong.
+
+---
+
+## Version Scheme
+
+RAT follows [Semantic Versioning](https://semver.org/) (SemVer):
+
+```
+v2.MAJOR.MINOR
+```
+
+| Component | When Incremented | Example |
+|---|---|---|
+| **MAJOR** | Breaking changes (schema migrations, API changes) | v2.1.0 → v2.2.0 |
+| **MINOR** | New features, non-breaking improvements | v2.1.0 → v2.1.1 |
+
+Releases are tagged in Git with the version number (e.g., `v2.1.0`).
+
+<Callout type="info">
+The `v2` prefix indicates this is the v2 rewrite of RAT. The major version within v2 tracks breaking changes within this generation.
+</Callout>
+
+---
+
+## Upgrade Process
+
+<Steps>
+
+### Read the release notes
+
+Before upgrading, read the release notes for every version between your current version and the target version. Pay attention to:
+
+- **Breaking changes** that require manual action
+- **Database migrations** that will run automatically
+- **Configuration changes** (new/renamed environment variables)
+- **Deprecated features** that will be removed in a future version
+
+```bash filename="Terminal"
+# Check your current version
+curl -s http://localhost:8080/health | jq .version
+
+# View release notes on GitHub
+gh release list --repo squat-collective/rat
+gh release view v2.2.0 --repo squat-collective/rat
+```
+
+### Create a backup
+
+Always backup before upgrading:
+
+```bash filename="Terminal"
+make backup
+```
+
+This creates a timestamped backup of both PostgreSQL and MinIO. See the [Backup & Restore](/deployment/backup-restore) page for details.
+
+### Pull the latest code
+
+```bash filename="Terminal"
+git fetch origin
+git checkout v2.2.0   # checkout the target version tag
+```
+
+Or if you track `main`:
+
+```bash filename="Terminal"
+git pull origin main
+```
+
+### Rebuild images
+
+```bash filename="Terminal"
+make build
+```
+
+This rebuilds all Docker images with the new code. If you want a completely clean build:
+
+```bash filename="Terminal"
+make rebuild
+```
+
+### Restart services
+
+```bash filename="Terminal"
+make restart
+```
+
+This stops all services and starts them again with the new images.
+
+### Verify the upgrade
+
+```bash filename="Terminal"
+# Check health
+curl -s http://localhost:8080/health | jq .
+
+# Check version
+curl -s http://localhost:8080/health | jq .version
+
+# Run smoke test
+make smoke-test
+```
+
+Open the portal at [localhost:3000](http://localhost:3000) and verify that pipelines, runs, and queries work correctly.
+
+</Steps>
+
+---
+
+## Database Migrations
+
+RAT runs database migrations **automatically on startup**. When `ratd` starts, it:
+
+1. Connects to PostgreSQL
+2. Checks the current schema version in the `schema_migrations` table
+3. Applies any pending migrations in order
+4. Continues with normal startup
+
+<Callout type="info">
+Migrations are idempotent — running them multiple times has no effect. If `ratd` restarts during a migration, it will resume from where it left off on the next startup.
+</Callout>
+
+### Migration Behavior
+
+| Scenario | Behavior |
+|---|---|
+| Fresh install | All migrations run from scratch, creating all tables |
+| Upgrade by 1 version | Only the new version's migration runs |
+| Upgrade by multiple versions | All intermediate migrations run in sequence |
+| Downgrade (not supported) | Migrations are forward-only. Use backup/restore for rollback |
+
+### Checking Migration Status
+
+The `schema_migrations` table tracks which migrations have been applied:
+
+```bash filename="Terminal"
+docker compose -f infra/docker-compose.yml exec postgres \
+  psql -U rat -d rat -c "SELECT * FROM schema_migrations ORDER BY version;"
+```
+
+---
+
+## Breaking Changes Policy
+
+RAT follows these rules for breaking changes:
+
+1. **Deprecation first**: Features are deprecated for at least one minor version before removal
+2. **Migration provided**: Database schema changes include automatic migrations
+3. **Configuration changes documented**: New, renamed, or removed environment variables are listed in release notes
+4. **API versioning**: Breaking API changes increment the API version (`/api/v1` → `/api/v2`). Old versions are supported for at least one major release
+5. **Proto compatibility**: Protobuf changes are checked with `buf breaking` in CI. Backward-incompatible changes require a new proto version
+
+### Types of Breaking Changes
+
+| Change | Impact | Mitigation |
+|---|---|---|
+| Database schema change | Automatic migration on startup | No action needed |
+| Renamed environment variable | Service fails to start with old config | Update your `.env` or compose file |
+| Removed API endpoint | Client requests fail with 404 | Update client code to use new endpoint |
+| Changed API response format | Client parsing breaks | Update client code |
+| Proto message change | gRPC calls fail | Rebuild all services together |
+| Behavioral change | Pipelines may produce different results | Test in staging first |
+
+---
+
+## Rollback Procedure
+
+If an upgrade causes problems, you can roll back to the previous version.
+
+<Steps>
+
+### Stop all services
+
+```bash filename="Terminal"
+make down
+```
+
+### Checkout the previous version
+
+```bash filename="Terminal"
+git checkout v2.1.0   # your previous working version
+```
+
+### Restore from backup
+
+Because database migrations are forward-only, you must restore the database from the backup you created before upgrading:
+
+```bash filename="Terminal"
+make restore BACKUP_DIR=./backups/<pre-upgrade-timestamp>
+```
+
+### Rebuild images
+
+```bash filename="Terminal"
+make build
+```
+
+### Start services
+
+```bash filename="Terminal"
+make up
+```
+
+### Verify rollback
+
+```bash filename="Terminal"
+curl -s http://localhost:8080/health | jq .
+make smoke-test
+```
+
+</Steps>
+
+<Callout type="warning">
+Rolling back after a database migration means **restoring from backup**. Any data created between the upgrade and the rollback (new pipeline runs, uploaded files, etc.) will be lost. This is why creating a backup before upgrading is critical.
+</Callout>
+
+---
+
+## Zero-Downtime Upgrades
+
+For environments that cannot tolerate downtime, consider this approach:
+
+### Rolling Update (Multiple Replicas)
+
+If you run multiple `ratd` replicas behind a load balancer:
+
+1. Build new images
+2. Restart one replica at a time
+3. Wait for the new replica to become healthy before restarting the next
+4. The load balancer routes traffic to healthy replicas during the update
+
+<Callout type="info">
+The runner and ratq services are stateless (from the platform's perspective) and can be updated with zero downtime by running multiple replicas. The scheduler uses Postgres advisory locks for leader election, so only one replica runs the scheduler at a time.
+</Callout>
+
+### Blue-Green Deployment
+
+1. Stand up a complete second stack (blue) with the new version
+2. Restore data from a backup to the blue stack
+3. Switch the load balancer from green (old) to blue (new)
+4. If problems occur, switch back to green
+
+This approach requires double the infrastructure but provides the safest upgrade path.
+
+---
+
+## Upgrade Checklist
+
+- [ ] Read release notes for all versions between current and target
+- [ ] Create backup (`make backup`)
+- [ ] Verify backup integrity (spot-check files, dump size)
+- [ ] Pull latest code and checkout target version
+- [ ] Rebuild images (`make build`)
+- [ ] Restart services (`make restart`)
+- [ ] Check health (`curl http://localhost:8080/health`)
+- [ ] Run smoke test (`make smoke-test`)
+- [ ] Verify pipelines in the portal
+- [ ] Monitor logs for errors for 30 minutes
+- [ ] Remove old backup after confirming stability (optional)
+
+---
+
+## Version Compatibility Matrix
+
+When upgrading, all RAT services must run the same version. Do not mix versions across services.
+
+| Component | Must Match | Notes |
+|---|---|---|
+| ratd | All services | Central coordinator |
+| runner | ratd | gRPC protocol compatibility |
+| ratq | ratd | gRPC protocol compatibility |
+| portal | ratd | API compatibility |
+| Proto stubs | All services | Regenerate with `make proto` |
+| SDK | portal | Rebuild with `make sdk-build` |
+| Postgres schema | ratd | Auto-migrated on startup |
+
+<Callout type="error">
+Never run `ratd` version 2.2.0 with a runner at version 2.1.0. Version skew between services can cause gRPC protocol errors, data corruption, or silent behavior changes. Always upgrade all services together.
+</Callout>

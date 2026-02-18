@@ -1,0 +1,275 @@
+import { Callout } from 'nextra/components'
+
+# Health
+
+Health endpoints provide liveness checks, readiness checks, version information, Prometheus metrics, and feature detection. These endpoints are mounted at the root level (outside `/api/v1`) and do not require authentication.
+
+---
+
+## Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | Liveness check (always 200) |
+| `GET` | `/health/live` | Version and build info |
+| `GET` | `/health/ready` | Dependency health checks |
+| `GET` | `/metrics` | Prometheus metrics |
+| `GET` | `/api/v1/features` | Platform features and edition |
+
+---
+
+## Liveness Check
+
+```
+GET /health
+```
+
+Always returns `200 OK` if the process is running. Used by Docker health checks and load balancers to determine if the container is alive.
+
+### Request
+
+```bash
+curl http://localhost:8080/health
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "status": "healthy"
+}
+```
+
+<Callout type="info">
+This endpoint is intentionally simple and has no dependencies. If the HTTP server can respond, the service is alive. For dependency-aware health checking, use `GET /health/ready`.
+</Callout>
+
+---
+
+## Version Info
+
+```
+GET /health/live
+```
+
+Returns version and build information for the running ratd instance.
+
+### Request
+
+```bash
+curl http://localhost:8080/health/live
+```
+
+### Response — `200 OK`
+
+```json
+{
+  "status": "healthy",
+  "version": "2.1.0",
+  "go_version": "go1.22.4",
+  "build_time": "2026-02-15T10:00:00Z",
+  "git_commit": "a1b2c3d"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | `string` | Always `healthy` |
+| `version` | `string` | RAT platform version (semver) |
+| `go_version` | `string` | Go compiler version |
+| `build_time` | `string` | ISO 8601 build timestamp |
+| `git_commit` | `string` | Short git commit hash |
+
+---
+
+## Readiness Check
+
+```
+GET /health/ready
+```
+
+Checks the health of all dependencies (Postgres, S3/MinIO, runner, query service). Returns `200 OK` only when all required dependencies are healthy. Returns `503 Service Unavailable` if any required dependency is down.
+
+### Request
+
+```bash
+curl http://localhost:8080/health/ready
+```
+
+### Response — `200 OK` (all healthy)
+
+```json
+{
+  "status": "ok",
+  "services": {
+    "postgres": "healthy",
+    "s3": "healthy",
+    "runner": "healthy",
+    "query": "healthy"
+  }
+}
+```
+
+### Response — `503 Service Unavailable` (dependency down)
+
+```json
+{
+  "status": "degraded",
+  "services": {
+    "postgres": "healthy",
+    "s3": "healthy",
+    "runner": "unhealthy",
+    "query": "healthy"
+  }
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | `string` | Overall status: `ok` or `degraded` |
+| `services` | `object` | Health status of each dependency |
+| `services.postgres` | `string` | Postgres connection status |
+| `services.s3` | `string` | S3/MinIO connection status |
+| `services.runner` | `string` | Runner gRPC connection status |
+| `services.query` | `string` | Query service (ratq) gRPC connection status |
+
+### Dependency Health
+
+| Dependency | Check | Impact When Down |
+|---|---|---|
+| `postgres` | Connection ping | All API operations fail (state storage) |
+| `s3` | Bucket head request | File operations and pipeline execution fail |
+| `runner` | gRPC health check | Pipeline runs and previews fail |
+| `query` | gRPC health check | Interactive queries and schema browsing fail |
+
+<Callout type="info">
+Kubernetes deployments should use `/health` for the liveness probe and `/health/ready` for the readiness probe. This ensures traffic is only routed to ratd instances that can serve requests with all dependencies available.
+</Callout>
+
+---
+
+## Prometheus Metrics
+
+```
+GET /metrics
+```
+
+Exposes Prometheus-compatible metrics for monitoring and alerting.
+
+### Request
+
+```bash
+curl http://localhost:8080/metrics
+```
+
+### Response — `200 OK`
+
+Returns metrics in Prometheus text exposition format:
+
+```
+# HELP ratd_http_requests_total Total number of HTTP requests
+# TYPE ratd_http_requests_total counter
+ratd_http_requests_total{method="GET",path="/api/v1/pipelines",status="200"} 142
+
+# HELP ratd_http_request_duration_seconds HTTP request duration in seconds
+# TYPE ratd_http_request_duration_seconds histogram
+ratd_http_request_duration_seconds_bucket{method="GET",path="/api/v1/pipelines",le="0.1"} 140
+
+# HELP ratd_runs_total Total pipeline runs
+# TYPE ratd_runs_total counter
+ratd_runs_total{status="success"} 1234
+ratd_runs_total{status="failed"} 56
+
+# HELP ratd_active_runs Current number of active runs
+# TYPE ratd_active_runs gauge
+ratd_active_runs 3
+```
+
+<Callout type="info">
+Configure your Prometheus instance to scrape `http://ratd:8080/metrics` at your desired interval. The metrics endpoint is unauthenticated and does not require API keys.
+</Callout>
+
+---
+
+## Platform Features
+
+```
+GET /api/v1/features
+```
+
+Returns the active platform capabilities, edition, and loaded plugins. The portal uses this endpoint to show or hide UI elements based on available features.
+
+<Callout type="info">
+Unlike other health endpoints, this endpoint is under `/api/v1` and respects the auth middleware when authentication is enabled.
+</Callout>
+
+### Request
+
+```bash
+curl http://localhost:8080/api/v1/features
+```
+
+### Response — `200 OK` (Community Edition)
+
+```json
+{
+  "edition": "community",
+  "plugins": {
+    "auth": { "enabled": false },
+    "sharing": { "enabled": false },
+    "executor": { "enabled": true, "type": "warmpool" },
+    "audit": { "enabled": false },
+    "enforcement": { "enabled": false }
+  },
+  "namespaces": false,
+  "multi_user": false,
+  "landing_zones": true,
+  "license": null
+}
+```
+
+### Response — `200 OK` (Pro Edition)
+
+```json
+{
+  "edition": "pro",
+  "plugins": {
+    "auth": { "enabled": true, "type": "keycloak" },
+    "sharing": { "enabled": true },
+    "executor": { "enabled": true, "type": "warmpool" },
+    "audit": { "enabled": true },
+    "enforcement": { "enabled": true }
+  },
+  "namespaces": true,
+  "multi_user": true,
+  "landing_zones": true,
+  "license": {
+    "type": "pro",
+    "expires_at": "2027-02-15T00:00:00Z",
+    "max_users": 50
+  }
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `edition` | `string` | Platform edition: `community` or `pro` |
+| `plugins` | `object` | Status of each plugin slot |
+| `plugins.auth` | `object` | Authentication plugin status |
+| `plugins.sharing` | `object` | Resource sharing plugin status |
+| `plugins.executor` | `object` | Pipeline executor plugin status and type |
+| `plugins.audit` | `object` | Audit logging plugin status |
+| `plugins.enforcement` | `object` | Access enforcement plugin status |
+| `namespaces` | `boolean` | Whether multi-namespace support is active |
+| `multi_user` | `boolean` | Whether multi-user mode is active |
+| `landing_zones` | `boolean` | Whether landing zones are available |
+| `license` | `object\|null` | License information (Pro only, `null` for Community) |
+| `license.type` | `string` | License type |
+| `license.expires_at` | `string` | ISO 8601 license expiration date |
+| `license.max_users` | `integer` | Maximum number of users allowed |
