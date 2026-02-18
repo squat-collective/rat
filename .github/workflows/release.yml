@@ -149,6 +149,7 @@ jobs:
 
       - name: Publish
         run: npm publish --tag ${{ needs.meta.outputs.is_prerelease == 'true' && 'next' || 'latest' }}
+        continue-on-error: true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
