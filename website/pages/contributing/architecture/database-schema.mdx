@@ -1,5 +1,5 @@
 import { Callout, Steps, Tabs } from 'nextra/components'
-import { Card, Cards } from '../../components/cards'
+import { Card, Cards } from '@/components/cards'
 import { Mermaid } from '@/components/mermaid'
 
 # Database Schema
@@ -200,7 +200,7 @@ CREATE TABLE runs (
 | `rows_written` | BIGINT | Number of rows written to Iceberg |
 | `error` | TEXT | Error message if run failed |
 | `logs` | JSONB | Structured log entries (persisted on completion) |
-| `phase_profiles` | JSONB | Per-phase timing data (see [Pipeline Execution](/architecture/pipeline-execution)) |
+| `phase_profiles` | JSONB | Per-phase timing data (see [Pipeline Execution](/contributing/architecture/pipeline-execution)) |
 
 **Indexes**:
 ```sql

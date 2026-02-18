@@ -1,9 +1,9 @@
 import { Callout, Steps, Tabs } from 'nextra/components'
-import { Card, Cards } from '../../components/cards'
+import { Card, Cards } from '@/components/cards'
 
 # Part 4: Merge Strategies & Incremental Loading ⚡
 
-**Time:** ~15 minutes | **Prerequisites:** [Part 3](/tutorial/part3-building-layers) completed (Silver pipeline running)
+**Time:** ~15 minutes | **Prerequisites:** [Part 3](/getting-started/tutorial/part3-building-layers) completed (Silver pipeline running)
 
 So far, every time you run a pipeline, RAT drops the table and recreates it from scratch.
 That works fine for small datasets, but imagine ingesting millions of rows per day — you
@@ -274,7 +274,7 @@ pipelines.
 bad data from propagating.
 
 <Cards num={1}>
-  <Card title="Part 5: Quality Tests →" href="/tutorial/part5-quality-tests">
+  <Card title="Part 5: Quality Tests →" href="/getting-started/tutorial/part5-quality-tests">
     Gate pipeline merges with SQL quality tests. Catch bad data before it lands. ~10 min
   </Card>
 </Cards>

@@ -1,5 +1,5 @@
 import { Callout, Steps, Tabs } from 'nextra/components'
-import { Card, Cards } from '../../components/cards'
+import { Card, Cards } from '@/components/cards'
 import { Mermaid } from '@/components/mermaid'
 
 # Services
@@ -306,7 +306,7 @@ Postgres stores all platform metadata. It is **not** a data warehouse --- all ac
 
 ### Key Responsibilities
 
-- **16 tables** of platform state (see [Database Schema](/architecture/database-schema))
+- **16 tables** of platform state (see [Database Schema](/contributing/architecture/database-schema))
 - **Advisory locks** for leader election (ensures only one ratd instance runs the scheduler and reaper)
 - **Schema migrations** managed by ratd on startup
 - **Nessie persistence** --- Nessie also uses this Postgres instance (via JDBC) to persist its catalog metadata
@@ -431,7 +431,7 @@ Without Nessie, a failed pipeline run could leave corrupted or partial data in y
 - **Atomic merges** --- merges are all-or-nothing. If a merge fails (conflict), the branch is deleted and the run fails cleanly.
 - **Rollback capability** --- because Nessie tracks commit history, you can inspect the state of any table at any point in time.
 
-See [Nessie Branching](/architecture/nessie-branching) for the full branch lifecycle.
+See [Nessie Branching](/contributing/architecture/nessie-branching) for the full branch lifecycle.
 
 ### Health Check
 

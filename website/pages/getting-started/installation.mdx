@@ -1,5 +1,5 @@
 import { Callout, Steps, Tabs } from 'nextra/components'
-import { Card, Cards } from '../../components/cards'
+import { Card, Cards } from '@/components/cards'
 
 # Installation
 
@@ -168,7 +168,7 @@ debugging and verifying that pipeline data has been written correctly.
 
 <Callout type="warning">
 These are development credentials. If you deploy RAT in production, change them in your
-`.env` file. See the [Deployment](/deployment) section for guidance.
+`.env` file. See the [Deployment](/self-hosting) section for guidance.
 </Callout>
 
 ---
@@ -205,7 +205,7 @@ docker compose up -d
 
 If you pinned a version, update the tags in `docker-compose.yml` first (or re-run the installer with `--version=X.Y.Z`).
 
-See the full [Upgrading guide](/deployment/upgrading) for backup procedures, rollback, and migration details.
+See the full [Upgrading guide](/self-hosting/upgrading) for backup procedures, rollback, and migration details.
 
 ---
 

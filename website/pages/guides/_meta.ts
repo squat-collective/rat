@@ -1,10 +1,12 @@
 export default {
+  "---pipelines": { type: "separator", title: "Pipelines" },
   "sql-pipelines": "SQL Pipelines",
   "python-pipelines": "Python Pipelines",
   "merge-strategies": "Merge Strategies",
   "incremental-pipelines": "Incremental Pipelines",
-  "quality-tests": "Quality Tests",
   "landing-zones": "Landing Zones",
+  "---features": { type: "separator", title: "Platform Features" },
+  "quality-tests": "Quality Tests",
   scheduling: "Scheduling",
   "pipeline-triggers": "Pipeline Triggers",
   versioning: "Versioning",
@@ -12,4 +14,6 @@ export default {
   lineage: "Lineage",
   "data-retention": "Data Retention",
   "table-metadata": "Table Metadata",
+  "---best-practices": { type: "separator", title: "Best Practices" },
+  "best-practices": "Best Practices",
 };

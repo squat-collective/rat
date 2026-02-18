@@ -1,5 +1,5 @@
 import { Callout, Steps, Tabs } from 'nextra/components'
-import { Card, Cards } from '../../components/cards'
+import { Card, Cards } from '@/components/cards'
 
 # Monitoring
 
@@ -341,7 +341,7 @@ The runner's DuckDB instance may be processing a large dataset:
 docker stats --no-stream runner
 ```
 
-If memory is consistently near the limit, increase `DUCKDB_MEMORY_LIMIT` and the container memory limit. See the [Docker Compose](/deployment/docker-compose) page for tuning details.
+If memory is consistently near the limit, increase `DUCKDB_MEMORY_LIMIT` and the container memory limit. See the [Docker Compose](/self-hosting/docker-compose) page for tuning details.
 
 ### Logs show "connection refused" errors
 

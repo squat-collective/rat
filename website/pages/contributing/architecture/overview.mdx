@@ -1,5 +1,5 @@
 import { Callout, Steps, Tabs } from 'nextra/components'
-import { Card, Cards } from '../../components/cards'
+import { Card, Cards } from '@/components/cards'
 import { Mermaid } from '@/components/mermaid'
 
 # Architecture Overview
@@ -200,7 +200,7 @@ Every container is hardened with defense-in-depth:
 - **JSON body size limit** (1 MB) on ratd to prevent request flooding
 - **Rate limiting** (50 req/s per IP, burst 100) on all API endpoints
 
-See the [Security](/architecture/security) page for the complete security model.
+See the [Security](/contributing/architecture/security) page for the complete security model.
 
 ---
 
@@ -217,23 +217,23 @@ See the [Security](/architecture/security) page for the complete security model.
 | Platform state | Postgres | 16 relational tables |
 | Run logs | Postgres (JSONB column) | Structured log entries |
 
-See [Storage Layout](/architecture/storage-layout) for the full S3 directory structure and [Database Schema](/architecture/database-schema) for the Postgres tables.
+See [Storage Layout](/contributing/architecture/storage-layout) for the full S3 directory structure and [Database Schema](/contributing/architecture/database-schema) for the Postgres tables.
 
 ---
 
 ## Next Steps
 
 <Cards>
-  <Card title="Services Deep Dive" href="/architecture/services">
+  <Card title="Services Deep Dive" href="/contributing/architecture/services">
     Detailed breakdown of each service's responsibilities and internals
   </Card>
-  <Card title="Data Flow" href="/architecture/data-flow">
+  <Card title="Data Flow" href="/contributing/architecture/data-flow">
     Sequence diagrams showing how data moves through the system
   </Card>
-  <Card title="Pipeline Execution" href="/architecture/pipeline-execution">
+  <Card title="Pipeline Execution" href="/contributing/architecture/pipeline-execution">
     The 5-phase execution model in detail
   </Card>
-  <Card title="Security Model" href="/architecture/security">
+  <Card title="Security Model" href="/contributing/architecture/security">
     Authentication, authorization, sandboxing, and hardening
   </Card>
 </Cards>

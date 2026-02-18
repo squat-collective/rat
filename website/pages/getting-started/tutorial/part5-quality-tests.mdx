@@ -1,9 +1,9 @@
 import { Callout, Steps, Tabs } from 'nextra/components'
-import { Card, Cards } from '../../components/cards'
+import { Card, Cards } from '@/components/cards'
 
 # Part 5: Quality Tests 🛡️
 
-**Time:** ~10 minutes | **Prerequisites:** [Part 4](/tutorial/part4-merge-strategies) completed (incremental pipeline running)
+**Time:** ~10 minutes | **Prerequisites:** [Part 4](/getting-started/tutorial/part4-merge-strategies) completed (incremental pipeline running)
 
 Data pipelines are only as good as the data they produce. A single `NULL` primary key or
 an unexpected value in a critical column can cascade through your entire pipeline DAG and
@@ -265,7 +265,7 @@ before it ever reaches the `enriched_launches` Silver table downstream.
 transformations that go beyond what SQL can do.
 
 <Cards num={1}>
-  <Card title="Part 6: Python Pipelines →" href="/tutorial/part6-python-pipelines">
+  <Card title="Part 6: Python Pipelines →" href="/getting-started/tutorial/part6-python-pipelines">
     Write Python pipelines using DuckDB and PyArrow for complex transformations. ~10 min
   </Card>
 </Cards>

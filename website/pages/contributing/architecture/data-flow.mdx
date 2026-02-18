@@ -1,5 +1,5 @@
 import { Callout, Steps, Tabs } from 'nextra/components'
-import { Card, Cards } from '../../components/cards'
+import { Card, Cards } from '@/components/cards'
 import { Mermaid } from '@/components/mermaid'
 
 # Data Flow
@@ -80,7 +80,7 @@ ratd inserts a new row in the `runs` table with `status=pending` and dispatches 
 
 ### Runner executes the 5-phase pipeline
 
-The runner performs branch creation, config loading, SQL execution, Iceberg writes, and quality testing. See [Pipeline Execution](/architecture/pipeline-execution) for the full breakdown.
+The runner performs branch creation, config loading, SQL execution, Iceberg writes, and quality testing. See [Pipeline Execution](/contributing/architecture/pipeline-execution) for the full breakdown.
 
 ### Runner calls back to ratd
 

@@ -1,6 +1,8 @@
 export default {
   installation: "Installation",
-  "first-pipeline": "Your First Pipeline",
-  "portal-tour": "Portal Tour",
   concepts: "Core Concepts",
+  "portal-tour": "Portal Tour",
+  "first-pipeline": "Your First Pipeline",
+  "---": { type: "separator", title: "Hands-On" },
+  tutorial: "Tutorial",
 };
