@@ -3,7 +3,7 @@ import { Card, Cards } from '../../components/cards'
 
 # Installation
 
-Get RAT up and running on your machine in under 5 minutes. All you need is Docker.
+Get RAT up and running on your machine in under 5 minutes. No git clone needed — just Docker.
 
 ---
 
@@ -31,42 +31,43 @@ Most modern Docker Desktop installations include V2 by default.
 
 ---
 
-## Install RAT
+## Quick Install
+
+Run a single command to download everything and start RAT:
+
+```bash filename="Terminal"
+curl -fsSL https://raw.githubusercontent.com/squat-collective/rat/main/install/install.sh | bash -s -- --start
+```
+
+This creates a `rat/` directory with `docker-compose.yml` and `.env`, then starts all services. Once complete, open **[http://localhost:3000](http://localhost:3000)**.
+
+---
+
+## Manual Install
+
+If you prefer to do things step by step:
 
 <Steps>
 
-### Clone the repository
+### Create a directory and download files
 
 ```bash filename="Terminal"
-git clone https://github.com/squat-collective/rat.git
-cd rat
+mkdir rat && cd rat
+curl -fsSL https://raw.githubusercontent.com/squat-collective/rat/main/install/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/squat-collective/rat/main/install/.env -o .env
 ```
 
 ### Start all services
 
-You have two options to start RAT:
-
-<Tabs items={['make (recommended)', 'docker compose']}>
-<Tabs.Tab>
 ```bash filename="Terminal"
-make up
-```
-
-The `make up` command builds all images (if needed) and starts every service in the
-correct order with health check dependencies.
-</Tabs.Tab>
-<Tabs.Tab>
-```bash filename="Terminal"
-docker compose -f infra/docker-compose.yml up -d
+docker compose up -d
 ```
 
 The `-d` flag runs containers in detached mode so you get your terminal back.
-</Tabs.Tab>
-</Tabs>
 
 <Callout type="info">
-The first start takes 2-5 minutes because Docker needs to pull base images and build
-the application containers. Subsequent starts are much faster thanks to layer caching.
+The first start takes 2-5 minutes because Docker needs to pull all images.
+Subsequent starts are much faster thanks to layer caching.
 </Callout>
 
 ### Wait for health checks
@@ -74,21 +75,26 @@ the application containers. Subsequent starts are much faster thanks to layer ca
 All services register health checks with Docker. Wait until every container reports `healthy`:
 
 ```bash filename="Terminal"
-docker compose -f infra/docker-compose.yml ps
+docker compose ps
 ```
 
 You should see output similar to:
 
 ```
-NAME        STATUS                  PORTS
-postgres    Up 30s (healthy)        5432/tcp
-minio       Up 30s (healthy)        9000/tcp, 0.0.0.0:9001->9001/tcp
-nessie      Up 30s (healthy)        0.0.0.0:19120->19120/tcp
-ratd        Up 25s (healthy)        0.0.0.0:8080->8080/tcp
-runner      Up 20s (healthy)        50051/tcp
-ratq        Up 20s (healthy)        50052/tcp
-portal      Up 15s (healthy)        0.0.0.0:3000->3000/tcp
+NAME          STATUS                  PORTS
+postgres      Up 30s (healthy)        5432/tcp
+minio         Up 30s (healthy)        9000/tcp, 9001/tcp
+nessie        Up 30s (healthy)        19120/tcp
+ratd          Up 25s (healthy)        0.0.0.0:8080->8080/tcp
+runner        Up 20s (healthy)
+ratq          Up 20s (healthy)
+portal        Up 15s (healthy)        0.0.0.0:3000->3000/tcp
 ```
+
+<Callout type="info">
+The `minio-init` container will show status **Exited (0)** — this is normal.
+It runs once to create the S3 bucket and enable versioning, then exits.
+</Callout>
 
 You can also verify individual services manually:
 
@@ -100,21 +106,6 @@ curl -s http://localhost:8080/health | jq .
 curl -s -o /dev/null -w "%{http_code}" http://localhost:3000
 ```
 
-The `/health` endpoint returns JSON with the status of each subsystem:
-
-```json filename="GET /health response"
-{
-  "status": "ok",
-  "services": {
-    "postgres": "healthy",
-    "minio": "healthy",
-    "nessie": "healthy",
-    "runner": "healthy",
-    "ratq": "healthy"
-  }
-}
-```
-
 ### Open the Portal
 
 Once all services are healthy, open your browser and navigate to:
@@ -124,6 +115,25 @@ Once all services are healthy, open your browser and navigate to:
 You should see the RAT Portal dashboard. No login is required for the Community Edition — it is a single-user platform.
 
 </Steps>
+
+---
+
+## Pinning a Version
+
+By default, the install uses the `latest` tag. To pin a specific release:
+
+```bash filename="Terminal"
+# During install
+curl -fsSL https://raw.githubusercontent.com/squat-collective/rat/main/install/install.sh | bash -s -- --version=2.1.0
+
+# Or manually — replace :latest with the version tag in docker-compose.yml
+# image: ghcr.io/squat-collective/ratd:2.1.0
+```
+
+<Callout type="info">
+Pinning a version is recommended for production to avoid unexpected changes.
+Check the [releases page](https://github.com/squat-collective/rat/releases) for available versions.
+</Callout>
 
 ---
 
@@ -147,9 +157,10 @@ ratd over the internal Docker network via gRPC.
 
 ## Default Credentials
 
-| Service | Username | Password |
-|---|---|---|
-| **MinIO Console** | `minioadmin` | `minioadmin` |
+| Service | Username | Password | Configured In |
+|---|---|---|---|
+| **MinIO Console** | `minioadmin` | `minioadmin` | `.env` → `S3_ACCESS_KEY` / `S3_SECRET_KEY` |
+| **PostgreSQL** | `rat` | `rat` | `.env` → `POSTGRES_USER` / `POSTGRES_PASSWORD` |
 
 The MinIO console at [localhost:9001](http://localhost:9001) lets you browse the raw data
 files stored in S3. You do not need to access it during normal use — it is helpful for
@@ -157,7 +168,7 @@ debugging and verifying that pipeline data has been written correctly.
 
 <Callout type="warning">
 These are development credentials. If you deploy RAT in production, change them in your
-compose environment variables. See the [Deployment](/deployment) section for guidance.
+`.env` file. See the [Deployment](/deployment) section for guidance.
 </Callout>
 
 ---
@@ -166,29 +177,35 @@ compose environment variables. See the [Deployment](/deployment) section for gui
 
 To stop all services while preserving your data:
 
-<Tabs items={['make', 'docker compose']}>
-<Tabs.Tab>
 ```bash filename="Terminal"
-make down
+docker compose down
 ```
-</Tabs.Tab>
-<Tabs.Tab>
-```bash filename="Terminal"
-docker compose -f infra/docker-compose.yml down
-```
-</Tabs.Tab>
-</Tabs>
 
 To stop all services **and delete all data** (volumes):
 
 ```bash filename="Terminal"
-docker compose -f infra/docker-compose.yml down -v
+docker compose down -v
 ```
 
 <Callout type="error">
 The `-v` flag removes all Docker volumes, which means all your pipelines, runs, tables,
 and stored data will be permanently deleted. Use this only when you want a clean slate.
 </Callout>
+
+---
+
+## Upgrading
+
+Pull the latest images and restart:
+
+```bash filename="Terminal"
+docker compose pull
+docker compose up -d
+```
+
+If you pinned a version, update the tags in `docker-compose.yml` first (or re-run the installer with `--version=X.Y.Z`).
+
+See the full [Upgrading guide](/deployment/upgrading) for backup procedures, rollback, and migration details.
 
 ---
 
@@ -233,30 +250,21 @@ Solutions:
 
 View logs for all services:
 
-<Tabs items={['make', 'docker compose']}>
-<Tabs.Tab>
 ```bash filename="Terminal"
-make logs
+docker compose logs -f
 ```
-</Tabs.Tab>
-<Tabs.Tab>
-```bash filename="Terminal"
-docker compose -f infra/docker-compose.yml logs -f
-```
-</Tabs.Tab>
-</Tabs>
 
 View logs for a specific service:
 
 ```bash filename="Terminal"
 # API server logs
-docker compose -f infra/docker-compose.yml logs -f ratd
+docker compose logs -f ratd
 
 # Runner logs (pipeline execution)
-docker compose -f infra/docker-compose.yml logs -f runner
+docker compose logs -f runner
 
 # Portal logs
-docker compose -f infra/docker-compose.yml logs -f portal
+docker compose logs -f portal
 ```
 
 ### Services fail to connect to each other
@@ -265,27 +273,24 @@ If ratd reports that it cannot reach runner, ratq, or Nessie, the services may h
 started out of order. Restart them:
 
 ```bash filename="Terminal"
-docker compose -f infra/docker-compose.yml restart ratd runner ratq
+docker compose restart ratd runner ratq
 ```
 
-### Clean rebuild
+### Clean start
 
 If something is fundamentally broken, you can start completely fresh:
 
 ```bash filename="Terminal"
-# Stop everything, remove volumes, rebuild all images
-docker compose -f infra/docker-compose.yml down -v
-docker compose -f infra/docker-compose.yml build --no-cache
-docker compose -f infra/docker-compose.yml up -d
+docker compose down -v
+docker compose pull
+docker compose up -d
 ```
 
-Or with make:
+---
 
-```bash filename="Terminal"
-make clean
-make build
-make up
-```
+## Developer Setup
+
+Want to build from source, run tests, or contribute? See the [Contributing guide](/contributing) which covers cloning the repo, `make` targets, and the full development workflow.
 
 ---
 

@@ -30,6 +30,75 @@ The `v2` prefix indicates this is the v2 rewrite of RAT. The major version withi
 
 ## Upgrade Process
 
+<Tabs items={['Standalone Installation', 'Source (Contributors)']}>
+<Tabs.Tab>
+
+<Steps>
+
+### Read the release notes
+
+Before upgrading, read the release notes for every version between your current version and the target version. Pay attention to:
+
+- **Breaking changes** that require manual action
+- **Database migrations** that will run automatically
+- **Configuration changes** (new/renamed environment variables)
+- **Deprecated features** that will be removed in a future version
+
+```bash filename="Terminal"
+# Check your current version
+curl -s http://localhost:8080/health | jq .version
+
+# View release notes on GitHub
+gh release list --repo squat-collective/rat
+gh release view v2.2.0 --repo squat-collective/rat
+```
+
+### Create a backup
+
+Always backup before upgrading. See the [Backup & Restore](/deployment/backup-restore) page for details.
+
+```bash filename="Terminal"
+# Dump Postgres
+docker compose exec postgres pg_dump -U rat rat > backup-$(date +%Y%m%d).sql
+```
+
+### Pull new images
+
+```bash filename="Terminal"
+docker compose pull
+```
+
+If you pinned a version, update the image tags in `docker-compose.yml` first, or re-run the installer:
+
+```bash filename="Terminal"
+curl -fsSL https://raw.githubusercontent.com/squat-collective/rat/main/install/install.sh | bash -s -- --version=2.2.0 --dir=.
+```
+
+### Restart services
+
+```bash filename="Terminal"
+docker compose up -d
+```
+
+Docker will recreate only the containers whose images have changed.
+
+### Verify the upgrade
+
+```bash filename="Terminal"
+# Check health
+curl -s http://localhost:8080/health | jq .
+
+# Check version
+curl -s http://localhost:8080/health | jq .version
+```
+
+Open the portal at [localhost:3000](http://localhost:3000) and verify that pipelines, runs, and queries work correctly.
+
+</Steps>
+
+</Tabs.Tab>
+<Tabs.Tab>
+
 <Steps>
 
 ### Read the release notes
@@ -109,6 +178,9 @@ make smoke-test
 Open the portal at [localhost:3000](http://localhost:3000) and verify that pipelines, runs, and queries work correctly.
 
 </Steps>
+
+</Tabs.Tab>
+</Tabs>
 
 ---
 

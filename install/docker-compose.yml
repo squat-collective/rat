@@ -1,12 +1,12 @@
 ##
-## 🐀 RAT — Community Edition (source build)
-## docker compose up → 7 services, full platform
+## RAT — Standalone Installation (pre-built images from GHCR)
+## No git clone needed — just this file + .env → docker compose up -d
 ##
-## This compose file builds from source. For pre-built images (no git clone
-## needed), see install/docker-compose.yml instead.
+## Images are published on every release:
+##   ghcr.io/squat-collective/{ratd,rat-runner,rat-query,rat-portal}
 ##
-## Credentials are read from environment variables with dev defaults.
-## For production, create infra/.env (see infra/.env.example).
+## To pin a specific version, replace :latest with a version tag:
+##   image: ghcr.io/squat-collective/ratd:2.1.0
 ##
 
 x-s3-credentials: &s3-credentials
@@ -27,9 +27,7 @@ services:
 
   # ── Platform (Go) ─────────────────────────────────────────────
   ratd:
-    build:
-      context: ../platform
-      dockerfile: Dockerfile
+    image: ghcr.io/squat-collective/ratd:latest
     init: true
     ports:
       - "8080:8080"          # REST API (public)
@@ -79,9 +77,7 @@ services:
 
   # ── Query Service (Python) ────────────────────────────────────
   ratq:
-    build:
-      context: ../query
-      dockerfile: Dockerfile
+    image: ghcr.io/squat-collective/rat-query:latest
     init: true
     # gRPC port 50051 is internal-only (container network)
     environment:
@@ -119,9 +115,7 @@ services:
 
   # ── Runner (Python) ──────────────────────────────────────────
   runner:
-    build:
-      context: ../runner
-      dockerfile: Dockerfile
+    image: ghcr.io/squat-collective/rat-runner:latest
     init: true
     # gRPC port 50052 is internal-only (container network)
     environment:
@@ -163,9 +157,7 @@ services:
 
   # ── Portal (Next.js) ─────────────────────────────────────────
   portal:
-    build:
-      context: ..
-      dockerfile: portal/Dockerfile
+    image: ghcr.io/squat-collective/rat-portal:latest
     init: true
     ports:
       - "3000:3000"         # Web IDE

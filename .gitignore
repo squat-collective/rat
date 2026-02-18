@@ -33,6 +33,7 @@ Thumbs.db
 # Environment
 .env
 .env.local
+!install/.env
 
 # Docs build output
 website/out/

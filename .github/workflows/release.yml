@@ -189,7 +189,12 @@ jobs:
             pip install rat-query==${{ needs.meta.outputs.version }}
             ```
 
+            ### Quick Install
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/squat-collective/rat/main/install/install.sh | bash -s -- --start --version=${{ needs.meta.outputs.version }}
+            ```
+
             ### License
-            RAT is licensed under [AGPL-3.0](https://github.com/squat-collective/ratatouille/blob/main/LICENSE).
+            RAT is licensed under [AGPL-3.0](https://github.com/squat-collective/rat/blob/main/LICENSE).
             Third-party license notices are available in the
-            [Licenses workflow](https://github.com/squat-collective/ratatouille/actions/workflows/licenses.yml).
+            [Licenses workflow](https://github.com/squat-collective/rat/actions/workflows/licenses.yml).
