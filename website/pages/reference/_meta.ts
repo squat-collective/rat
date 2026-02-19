@@ -5,4 +5,5 @@ export default {
   annotations: "Annotations",
   "typescript-sdk": "TypeScript SDK",
   makefile: "Makefile Targets",
+  "plugin-slots": "Plugin Slots",
 };

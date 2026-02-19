@@ -4,6 +4,7 @@ import { JetBrains_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import "./globals.css";
 import { ApiProvider } from "@/providers/api-provider";
+import { PluginWrapper } from "@/components/plugins";
 import { AppShell } from "@/components/app-shell";
 
 const jetbrains = JetBrains_Mono({ subsets: ["latin"] });
@@ -31,7 +32,9 @@ export default async function RootLayout({
       <body className={`${jetbrains.className} noise scanlines`}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem nonce={nonce}>
           <ApiProvider>
-            <AppShell>{children}</AppShell>
+            <PluginWrapper>
+              <AppShell>{children}</AppShell>
+            </PluginWrapper>
           </ApiProvider>
         </ThemeProvider>
       </body>

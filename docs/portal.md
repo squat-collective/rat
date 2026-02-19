@@ -223,3 +223,57 @@ make dev-portal       # Hot reload on port 3000 (builds SDK first)
 ```
 
 Docker: 3-stage build → `node:20-alpine` runtime, port 3000.
+
+---
+
+## Plugin Slot System
+
+> ADR: `docs/adr/016-portal-plugin-ui.md`
+> Source: `portal/src/components/plugins/`
+
+The portal includes a generic **plugin slot system** that allows external packages to inject React components into predefined locations in the UI. When no plugin package is configured, slots render nothing with zero overhead.
+
+### Architecture
+
+```
+Default:          ThemeProvider > ApiProvider > PluginWrapper(noop) > AppShell
+With plugins:     ThemeProvider > ApiProvider > PluginWrapper(loads registry) > PluginRegistryProvider > AppShell
+                                                    ↑ dynamic import via NEXT_PUBLIC_PLUGIN_PACKAGE
+```
+
+`NEXT_PUBLIC_PLUGIN_PACKAGE` names the npm package to load. When unset, `PluginWrapper` is a passthrough.
+
+### Slot Locations
+
+| Slot Name | Location | Component | Props |
+|-----------|----------|-----------|-------|
+| `main-header` | Between LicenseBanner and content | `app-shell.tsx` | — |
+| `sidebar-user` | Before theme toggle in sidebar | `nav/sidebar.tsx` | `collapsed: boolean` |
+| `sidebar-nav-extra` | After main nav in sidebar | `nav/sidebar.tsx` | `collapsed: boolean` |
+
+### Key Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `PluginRegistryProvider` | `plugin-context.tsx` | React context providing the slot registry |
+| `usePluginRegistry` | `plugin-context.tsx` | Hook to read the registry |
+| `PluginSlot` | `plugin-slot.tsx` | Renders components registered for a slot name |
+| `PluginWrapper` | `plugin-wrapper.tsx` | Conditional loader — dynamically imports a plugin package and provides its registry |
+
+### Types
+
+```typescript
+type SlotComponent<P = Record<string, unknown>> = React.ComponentType<P>;
+type PluginRegistry = Record<string, SlotComponent<any>[]>;
+```
+
+### Adding a New Slot
+
+1. Add `<PluginSlot name="your-slot" />` in the desired location
+2. Pass any props the slot components will need
+3. Document the slot in this table
+4. Plugin packages export their components mapped to the slot name
+
+### For Plugin Developers
+
+See `website/pages/contributing/plugin-ui.mdx` for the full guide on creating plugin UI packages.

@@ -62,6 +62,7 @@ Pro Edition adds multi-user, sharing, and cloud via closed-source container plug
 │   ├── runner/                        # Python — pipeline execution
 │   ├── query/                         # Python — DuckDB query sidecar
 │   ├── portal/                        # Next.js — web IDE
+│   │   └── src/components/plugins/    # Plugin slot system (generic extension points)
 │   ├── sdk-typescript/                # TS SDK for portal
 │   ├── proto/                         # Shared gRPC protobuf definitions
 │   ├── infra/                         # Docker compose, configs, scripts
@@ -72,7 +73,7 @@ Pro Edition adds multi-user, sharing, and cloud via closed-source container plug
 └── ratatouille-pro/                   # PRIVATE pro plugins (separate git repo)
     ├── plugins/
     │   └── auth-keycloak/             # Keycloak JWT validation (Go, ~26MB)
-    ├── portal-pro/                    # Pro portal extension
+    ├── portal-pro/                    # Portal plugin package (private)
     └── infra/                         # Pro compose overrides + Keycloak realm
 ```
 

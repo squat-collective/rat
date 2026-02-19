@@ -1,0 +1,198 @@
+# Plugin UI Development
+
+This guide explains how to create UI components that render in the RAT portal through the **plugin slot system**.
+
+## How It Works
+
+The portal defines named **slots** — empty extension points in the layout. External plugin packages register React components for specific slots. When a plugin package is configured, its components render in the corresponding slot locations.
+
+### Architecture
+
+```
+┌────────────────────────── Portal ──────────────────────────────┐
+│                                                                 │
+│  PluginWrapper                                                  │
+│    ├─ NEXT_PUBLIC_PLUGIN_PACKAGE unset → renders children only  │
+│    └─ NEXT_PUBLIC_PLUGIN_PACKAGE set → dynamic import package   │
+│         └─ loadRegistry() → fetches features from API           │
+│              └─ builds PluginRegistry from enabled plugins       │
+│                   └─ PluginRegistryProvider wraps children       │
+│                                                                 │
+│  PluginSlot name="sidebar-user"                                 │
+│    └─ reads registry → renders registered components            │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Build Modes
+
+| Mode | Env Var | Behavior |
+|------|---------|----------|
+| Default | `NEXT_PUBLIC_PLUGIN_PACKAGE` unset | Slots render nothing, zero overhead |
+| With plugins | `NEXT_PUBLIC_PLUGIN_PACKAGE=your-package` | `PluginWrapper` loads the package, slots render plugin components |
+
+## Creating a Plugin UI Package
+
+### 1. Scaffold the Package
+
+Create the directory structure for your plugin UI:
+
+```
+your-plugin-ui/
+├── package.json
+├── tsconfig.json
+├── tsup.config.ts
+└── src/
+    ├── index.ts
+    ├── components/
+    │   └── your-component.tsx
+    └── __tests__/
+        └── index.test.ts
+```
+
+### 2. Package Configuration
+
+**`package.json`**:
+
+```json
+{
+  "name": "@your-scope/plugin-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  },
+  "devDependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@types/react": "^18.3.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  }
+}
+```
+
+**`tsup.config.ts`** (same pattern as SDK):
+
+```ts
+import { defineConfig } from "tsup";
+
+export default defineConfig({
+  entry: ["src/index.ts"],
+  format: ["esm", "cjs"],
+  dts: true,
+  sourcemap: true,
+  clean: true,
+  splitting: false,
+  external: ["react", "react-dom"],
+});
+```
+
+### 3. Write Your Component
+
+Components should use the existing portal design system classes — no additional CSS needed.
+
+```tsx
+// src/components/your-component.tsx
+export function YourComponent({ collapsed }: { collapsed?: boolean }) {
+  return (
+    <div className="border-t border-border/50 px-3 py-2">
+      <span className="text-[10px] font-bold tracking-wider text-muted-foreground">
+        YOUR LABEL
+      </span>
+    </div>
+  );
+}
+```
+
+### 4. Export Slot Registrations
+
+The `index.ts` exports a **slot registry** — a map of slot names to component arrays:
+
+```ts
+// src/index.ts
+import { YourComponent } from "./components/your-component";
+
+export type SlotRegistry = Record<string, React.ComponentType<any>[]>;
+
+export const yourPluginSlots: SlotRegistry = {
+  "sidebar-nav-extra": [YourComponent],
+};
+```
+
+### 5. Create an Aggregator Package
+
+If you have multiple plugin UI packages, create an aggregator package that combines their slot registrations and exports a `loadRegistry()` function:
+
+```ts
+// aggregator/src/index.ts
+import { buildRegistry } from "./registry";
+import type { PluginRegistry } from "./types";
+
+export async function loadRegistry(): Promise<PluginRegistry> {
+  // Determine which plugins are enabled (e.g., from an API)
+  const enabledPlugins = await fetchEnabledPlugins();
+  return buildRegistry(enabledPlugins);
+}
+```
+
+Then configure the portal to load this aggregator:
+
+```bash
+NEXT_PUBLIC_PLUGIN_PACKAGE=@your-scope/portal-plugins
+```
+
+### 6. Write Tests
+
+```ts
+import { describe, it, expect } from "vitest";
+import { yourPluginSlots } from "../index";
+
+describe("yourPluginSlots", () => {
+  it("exports sidebar-nav-extra slot", () => {
+    expect(yourPluginSlots["sidebar-nav-extra"]).toBeDefined();
+    expect(yourPluginSlots["sidebar-nav-extra"]).toHaveLength(1);
+  });
+});
+```
+
+## Available Slot Names
+
+See [Plugin Slots Reference](/reference/plugin-slots) for the full list of available slots, their locations, and expected props.
+
+## Design System Guidelines
+
+Plugin components render inside the portal's layout. Follow these rules:
+
+- **Use existing Tailwind classes** — `brutal-card`, `neon-text`, `text-[10px]`, `tracking-wider`
+- **No rounded corners** — `--radius: 0px` is the portal theme
+- **Font**: JetBrains Mono (inherited from `body`)
+- **Colors**: Use CSS variables — `text-primary`, `text-muted-foreground`, `border-border/50`
+- **No additional CSS** — Tailwind content paths don't need updating
+
+## Plugin Package Contract
+
+Any package configured via `NEXT_PUBLIC_PLUGIN_PACKAGE` must export:
+
+```typescript
+export function loadRegistry(): Promise<PluginRegistry>;
+```
+
+Where `PluginRegistry` is `Record<string, React.ComponentType<any>[]>`.

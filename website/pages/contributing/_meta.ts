@@ -4,6 +4,7 @@ export default {
   testing: "Testing",
   "proto-guidelines": "Proto Guidelines",
   "architecture-decisions": "Architecture Decisions",
+  "plugin-ui": "Plugin UI Development",
   "---": { type: "separator", title: "Internals" },
   architecture: "Architecture",
 };
