@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
-import { Shield, CheckCircle, XCircle, AlertTriangle, Trash2 } from "lucide-react";
+import { Shield, CheckCircle, XCircle, AlertTriangle, Trash2, KeyRound, User } from "lucide-react";
 import Link from "next/link";
 import { serverApi, type FeaturesResponse } from "@/lib/server-api";
+import { auth, authEnabled } from "@/lib/auth/server";
 
 export const metadata: Metadata = {
   title: "Settings | RAT",
@@ -19,6 +20,9 @@ export default async function SettingsPage() {
   const edition = features?.edition ?? "community";
   const license = features?.license;
   const plugins = features?.plugins ?? {};
+
+  // Get auth session when auth is enabled
+  const session = authEnabled ? await auth() : null;
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -156,6 +160,53 @@ export default async function SettingsPage() {
           ))}
         </div>
       </div>
+
+      {/* Authentication card — only when auth plugin is enabled */}
+      {plugins.auth?.enabled && (
+        <div className="brutal-card p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <KeyRound className="h-4 w-4 text-primary" />
+            <h2 className="text-xs font-bold tracking-wider text-muted-foreground">
+              Authentication
+            </h2>
+          </div>
+          <div className="grid grid-cols-2 gap-y-2 gap-x-4 text-xs">
+            <span className="text-muted-foreground">Provider</span>
+            <span>Keycloak</span>
+
+            {process.env.KEYCLOAK_ISSUER && (
+              <>
+                <span className="text-muted-foreground">Issuer</span>
+                <span className="truncate font-mono text-[10px]">
+                  {process.env.KEYCLOAK_ISSUER}
+                </span>
+              </>
+            )}
+
+            <span className="text-muted-foreground">Status</span>
+            <span className="flex items-center gap-1.5">
+              {session?.user ? (
+                <>
+                  <User className="h-3 w-3 text-primary" />
+                  <span className="text-primary">Authenticated</span>
+                </>
+              ) : (
+                <>
+                  <XCircle className="h-3 w-3 text-muted-foreground" />
+                  <span className="text-muted-foreground">Not authenticated</span>
+                </>
+              )}
+            </span>
+
+            {session?.user?.email && (
+              <>
+                <span className="text-muted-foreground">User</span>
+                <span>{session.user.email}</span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

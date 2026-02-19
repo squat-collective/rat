@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { JetBrains_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import "./globals.css";
+import { SessionProvider } from "@/providers/session-provider";
 import { ApiProvider } from "@/providers/api-provider";
 import { PluginWrapper } from "@/components/plugins";
 import { AppShell } from "@/components/app-shell";
@@ -31,11 +32,13 @@ export default async function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={`${jetbrains.className} noise scanlines`}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem nonce={nonce}>
-          <ApiProvider>
-            <PluginWrapper>
-              <AppShell>{children}</AppShell>
-            </PluginWrapper>
-          </ApiProvider>
+          <SessionProvider>
+            <ApiProvider>
+              <PluginWrapper>
+                <AppShell>{children}</AppShell>
+              </PluginWrapper>
+            </ApiProvider>
+          </SessionProvider>
         </ThemeProvider>
       </body>
     </html>

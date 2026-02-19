@@ -425,6 +425,7 @@ func NewRouter(srv *Server) chi.Router {
 			r.Use(AuditMiddleware(srv.Audit))
 		}
 		r.Get("/features", srv.HandleFeatures)
+		r.Get("/me", srv.HandleMe)
 
 		// ValidatePathParams needs URL params, which are only available after
 		// chi matches the specific route. r.With() creates an inline router where
