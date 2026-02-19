@@ -6,6 +6,7 @@ import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NAV_ITEMS } from "@/lib/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { PluginSlot } from "@/components/plugins";
 import {
   Tooltip,
   TooltipContent,
@@ -102,6 +103,12 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             return link;
           })}
         </nav>
+
+        {/* Plugin nav extensions */}
+        <PluginSlot name="sidebar-nav-extra" collapsed={collapsed} />
+
+        {/* User menu (plugin slot) */}
+        <PluginSlot name="sidebar-user" collapsed={collapsed} />
 
         {/* Theme toggle */}
         <div className="border-t border-border/50 px-3 py-2">

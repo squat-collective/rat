@@ -1,0 +1,99 @@
+# Plugin Slots Reference
+
+The portal plugin slot system allows external packages to inject React components into predefined locations in the UI.
+
+## Slot Locations
+
+| Slot Name | Location | File | Props |
+|-----------|----------|------|-------|
+| `main-header` | Between license banner and content area | `app-shell.tsx` | — |
+| `sidebar-user` | Before theme toggle in sidebar | `nav/sidebar.tsx` | `collapsed: boolean` |
+| `sidebar-nav-extra` | After main navigation in sidebar | `nav/sidebar.tsx` | `collapsed: boolean` |
+
+## `PluginSlot` Component
+
+Renders all components registered for a named slot.
+
+### Props
+
+| Prop | Type | Required | Description |
+|------|------|----------|-------------|
+| `name` | `string` | Yes | The slot name to render components for |
+| `fallback` | `React.ReactNode` | No | Fallback content when no `PluginRegistryProvider` is present |
+| `...props` | `Record<string, unknown>` | No | Extra props passed through to each slot component |
+
+### Usage
+
+```tsx
+import { PluginSlot } from "@/components/plugins";
+
+// Basic slot
+<PluginSlot name="main-header" />
+
+// With passthrough props
+<PluginSlot name="sidebar-user" collapsed={collapsed} />
+
+// With fallback
+<PluginSlot name="sidebar-user" fallback={<DefaultUserIcon />} />
+```
+
+### Behavior
+
+- **No provider**: Renders `fallback` if provided, otherwise renders nothing
+- **No components registered**: Renders nothing
+- **Components registered**: Renders all components in order, passing extra props to each
+
+## `PluginRegistryProvider`
+
+Provides the plugin registry to all `PluginSlot` components in the tree.
+
+### Props
+
+| Prop | Type | Required | Description |
+|------|------|----------|-------------|
+| `registry` | `PluginRegistry` | Yes | Map of slot names to component arrays |
+| `children` | `React.ReactNode` | Yes | Child components |
+
+### Usage
+
+```tsx
+import { PluginRegistryProvider } from "@/components/plugins";
+
+const registry = {
+  "sidebar-user": [UserMenu],
+  "main-header": [NamespacePicker],
+};
+
+<PluginRegistryProvider registry={registry}>
+  <App />
+</PluginRegistryProvider>
+```
+
+## `usePluginRegistry` Hook
+
+Returns the current plugin registry, or `null` if no provider is present.
+
+```tsx
+import { usePluginRegistry } from "@/components/plugins";
+
+function MyComponent() {
+  const registry = usePluginRegistry();
+  // registry is PluginRegistry | null
+}
+```
+
+## Types
+
+```typescript
+/** A React component that can render in a plugin slot. */
+type SlotComponent<P = Record<string, unknown>> = React.ComponentType<P>;
+
+/** Maps slot names to arrays of components. */
+type PluginRegistry = Record<string, SlotComponent<any>[]>;
+```
+
+## Default Behavior
+
+When no plugin package is configured (`NEXT_PUBLIC_PLUGIN_PACKAGE` unset), all slots render nothing — zero overhead in the bundle.
+
+When a plugin package is configured, it provides a `loadRegistry()` function that determines which components render in which slots. See [Plugin UI Development](/contributing/plugin-ui) for how to create plugin packages.

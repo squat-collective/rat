@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { Sidebar } from "@/components/nav/sidebar";
 import { LicenseBanner } from "@/components/license-banner";
+import { PluginSlot } from "@/components/plugins";
 
 const SIDEBAR_KEY = "rat-sidebar-collapsed";
 
@@ -29,6 +30,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <Sidebar collapsed={collapsed} onToggle={toggle} />
       <main className="flex-1 overflow-auto rat-bg brick-texture relative">
         <LicenseBanner />
+        <PluginSlot name="main-header" />
         <div className="relative z-10 p-6 min-h-full">{children}</div>
       </main>
     </div>

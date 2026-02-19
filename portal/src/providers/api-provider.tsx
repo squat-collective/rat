@@ -2,15 +2,32 @@
 
 import { RatClient } from "@squat-collective/rat-client";
 import { createContext, useContext, useMemo } from "react";
+import { useAuthSession } from "@/lib/auth/client";
 import { SWRConfig } from "swr";
 import { PUBLIC_API_URL } from "@/lib/api-client";
 
 const ApiContext = createContext<RatClient | null>(null);
 
 export function ApiProvider({ children }: { children: React.ReactNode }) {
+  const { data: session } = useAuthSession();
+  const accessToken = session?.accessToken;
+
   const client = useMemo(
-    () => new RatClient({ apiUrl: PUBLIC_API_URL }),
-    [],
+    () =>
+      new RatClient({
+        apiUrl: PUBLIC_API_URL,
+        // When an access token is present (pro auth), inject Bearer header
+        ...(accessToken
+          ? {
+              onRequest: [
+                (req) => {
+                  req.headers["Authorization"] = `Bearer ${accessToken}`;
+                },
+              ],
+            }
+          : {}),
+      }),
+    [accessToken],
   );
 
   return (

@@ -36,14 +36,28 @@ const FETCH_TIMEOUT_MS = 10_000;
  */
 const DEFAULT_REVALIDATE_SECONDS = 10;
 
+/** Response shape from GET /api/v1/me. */
+export interface MeResponse {
+  user_id: string;
+  email: string;
+  display_name: string;
+  roles: string[];
+}
+
 async function apiFetch<T>(
   path: string,
   revalidateSeconds: number = DEFAULT_REVALIDATE_SECONDS,
+  accessToken?: string,
 ): Promise<T> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
+    const headers: Record<string, string> = {};
+    if (accessToken) {
+      headers["Authorization"] = `Bearer ${accessToken}`;
+    }
     const res = await fetch(`${SERVER_API_URL}${path}`, {
+      headers,
       next: { revalidate: revalidateSeconds },
       signal: controller.signal,
     });
@@ -59,6 +73,23 @@ async function apiFetch<T>(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+/** Create an authenticated server API client. */
+export function createAuthServerApi(accessToken: string) {
+  return {
+    pipelines: {
+      list: () => apiFetch<PipelineListResponse>("/api/v1/pipelines", DEFAULT_REVALIDATE_SECONDS, accessToken),
+    },
+    runs: {
+      list: () => apiFetch<RunListResponse>("/api/v1/runs", 5, accessToken),
+    },
+    tables: {
+      list: () => apiFetch<TableListResponse>("/api/v1/tables", DEFAULT_REVALIDATE_SECONDS, accessToken),
+    },
+    features: () => apiFetch<FeaturesResponse>("/api/v1/features", 60, accessToken),
+    me: () => apiFetch<MeResponse>("/api/v1/me", 0, accessToken),
+  };
 }
 
 export const serverApi = {
