@@ -78,11 +78,13 @@ class TestProtocolCompliance:
 # ── Registry discovery tests ───────────────────────────────────────
 
 
-def _make_entry_point(name: str, cls: type):
+def _make_entry_point(name: str, cls: type, *, dist_name: str = "rat-runner", dist_version: str = "2.0.0"):
     """Create a mock entry point that loads the given class."""
     ep = MagicMock()
     ep.name = name
     ep.load.return_value = cls
+    ep.dist.name = dist_name
+    ep.dist.version = dist_version
     return ep
 
 
@@ -487,3 +489,54 @@ class TestSourceConnectorRegistry:
         source = registry.get_source("postgres")
         assert source is not None
         assert source.name == "postgres"
+
+
+# ── list_plugins tests ─────────────────────────────────────────────
+
+
+class TestListPlugins:
+    """Tests for PluginRegistry.list_plugins() metadata collection."""
+
+    @patch("rat_runner.plugin_registry.entry_points")
+    def test_list_plugins_returns_all_groups(self, mock_eps):
+        """list_plugins() returns entries from all discovered groups."""
+
+        def eps_side(group):
+            if group == GROUP_STRATEGIES:
+                return [_make_entry_point("full_refresh", FullRefreshStrategy, dist_name="rat-runner", dist_version="2.0.0")]
+            if group == GROUP_JINJA_HELPERS:
+                return [_make_entry_point("env_var", JinjaHelperProtocol, dist_name="rat-plugin-env", dist_version="1.0.0")]
+            return []
+
+        mock_eps.side_effect = eps_side
+
+        registry = PluginRegistry()
+        registry.discover()
+
+        plugins = registry.list_plugins()
+        names = {p.name for p in plugins}
+        assert "full_refresh" in names
+        groups = {p.group for p in plugins}
+        assert GROUP_STRATEGIES in groups
+
+    @patch("rat_runner.plugin_registry.entry_points")
+    def test_list_plugins_includes_version(self, mock_eps):
+        """list_plugins() includes package version and name from distribution metadata."""
+        mock_eps.return_value = [
+            _make_entry_point("soft_delete", FullRefreshStrategy, dist_name="rat-plugin-soft-delete", dist_version="0.3.1"),
+        ]
+
+        registry = PluginRegistry()
+        registry.discover()
+
+        plugins = registry.list_plugins()
+        assert len(plugins) >= 1
+        sd = next(p for p in plugins if p.name == "soft_delete")
+        assert sd.version == "0.3.1"
+        assert sd.package_name == "rat-plugin-soft-delete"
+
+    def test_list_plugins_empty(self):
+        """list_plugins() returns empty list when no plugins are installed."""
+        registry = PluginRegistry()
+        # Don't call discover() — no entry points
+        assert registry.list_plugins() == []

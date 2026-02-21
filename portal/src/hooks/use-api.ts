@@ -3,7 +3,7 @@
 import useSWR, { useSWRConfig } from "swr";
 import { useApiClient } from "@/providers/api-provider";
 import { useCallback, useMemo, useState } from "react";
-import type { UpdatePipelineRequest, CreateTriggerRequest, UpdateTriggerRequest, CreateQualityTestRequest, PreviewResponse, UpdateNamespaceRequest, UpdateLandingZoneRequest, UpdateTableMetadataRequest, PipelineConfig, CreatePluginSourceRequest, CreatePluginPolicyRequest } from "@squat-collective/rat-client";
+import type { UpdatePipelineRequest, CreateTriggerRequest, UpdateTriggerRequest, CreateQualityTestRequest, PreviewResponse, UpdateNamespaceRequest, UpdateLandingZoneRequest, UpdateTableMetadataRequest, PipelineConfig, CreatePluginSourceRequest, CreatePluginPolicyRequest, IdentityUser, IdentityCapabilities, Grant, GroupMember } from "@squat-collective/rat-client";
 import yaml from "js-yaml";
 import { KEYS } from "@/lib/cache-keys";
 
@@ -598,6 +598,229 @@ export function useTriggerReaper() {
   }, [api, mutate]);
 
   return { trigger, running };
+}
+
+/** Identity — Pro feature stubs */
+export function useIdentityUsers(params?: { search?: string; limit?: number; offset?: number }) {
+  const api = useApiClient();
+  const key = params ? JSON.stringify(params) : undefined;
+  const query: Record<string, string> = {};
+  if (params?.search) query.search = params.search;
+  if (params?.limit !== undefined) query.limit = String(params.limit);
+  if (params?.offset !== undefined) query.offset = String(params.offset);
+  return useSWR(
+    KEYS.identityUsers(key),
+    async () => {
+      return api.request<{ users: IdentityUser[]; total_count: number }>("GET", "/api/v1/identity/users", {
+        params: Object.keys(query).length > 0 ? query : undefined,
+      });
+    },
+  );
+}
+
+export function useIdentityCapabilities() {
+  const api = useApiClient();
+  return useSWR(KEYS.identityCapabilities(), async () => {
+    return api.request<IdentityCapabilities>("GET", "/api/v1/identity/capabilities");
+  });
+}
+
+/** Permissions — Pro feature stubs */
+export function useGrants(filter?: { resource?: string; principal_type?: string }) {
+  const api = useApiClient();
+  const key = filter ? JSON.stringify(filter) : undefined;
+  const query: Record<string, string> = {};
+  if (filter?.resource) query.resource = filter.resource;
+  if (filter?.principal_type) query.principal_type = filter.principal_type;
+  return useSWR(KEYS.grants(key), async () => {
+    return api.request<{ grants: Grant[] }>("GET", "/api/v1/permissions/grants", {
+      params: Object.keys(query).length > 0 ? query : undefined,
+    });
+  });
+}
+
+export function useCreateGrant() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const createGrant = useCallback(
+    async (req: { principal_type: string; principal_id: string; resource: string; verb: string }) => {
+      setCreating(true);
+      setError(null);
+      try {
+        const result = await api.request("POST", "/api/v1/permissions/grants", { json: req });
+        await mutate((key: unknown) => typeof key === "string" && key.startsWith("grants"), undefined, { revalidate: true });
+        return result;
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        throw err;
+      } finally {
+        setCreating(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { createGrant, creating, error };
+}
+
+export function useRevokeGrant() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [revoking, setRevoking] = useState(false);
+
+  const revokeGrant = useCallback(
+    async (grantId: string) => {
+      setRevoking(true);
+      try {
+        await api.request("DELETE", `/api/v1/permissions/grants/${grantId}`);
+        await mutate((key: unknown) => typeof key === "string" && key.startsWith("grants"), undefined, { revalidate: true });
+      } finally {
+        setRevoking(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { revokeGrant, revoking };
+}
+
+export function useVerbs() {
+  const api = useApiClient();
+  return useSWR(KEYS.verbs(), async () => {
+    return api.request<{ verbs: Array<{ name: string; implies?: string[]; description?: string }> }>("GET", "/api/v1/permissions/verbs");
+  });
+}
+
+export function useResourceAccess(resource: string) {
+  const api = useApiClient();
+  return useSWR(
+    resource ? KEYS.resourceAccess(resource) : null,
+    async () => {
+      return api.request<{ access: Array<{ principal_type: string; principal_id: string; verb: string; source: string }> }>("GET", `/api/v1/permissions/access`, { params: { resource } });
+    },
+  );
+}
+
+export function useGroups() {
+  const api = useApiClient();
+  return useSWR(KEYS.groups(), async () => {
+    return api.request<{ groups: Array<{ group_id: string; name: string; description?: string }> }>("GET", "/api/v1/permissions/groups");
+  });
+}
+
+export function useCreateGroup() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const createGroup = useCallback(
+    async (name: string, description?: string) => {
+      setCreating(true);
+      setError(null);
+      try {
+        const result = await api.request("POST", "/api/v1/permissions/groups", { json: { name, description } });
+        await mutate(KEYS.groups());
+        return result;
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        throw err;
+      } finally {
+        setCreating(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { createGroup, creating, error };
+}
+
+export function useDeleteGroup() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [deleting, setDeleting] = useState(false);
+
+  const deleteGroup = useCallback(
+    async (groupId: string) => {
+      setDeleting(true);
+      try {
+        await api.request("DELETE", `/api/v1/permissions/groups/${groupId}`);
+        await mutate(KEYS.groups());
+      } finally {
+        setDeleting(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { deleteGroup, deleting };
+}
+
+export function useGroupMembers(groupId: string) {
+  const api = useApiClient();
+  return useSWR(
+    groupId ? KEYS.groupMembers(groupId) : null,
+    async () => {
+      return api.request<{ members: GroupMember[] }>("GET", `/api/v1/permissions/groups/${groupId}/members`);
+    },
+  );
+}
+
+export function useAddGroupMember(groupId: string) {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [adding, setAdding] = useState(false);
+
+  const addMember = useCallback(
+    async (memberType: string, memberId: string) => {
+      setAdding(true);
+      try {
+        await api.request("POST", `/api/v1/permissions/groups/${groupId}/members`, {
+          json: { member_type: memberType, member_id: memberId },
+        });
+        await mutate(KEYS.groupMembers(groupId));
+      } finally {
+        setAdding(false);
+      }
+    },
+    [api, groupId, mutate],
+  );
+
+  return { addMember, adding };
+}
+
+export function useRemoveGroupMember(groupId: string) {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [removing, setRemoving] = useState(false);
+
+  const removeMember = useCallback(
+    async (memberType: string, memberId: string) => {
+      setRemoving(true);
+      try {
+        await api.request("DELETE", `/api/v1/permissions/groups/${groupId}/members`, {
+          json: { member_type: memberType, member_id: memberId },
+        });
+        await mutate(KEYS.groupMembers(groupId));
+      } finally {
+        setRemoving(false);
+      }
+    },
+    [api, groupId, mutate],
+  );
+
+  return { removeMember, removing };
+}
+
+/** Runner Plugins (installed Python packages) */
+export function useRunnerPlugins() {
+  const api = useApiClient();
+  return useSWR(KEYS.runnerPlugins(), () => api.plugins.listRunnerPlugins());
 }
 
 /** Plugins */

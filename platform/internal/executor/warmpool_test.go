@@ -66,6 +66,10 @@ func (m *mockRunnerClient) ValidatePipeline(ctx context.Context, req *connect.Re
 	return connect.NewResponse(&runnerv1.ValidatePipelineResponse{Valid: true}), nil
 }
 
+func (m *mockRunnerClient) ListPlugins(_ context.Context, _ *connect.Request[runnerv1.ListPluginsRequest]) (*connect.Response[runnerv1.ListPluginsResponse], error) {
+	return connect.NewResponse(&runnerv1.ListPluginsResponse{}), nil
+}
+
 // --- Mock run store ---
 
 type mockRunStore struct {

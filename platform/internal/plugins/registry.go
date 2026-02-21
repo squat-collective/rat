@@ -187,27 +187,17 @@ func (r *Registry) CloudEnabled() bool {
 }
 
 // Features returns the dynamic feature set based on registered plugins.
+// The Plugins map is empty in Community Edition — runner plugins are exposed
+// via the dedicated GET /api/v1/runner/plugins endpoint instead.
 func (r *Registry) Features() domain.Features {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
-	executorType := "warmpool"
-	if r.executorPlugin != "" {
-		executorType = "container"
-	}
 
 	return domain.Features{
 		Edition:    r.edition,
 		Namespaces: r.edition != "community",
 		MultiUser:  r.authPlugin != "",
-		Plugins: map[string]domain.PluginFeature{
-			"auth":        {Enabled: r.authPlugin != ""},
-			"sharing":     {Enabled: r.sharingPlugin != ""},
-			"executor":    {Enabled: true, Type: executorType},
-			"audit":       {Enabled: false},
-			"enforcement": {Enabled: r.enforcementPlugin != ""},
-			"cloud":       {Enabled: r.cloudPlugin != ""},
-		},
+		Plugins:    map[string]domain.PluginFeature{},
 	}
 }
 

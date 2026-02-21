@@ -1,6 +1,14 @@
 export type PluginStatus = "registered" | "enabled" | "disabled" | "error";
 export type PluginKind = "platform" | "runner" | "portal";
 
+/** A Python entry point discovered by the runner container. */
+export interface RunnerPlugin {
+  name: string;         // entry point name ("soft_delete", "env_var")
+  group: string;        // "rat.strategies", "rat.hooks", etc.
+  version: string;      // package version
+  package_name: string; // Python package name ("rat-plugin-soft-delete")
+}
+
 export interface PluginEntry {
   id: string;
   name: string;

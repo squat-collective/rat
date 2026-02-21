@@ -68,4 +68,16 @@ export class RatClient {
   get config(): ClientConfig {
     return this._config;
   }
+
+  /** Raw HTTP request for endpoints not yet covered by a typed resource. */
+  request<T = unknown>(
+    method: string,
+    path: string,
+    options?: {
+      json?: object;
+      params?: Record<string, string>;
+    },
+  ): Promise<T> {
+    return this._transport.request<T>(method, path, options);
+  }
 }

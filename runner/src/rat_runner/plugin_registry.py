@@ -15,6 +15,7 @@ Extension groups:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from importlib.metadata import entry_points
 
 from rat_runner.plugin_protocols import (
@@ -37,6 +38,16 @@ GROUP_HOOKS = "rat.hooks"
 GROUP_SOURCES = "rat.sources"
 
 
+@dataclass(frozen=True)
+class PluginInfo:
+    """Metadata for a discovered runner plugin entry point."""
+
+    name: str           # entry point name ("soft_delete", "env_var")
+    group: str          # "rat.strategies", "rat.hooks", etc.
+    version: str        # package version
+    package_name: str   # Python package name ("rat-plugin-soft-delete")
+
+
 class PluginRegistry:
     """Discovers and holds all runner plugins for a single pipeline run.
 
@@ -52,6 +63,7 @@ class PluginRegistry:
         self._jinja_helpers: dict[str, JinjaHelperProtocol] = {}
         self._hooks: dict[HookPhase, list[HookProtocol]] = {}
         self._sources: dict[str, SourceConnectorProtocol] = {}
+        self._discovered_plugins: list[PluginInfo] = []
 
     def discover(self) -> None:
         """Scan installed entry points and load all plugins.
@@ -107,6 +119,17 @@ class PluginRegistry:
                     )
                     continue
                 register_fn(ep.name, plugin)  # type: ignore[operator]
+
+                # Record metadata for list_plugins().
+                dist = ep.dist
+                self._discovered_plugins.append(
+                    PluginInfo(
+                        name=ep.name,
+                        group=group,
+                        version=dist.version if dist else "unknown",
+                        package_name=dist.name if dist else "unknown",
+                    )
+                )
             except Exception:
                 logger.warning(
                     "Failed to load plugin '%s' from group '%s'",
@@ -139,6 +162,10 @@ class PluginRegistry:
         logger.debug("Registered source connector: %s", name)
 
     # ── Public accessors ───────────────────────────────────────────────
+
+    def list_plugins(self) -> list[PluginInfo]:
+        """Return metadata for all discovered plugins across all groups."""
+        return list(self._discovered_plugins)
 
     def get_strategy(self, name: str) -> MergeStrategyProtocol | None:
         """Get a merge strategy by name, or None if not found."""

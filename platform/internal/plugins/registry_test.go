@@ -169,9 +169,7 @@ func TestRegistry_Features_CommunityDefaults(t *testing.T) {
 	assert.Equal(t, "community", features.Edition)
 	assert.False(t, features.Namespaces)
 	assert.False(t, features.MultiUser)
-	assert.False(t, features.Plugins["auth"].Enabled)
-	assert.True(t, features.Plugins["executor"].Enabled)
-	assert.Equal(t, "warmpool", features.Plugins["executor"].Type)
+	assert.Empty(t, features.Plugins, "plugins map should be empty in community edition")
 }
 
 func TestRegistry_Features_ProWithAuth(t *testing.T) {
@@ -188,10 +186,10 @@ func TestRegistry_Features_ProWithAuth(t *testing.T) {
 	assert.Equal(t, "pro", features.Edition)
 	assert.True(t, features.Namespaces)
 	assert.True(t, features.MultiUser)
-	assert.True(t, features.Plugins["auth"].Enabled)
+	assert.Empty(t, features.Plugins)
 }
 
-func TestRegistry_Features_ExecutorPlugin_ReportsContainer(t *testing.T) {
+func TestRegistry_Features_ExecutorPlugin(t *testing.T) {
 	reg := NewRegistry("pro")
 	require.NoError(t, reg.Register(&Plugin{
 		Name:         "executor",
@@ -202,8 +200,9 @@ func TestRegistry_Features_ExecutorPlugin_ReportsContainer(t *testing.T) {
 
 	features := reg.Features()
 
-	assert.Equal(t, "container", features.Plugins["executor"].Type)
-	assert.True(t, features.Plugins["executor"].Enabled)
+	// Plugins map is empty — executor status is checked via ExecutorEnabled()
+	assert.Empty(t, features.Plugins)
+	assert.True(t, reg.ExecutorEnabled())
 }
 
 func TestRegistry_AuthEnabled_RequiresEnabledStatus(t *testing.T) {

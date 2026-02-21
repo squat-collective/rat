@@ -361,6 +361,15 @@ type QuotaCheckResult struct {
 	Reason  string `json:"reason,omitempty"` // human-readable denial reason
 }
 
+// RunnerPlugin describes a Python entry point discovered by the runner container.
+// Returned by the ListPlugins gRPC call and exposed via GET /api/v1/runner/plugins.
+type RunnerPlugin struct {
+	Name        string `json:"name"`         // entry point name ("soft_delete", "env_var")
+	Group       string `json:"group"`        // "rat.strategies", "rat.hooks", etc.
+	Version     string `json:"version"`      // package version
+	PackageName string `json:"package_name"` // Python package name ("rat-plugin-soft-delete")
+}
+
 // ── Plugin Catalog ─────────────────────────────────────────────
 
 // PluginStatus represents the lifecycle state of a registered plugin.

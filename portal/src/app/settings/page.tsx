@@ -20,7 +20,6 @@ export default async function SettingsPage() {
 
   const edition = features?.edition ?? "community";
   const license = features?.license;
-  const plugins = features?.plugins ?? {};
 
   // Get auth session when auth is enabled
   const session = authEnabled ? await auth() : null;
@@ -141,47 +140,13 @@ export default async function SettingsPage() {
             </h2>
           </div>
           <p className="text-xs text-muted-foreground">
-            View, configure, enable/disable, and remove plugins. Manage sources
-            and policies.
+            View runner plugins installed in the pipeline execution container.
           </p>
         </div>
       </Link>
 
-      {/* Plugin status grid */}
-      <div className="brutal-card p-4 space-y-3">
-        <h2 className="text-xs font-bold tracking-wider text-muted-foreground">
-          Plugins
-        </h2>
-        <div className="grid grid-cols-2 gap-2">
-          {Object.entries(plugins).map(([name, plugin]) => (
-            <div
-              key={name}
-              className="flex items-center gap-2 text-xs p-2 bg-muted/30"
-            >
-              {plugin.enabled ? (
-                <CheckCircle className="h-3 w-3 text-primary shrink-0" />
-              ) : (
-                <XCircle className="h-3 w-3 text-muted-foreground shrink-0" />
-              )}
-              <span
-                className={
-                  plugin.enabled ? "text-foreground" : "text-muted-foreground"
-                }
-              >
-                {name}
-              </span>
-              {plugin.type && (
-                <span className="ml-auto text-[10px] text-muted-foreground">
-                  {plugin.type}
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Authentication card — only when auth plugin is enabled */}
-      {plugins.auth?.enabled && (
+      {/* Authentication card — only when multi-user mode is active */}
+      {features?.multi_user && (
         <div className="brutal-card p-4 space-y-3">
           <div className="flex items-center gap-2">
             <KeyRound className="h-4 w-4 text-primary" />

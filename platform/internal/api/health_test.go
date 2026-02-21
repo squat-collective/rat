@@ -275,20 +275,10 @@ func TestHandleFeatures_ReturnsCommunityDefaults(t *testing.T) {
 	assert.Equal(t, false, body["namespaces"])
 	assert.Equal(t, false, body["multi_user"])
 
-	// Plugins map exists
+	// Plugins map is empty in community edition (runner plugins exposed via /runner/plugins)
 	plugins, ok := body["plugins"].(map[string]interface{})
 	require.True(t, ok, "plugins should be a map")
-
-	// Auth plugin disabled in community
-	auth, ok := plugins["auth"].(map[string]interface{})
-	require.True(t, ok)
-	assert.Equal(t, false, auth["enabled"])
-
-	// Executor plugin enabled (warmpool)
-	executor, ok := plugins["executor"].(map[string]interface{})
-	require.True(t, ok)
-	assert.Equal(t, true, executor["enabled"])
-	assert.Equal(t, "warmpool", executor["type"])
+	assert.Empty(t, plugins)
 }
 
 func TestHandleFeatures_WithPluginRegistry_ReturnsDynamic(t *testing.T) {
@@ -299,13 +289,7 @@ func TestHandleFeatures_WithPluginRegistry_ReturnsDynamic(t *testing.T) {
 				Edition:    "pro",
 				Namespaces: true,
 				MultiUser:  true,
-				Plugins: map[string]domain.PluginFeature{
-					"auth":        {Enabled: true},
-					"sharing":     {Enabled: false},
-					"executor":    {Enabled: true, Type: "warmpool"},
-					"audit":       {Enabled: false},
-					"enforcement": {Enabled: false},
-				},
+				Plugins:    map[string]domain.PluginFeature{},
 			},
 		},
 	}
@@ -322,15 +306,13 @@ func TestHandleFeatures_WithPluginRegistry_ReturnsDynamic(t *testing.T) {
 	err := json.NewDecoder(rec.Body).Decode(&body)
 	require.NoError(t, err)
 
-	// Pro edition with auth enabled
+	// Pro edition with multi-user enabled
 	assert.Equal(t, "pro", body["edition"])
 	assert.Equal(t, true, body["namespaces"])
 	assert.Equal(t, true, body["multi_user"])
 
+	// Plugins map is empty — runner plugins exposed via dedicated endpoint
 	plugins, ok := body["plugins"].(map[string]interface{})
 	require.True(t, ok)
-
-	auth, ok := plugins["auth"].(map[string]interface{})
-	require.True(t, ok)
-	assert.Equal(t, true, auth["enabled"])
+	assert.Empty(t, plugins)
 }

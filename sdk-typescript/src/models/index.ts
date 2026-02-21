@@ -99,8 +99,32 @@ export type {
   PluginStatus,
   PluginKind,
   PluginEntry,
+  RunnerPlugin,
   PluginSource,
   CreatePluginSourceRequest,
   PluginPolicy,
   CreatePluginPolicyRequest,
 } from "./plugins";
+export type {
+  PrincipalType,
+  Grant,
+  GrantListResponse,
+  CreateGrantRequest,
+  ResourceAccessEntry,
+  ResourceAccessResponse,
+  Verb,
+  VerbListResponse,
+  Group,
+  GroupListResponse,
+  GroupMember,
+  GroupMemberListResponse,
+} from "./permissions";
+export type {
+  IdentityUser,
+  IdentityUserSummary,
+  IdentityGroup,
+  IdentityUserListResponse,
+  IdentityUserSearchResponse,
+  IdentityCapabilities,
+  IdentityGroupListResponse,
+} from "./identity";

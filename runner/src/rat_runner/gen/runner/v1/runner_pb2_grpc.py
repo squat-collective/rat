@@ -51,6 +51,11 @@ class RunnerServiceStub(object):
                 request_serializer=runner_dot_v1_dot_runner__pb2.ValidatePipelineRequest.SerializeToString,
                 response_deserializer=runner_dot_v1_dot_runner__pb2.ValidatePipelineResponse.FromString,
                 _registered_method=True)
+        self.ListPlugins = channel.unary_unary(
+                '/ratatouille.runner.v1.RunnerService/ListPlugins',
+                request_serializer=runner_dot_v1_dot_runner__pb2.ListPluginsRequest.SerializeToString,
+                response_deserializer=runner_dot_v1_dot_runner__pb2.ListPluginsResponse.FromString,
+                _registered_method=True)
 
 
 class RunnerServiceServicer(object):
@@ -107,6 +112,14 @@ class RunnerServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListPlugins(self, request, context):
+        """List all discovered runner plugins (entry points installed in the runner container).
+        Called by the platform to expose runner plugin metadata to the portal UI.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_RunnerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -139,6 +152,11 @@ def add_RunnerServiceServicer_to_server(servicer, server):
                     servicer.ValidatePipeline,
                     request_deserializer=runner_dot_v1_dot_runner__pb2.ValidatePipelineRequest.FromString,
                     response_serializer=runner_dot_v1_dot_runner__pb2.ValidatePipelineResponse.SerializeToString,
+            ),
+            'ListPlugins': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListPlugins,
+                    request_deserializer=runner_dot_v1_dot_runner__pb2.ListPluginsRequest.FromString,
+                    response_serializer=runner_dot_v1_dot_runner__pb2.ListPluginsResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -309,6 +327,33 @@ class RunnerService(object):
             '/ratatouille.runner.v1.RunnerService/ValidatePipeline',
             runner_dot_v1_dot_runner__pb2.ValidatePipelineRequest.SerializeToString,
             runner_dot_v1_dot_runner__pb2.ValidatePipelineResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListPlugins(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ratatouille.runner.v1.RunnerService/ListPlugins',
+            runner_dot_v1_dot_runner__pb2.ListPluginsRequest.SerializeToString,
+            runner_dot_v1_dot_runner__pb2.ListPluginsResponse.FromString,
             options,
             channel_credentials,
             insecure,

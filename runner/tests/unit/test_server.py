@@ -19,6 +19,7 @@ from runner.v1 import runner_pb2, runner_pb2_grpc
 
 from rat_runner.config import NessieConfig, S3Config
 from rat_runner.models import RunStatus
+from rat_runner.plugin_registry import PluginInfo, PluginRegistry
 from rat_runner.server import RunnerServiceImpl, _configure_server_port, _s3_credentials_to_dict
 from rat_runner.state_dir import write_marker
 
@@ -881,3 +882,74 @@ class TestValidatePipelineRPC:
             )
         )
         assert resp.valid is True
+
+
+# ── ListPlugins RPC tests ──────────────────────────────────────────
+
+
+class TestListPluginsRPC:
+    """Tests for the ListPlugins gRPC endpoint."""
+
+    def test_list_plugins_returns_discovered_plugins(
+        self,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+        state_dir: Path,
+    ):
+        """ListPlugins returns metadata from the server-level plugin registry."""
+        registry = PluginRegistry()
+        # Manually inject plugin info (bypass discovery)
+        registry._discovered_plugins = [
+            PluginInfo(name="soft_delete", group="rat.hooks", version="0.3.1", package_name="rat-plugin-soft-delete"),
+            PluginInfo(name="env_var", group="rat.jinja_helpers", version="1.0.0", package_name="rat-plugin-env"),
+        ]
+        svc = RunnerServiceImpl(s3_config, nessie_config, max_workers=1, state_dir=state_dir, plugin_registry=registry)
+        try:
+            server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
+            runner_pb2_grpc.add_RunnerServiceServicer_to_server(svc, server)
+            port = server.add_insecure_port("[::]:0")
+            server.start()
+            channel = grpc.insecure_channel(f"localhost:{port}")
+            stub = runner_pb2_grpc.RunnerServiceStub(channel)
+
+            resp = stub.ListPlugins(runner_pb2.ListPluginsRequest())
+
+            assert len(resp.plugins) == 2
+            names = {p.name for p in resp.plugins}
+            assert names == {"soft_delete", "env_var"}
+
+            sd = next(p for p in resp.plugins if p.name == "soft_delete")
+            assert sd.group == "rat.hooks"
+            assert sd.version == "0.3.1"
+            assert sd.package_name == "rat-plugin-soft-delete"
+
+            channel.close()
+            server.stop(grace=0)
+        finally:
+            svc.shutdown()
+
+    def test_list_plugins_empty_when_no_plugins(
+        self,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+        state_dir: Path,
+    ):
+        """ListPlugins returns empty list when registry has no plugins."""
+        # Inject an empty registry (skip discover) to simulate no entry points.
+        registry = PluginRegistry()
+        svc = RunnerServiceImpl(s3_config, nessie_config, max_workers=1, state_dir=state_dir, plugin_registry=registry)
+        try:
+            server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
+            runner_pb2_grpc.add_RunnerServiceServicer_to_server(svc, server)
+            port = server.add_insecure_port("[::]:0")
+            server.start()
+            channel = grpc.insecure_channel(f"localhost:{port}")
+            stub = runner_pb2_grpc.RunnerServiceStub(channel)
+
+            resp = stub.ListPlugins(runner_pb2.ListPluginsRequest())
+            assert len(resp.plugins) == 0
+
+            channel.close()
+            server.stop(grace=0)
+        finally:
+            svc.shutdown()

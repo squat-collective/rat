@@ -1,5 +1,6 @@
 import type {
   PluginEntry,
+  RunnerPlugin,
   PluginSource,
   PluginPolicy,
   CreatePluginSourceRequest,
@@ -8,6 +9,14 @@ import type {
 import { BaseResource } from "./base";
 
 export class PluginsResource extends BaseResource {
+  /** List Python entry points discovered by the runner container. */
+  async listRunnerPlugins(): Promise<RunnerPlugin[]> {
+    return this.transport.request<RunnerPlugin[]>(
+      "GET",
+      "/api/v1/runner/plugins",
+    );
+  }
+
   /** List all registered plugins, optionally filtered by status and/or kind. */
   async list(params?: {
     status?: string;

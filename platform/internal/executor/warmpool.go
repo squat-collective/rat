@@ -531,6 +531,28 @@ func (e *WarmPoolExecutor) ValidatePipeline(ctx context.Context, pipeline *domai
 	}, nil
 }
 
+// ListRunnerPlugins calls the runner's ListPlugins RPC and converts the response.
+func (e *WarmPoolExecutor) ListRunnerPlugins(ctx context.Context) ([]domain.RunnerPlugin, error) {
+	req := connect.NewRequest(&runnerv1.ListPluginsRequest{})
+	propagateRequestID(ctx, req)
+
+	resp, err := e.runner.ListPlugins(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("list runner plugins: %w", err)
+	}
+
+	plugins := make([]domain.RunnerPlugin, 0, len(resp.Msg.Plugins))
+	for _, p := range resp.Msg.Plugins {
+		plugins = append(plugins, domain.RunnerPlugin{
+			Name:        p.Name,
+			Group:       p.Group,
+			Version:     p.Version,
+			PackageName: p.PackageName,
+		})
+	}
+	return plugins, nil
+}
+
 // domainLayerToProto converts domain.Layer to proto Layer enum.
 func domainLayerToProto(l domain.Layer) commonv1.Layer {
 	switch l {

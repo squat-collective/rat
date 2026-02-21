@@ -549,6 +549,14 @@ func main() {
 		slog.Info("executor initialized (community)")
 	}
 
+	// Wire runner plugin lister for GET /api/v1/runner/plugins.
+	// Uses the community executor's gRPC connection to call ListPlugins on the runner.
+	if communityExec != nil {
+		if lister, ok := communityExec.(api.RunnerPluginLister); ok {
+			srv.RunnerPlugins = lister
+		}
+	}
+
 	// Dynamic re-wiring: fired when an executor plugin registers or unregisters.
 	mgr.OnExecutorChanged = func(reg *plugins.Registry) {
 		if reg.ExecutorEnabled() {

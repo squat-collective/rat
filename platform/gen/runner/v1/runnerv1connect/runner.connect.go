@@ -51,6 +51,9 @@ const (
 	// RunnerServiceValidatePipelineProcedure is the fully-qualified name of the RunnerService's
 	// ValidatePipeline RPC.
 	RunnerServiceValidatePipelineProcedure = "/ratatouille.runner.v1.RunnerService/ValidatePipeline"
+	// RunnerServiceListPluginsProcedure is the fully-qualified name of the RunnerService's ListPlugins
+	// RPC.
+	RunnerServiceListPluginsProcedure = "/ratatouille.runner.v1.RunnerService/ListPlugins"
 )
 
 // RunnerServiceClient is a client for the ratatouille.runner.v1.RunnerService service.
@@ -70,6 +73,9 @@ type RunnerServiceClient interface {
 	// Validate pipeline templates (Jinja syntax, anti-patterns) without executing.
 	// Called by the platform before publishing to catch errors early.
 	ValidatePipeline(context.Context, *connect.Request[v1.ValidatePipelineRequest]) (*connect.Response[v1.ValidatePipelineResponse], error)
+	// List all discovered runner plugins (entry points installed in the runner container).
+	// Called by the platform to expose runner plugin metadata to the portal UI.
+	ListPlugins(context.Context, *connect.Request[v1.ListPluginsRequest]) (*connect.Response[v1.ListPluginsResponse], error)
 }
 
 // NewRunnerServiceClient constructs a client for the ratatouille.runner.v1.RunnerService service.
@@ -119,6 +125,12 @@ func NewRunnerServiceClient(httpClient connect.HTTPClient, baseURL string, opts 
 			connect.WithSchema(runnerServiceMethods.ByName("ValidatePipeline")),
 			connect.WithClientOptions(opts...),
 		),
+		listPlugins: connect.NewClient[v1.ListPluginsRequest, v1.ListPluginsResponse](
+			httpClient,
+			baseURL+RunnerServiceListPluginsProcedure,
+			connect.WithSchema(runnerServiceMethods.ByName("ListPlugins")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -130,6 +142,7 @@ type runnerServiceClient struct {
 	cancelRun        *connect.Client[v11.CancelRunRequest, v11.CancelRunResponse]
 	previewPipeline  *connect.Client[v1.PreviewPipelineRequest, v1.PreviewPipelineResponse]
 	validatePipeline *connect.Client[v1.ValidatePipelineRequest, v1.ValidatePipelineResponse]
+	listPlugins      *connect.Client[v1.ListPluginsRequest, v1.ListPluginsResponse]
 }
 
 // SubmitPipeline calls ratatouille.runner.v1.RunnerService.SubmitPipeline.
@@ -162,6 +175,11 @@ func (c *runnerServiceClient) ValidatePipeline(ctx context.Context, req *connect
 	return c.validatePipeline.CallUnary(ctx, req)
 }
 
+// ListPlugins calls ratatouille.runner.v1.RunnerService.ListPlugins.
+func (c *runnerServiceClient) ListPlugins(ctx context.Context, req *connect.Request[v1.ListPluginsRequest]) (*connect.Response[v1.ListPluginsResponse], error) {
+	return c.listPlugins.CallUnary(ctx, req)
+}
+
 // RunnerServiceHandler is an implementation of the ratatouille.runner.v1.RunnerService service.
 type RunnerServiceHandler interface {
 	// Submit a pipeline for execution.
@@ -179,6 +197,9 @@ type RunnerServiceHandler interface {
 	// Validate pipeline templates (Jinja syntax, anti-patterns) without executing.
 	// Called by the platform before publishing to catch errors early.
 	ValidatePipeline(context.Context, *connect.Request[v1.ValidatePipelineRequest]) (*connect.Response[v1.ValidatePipelineResponse], error)
+	// List all discovered runner plugins (entry points installed in the runner container).
+	// Called by the platform to expose runner plugin metadata to the portal UI.
+	ListPlugins(context.Context, *connect.Request[v1.ListPluginsRequest]) (*connect.Response[v1.ListPluginsResponse], error)
 }
 
 // NewRunnerServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -224,6 +245,12 @@ func NewRunnerServiceHandler(svc RunnerServiceHandler, opts ...connect.HandlerOp
 		connect.WithSchema(runnerServiceMethods.ByName("ValidatePipeline")),
 		connect.WithHandlerOptions(opts...),
 	)
+	runnerServiceListPluginsHandler := connect.NewUnaryHandler(
+		RunnerServiceListPluginsProcedure,
+		svc.ListPlugins,
+		connect.WithSchema(runnerServiceMethods.ByName("ListPlugins")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/ratatouille.runner.v1.RunnerService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case RunnerServiceSubmitPipelineProcedure:
@@ -238,6 +265,8 @@ func NewRunnerServiceHandler(svc RunnerServiceHandler, opts ...connect.HandlerOp
 			runnerServicePreviewPipelineHandler.ServeHTTP(w, r)
 		case RunnerServiceValidatePipelineProcedure:
 			runnerServiceValidatePipelineHandler.ServeHTTP(w, r)
+		case RunnerServiceListPluginsProcedure:
+			runnerServiceListPluginsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -269,4 +298,8 @@ func (UnimplementedRunnerServiceHandler) PreviewPipeline(context.Context, *conne
 
 func (UnimplementedRunnerServiceHandler) ValidatePipeline(context.Context, *connect.Request[v1.ValidatePipelineRequest]) (*connect.Response[v1.ValidatePipelineResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ratatouille.runner.v1.RunnerService.ValidatePipeline is not implemented"))
+}
+
+func (UnimplementedRunnerServiceHandler) ListPlugins(context.Context, *connect.Request[v1.ListPluginsRequest]) (*connect.Response[v1.ListPluginsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ratatouille.runner.v1.RunnerService.ListPlugins is not implemented"))
 }

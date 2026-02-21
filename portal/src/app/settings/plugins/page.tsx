@@ -2,10 +2,7 @@
 
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { PluginList } from "@/components/plugin-list";
-import { PluginSources } from "@/components/plugin-sources";
-import { PluginPolicies } from "@/components/plugin-policies";
+import { RunnerPluginList } from "@/components/runner-plugin-list";
 
 export default function PluginManagementPage() {
   return (
@@ -18,29 +15,16 @@ export default function PluginManagementPage() {
           <ArrowLeft className="h-4 w-4" />
         </Link>
         <h1 className="text-lg font-bold tracking-wider gradient-text">
-          Plugin Management
+          Runner Plugins
         </h1>
       </div>
 
-      <Tabs defaultValue="plugins" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="plugins">Plugins</TabsTrigger>
-          <TabsTrigger value="sources">Sources</TabsTrigger>
-          <TabsTrigger value="policies">Policies</TabsTrigger>
-        </TabsList>
+      <p className="text-xs text-muted-foreground">
+        Python packages installed in the runner container. These are discovered
+        automatically from entry points at startup.
+      </p>
 
-        <TabsContent value="plugins">
-          <PluginList />
-        </TabsContent>
-
-        <TabsContent value="sources">
-          <PluginSources />
-        </TabsContent>
-
-        <TabsContent value="policies">
-          <PluginPolicies />
-        </TabsContent>
-      </Tabs>
+      <RunnerPluginList />
     </div>
   );
 }

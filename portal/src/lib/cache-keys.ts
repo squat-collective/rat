@@ -92,6 +92,20 @@ export const KEYS = {
   plugin: (name: string) => `plugin-${name}` as const,
   pluginSources: () => "plugin-sources" as const,
   pluginPolicies: () => "plugin-policies" as const,
+  runnerPlugins: () => "runner-plugins" as const,
+
+  // --- Permissions ---
+  grants: (filter?: string) =>
+    filter ? `grants-${filter}` : ("grants" as const),
+  verbs: () => "verbs" as const,
+  groups: () => "groups" as const,
+  groupMembers: (groupId: string) => `group-members-${groupId}`,
+  resourceAccess: (resource: string) => `resource-access-${resource}`,
+
+  // --- Identity ---
+  identityUsers: (params?: string) =>
+    params ? `identity-users-${params}` : ("identity-users" as const),
+  identityCapabilities: () => "identity-capabilities" as const,
 
   // --- Retention ---
   retentionConfig: () => "retention-config" as const,

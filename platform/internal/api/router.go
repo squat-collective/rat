@@ -259,6 +259,11 @@ type PluginRegistryLive interface {
 	Get(name string) *plugins.Plugin
 }
 
+// RunnerPluginLister fetches the list of runner plugins from the runner service.
+type RunnerPluginLister interface {
+	ListRunnerPlugins(ctx context.Context) ([]domain.RunnerPlugin, error)
+}
+
 // CloudProvider vends scoped cloud credentials for pipeline runs.
 // Implemented by the plugins.Registry when the cloud plugin is loaded.
 type CloudProvider interface {
@@ -324,6 +329,7 @@ type Server struct {
 	Reaper         ReaperRunner
 	Plugins        PluginRegistry
 	Cloud          CloudProvider
+	RunnerPlugins  RunnerPluginLister
 	LicenseInfo    *domain.LicenseInfo
 	PluginManager  PluginManager   // lifecycle operations (register, enable, disable, remove)
 	PluginCatalog  PluginLister    // read-only catalog queries
@@ -471,6 +477,7 @@ func NewRouter(srv *Server) chi.Router {
 		MountAuditRoutes(vr, srv)
 		MountPreviewRoutes(vr, srv)
 		MountPublishRoutes(vr, srv)
+		MountRunnerPluginRoutes(vr, srv)
 		if srv.Settings != nil {
 			MountRetentionRoutes(vr, srv)
 		}

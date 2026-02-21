@@ -30,6 +30,7 @@ from rat_runner.callback import notify_run_complete
 from rat_runner.config import NessieConfig, S3Config, list_s3_keys, read_s3_text
 from rat_runner.executor import execute_pipeline
 from rat_runner.models import RunState, RunStatus
+from rat_runner.plugin_registry import PluginRegistry
 from rat_runner.preview import preview_pipeline
 from rat_runner.state_dir import (
     collect_crashed_runs,
@@ -126,6 +127,7 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
         max_workers: int = 4,
         state_dir: Path | None = None,
         max_concurrent_runs: int | None = None,
+        plugin_registry: PluginRegistry | None = None,
     ) -> None:
         self._s3_config = s3_config
         self._nessie_config = nessie_config
@@ -141,6 +143,12 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
             target=self._cleanup_loop, daemon=True, name="run-cleanup"
         )
         self._cleanup_thread.start()
+
+        # Server-level plugin registry for the ListPlugins endpoint.
+        # One-time discovery at startup — separate from per-run discovery in the executor.
+        self._plugin_registry = plugin_registry or PluginRegistry()
+        if plugin_registry is None:
+            self._plugin_registry.discover()
 
         # Reconcile runs that were in-flight when the previous process crashed.
         self._reconcile_crashed_runs()
@@ -624,6 +632,22 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
             valid=all_valid,
             files=file_validations,
         )
+
+    def ListPlugins(  # noqa: N802
+        self,
+        request: runner_pb2.ListPluginsRequest,
+        context: grpc.ServicerContext,
+    ) -> runner_pb2.ListPluginsResponse:
+        plugins = [
+            runner_pb2.RunnerPlugin(
+                name=p.name,
+                group=p.group,
+                version=p.version,
+                package_name=p.package_name,
+            )
+            for p in self._plugin_registry.list_plugins()
+        ]
+        return runner_pb2.ListPluginsResponse(plugins=plugins)
 
     @property
     def active_run_count(self) -> int:

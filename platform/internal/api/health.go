@@ -195,13 +195,7 @@ func (s *Server) HandleFeatures(w http.ResponseWriter, _ *http.Request) {
 			Edition:    "community",
 			Namespaces: false,
 			MultiUser:  false,
-			Plugins: map[string]domain.PluginFeature{
-				"auth":        {Enabled: false},
-				"sharing":     {Enabled: false},
-				"executor":    {Enabled: true, Type: "warmpool"},
-				"audit":       {Enabled: false},
-				"enforcement": {Enabled: false},
-			},
+			Plugins:    map[string]domain.PluginFeature{},
 		}
 	}
 
