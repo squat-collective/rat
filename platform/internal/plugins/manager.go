@@ -245,6 +245,17 @@ func (m *Manager) UpdateConfig(ctx context.Context, name string, config json.Raw
 	return m.catalog.UpdatePluginConfig(ctx, name, config)
 }
 
+// NotifyHealthTransition is called by the HealthLoop when a plugin's status
+// changes (enabled→error or error→enabled). It looks up the plugin's capabilities
+// and fires the appropriate re-wiring callbacks (e.g., OnExecutorChanged).
+func (m *Manager) NotifyHealthTransition(pluginName string) {
+	p := m.registry.Get(pluginName)
+	if p == nil {
+		return
+	}
+	m.fireCallbacks(p.Capabilities)
+}
+
 // ── Internal helpers ───────────────────────────────────────────
 
 // reconnectPlugin creates a client connection, health-checks, describes,

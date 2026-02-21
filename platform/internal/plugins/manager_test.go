@@ -328,3 +328,29 @@ func TestInferCapabilitiesFromEntry_NoDescriptor_FallsBackToName(t *testing.T) {
 	caps := inferCapabilitiesFromEntry(entry)
 	assert.Equal(t, []string{CapAuth}, caps)
 }
+
+func TestManager_NotifyHealthTransition_FiresOnExecutorChanged(t *testing.T) {
+	mgr := NewManager(nil, "pro", nil)
+
+	// Register an executor plugin in the registry.
+	require.NoError(t, mgr.Registry().Register(&Plugin{
+		Name:         "executor",
+		Addr:         "http://executor:50070",
+		Status:       domain.PluginStatusEnabled,
+		Capabilities: []string{CapExecutor},
+	}))
+
+	var execCallbackFired bool
+	mgr.OnExecutorChanged = func(_ *Registry) { execCallbackFired = true }
+
+	mgr.NotifyHealthTransition("executor")
+
+	assert.True(t, execCallbackFired, "OnExecutorChanged should fire for executor capability")
+}
+
+func TestManager_NotifyHealthTransition_UnknownPlugin_NoPanic(t *testing.T) {
+	mgr := NewManager(nil, "pro", nil)
+
+	// Should not panic when plugin doesn't exist.
+	mgr.NotifyHealthTransition("nonexistent")
+}

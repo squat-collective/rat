@@ -120,6 +120,107 @@ func TestHealthLoop_SkipsNilClient(t *testing.T) {
 	hl.checkAll(context.Background()) // should not panic
 }
 
+func TestHealthLoop_OnTransition_FiredOnEnabledToError(t *testing.T) {
+	reg := NewRegistry("pro")
+
+	mock := &mockPluginServiceClient{
+		healthCheckFunc: func(_ context.Context, _ *connect.Request[pluginv1.HealthCheckRequest]) (*connect.Response[pluginv1.HealthCheckResponse], error) {
+			return nil, connect.NewError(connect.CodeUnavailable, errors.New("connection refused"))
+		},
+	}
+
+	require.NoError(t, reg.Register(&Plugin{
+		Name:         "executor",
+		Addr:         "http://executor:50070",
+		Status:       domain.PluginStatusEnabled,
+		Capabilities: []string{CapExecutor},
+		PluginClient: mock,
+	}))
+
+	var transitionPlugin *Plugin
+	var oldStatus, newStatus domain.PluginStatus
+
+	hl := NewHealthLoop(reg, nil)
+	hl.OnTransition = func(p *Plugin, old, new domain.PluginStatus) {
+		transitionPlugin = p
+		oldStatus = old
+		newStatus = new
+	}
+	hl.checkAll(context.Background())
+
+	require.NotNil(t, transitionPlugin, "OnTransition should have been called")
+	assert.Equal(t, "executor", transitionPlugin.Name)
+	assert.Equal(t, domain.PluginStatusEnabled, oldStatus)
+	assert.Equal(t, domain.PluginStatusError, newStatus)
+}
+
+func TestHealthLoop_OnTransition_FiredOnErrorToEnabled(t *testing.T) {
+	reg := NewRegistry("pro")
+
+	mock := &mockPluginServiceClient{
+		healthCheckFunc: func(_ context.Context, _ *connect.Request[pluginv1.HealthCheckRequest]) (*connect.Response[pluginv1.HealthCheckResponse], error) {
+			return connect.NewResponse(&pluginv1.HealthCheckResponse{
+				Status: pluginv1.Status_STATUS_SERVING,
+			}), nil
+		},
+	}
+
+	require.NoError(t, reg.Register(&Plugin{
+		Name:         "executor",
+		Addr:         "http://executor:50070",
+		Status:       domain.PluginStatusError,
+		Error:        "was down",
+		Capabilities: []string{CapExecutor},
+		PluginClient: mock,
+	}))
+
+	var transitionPlugin *Plugin
+	var oldStatus, newStatus domain.PluginStatus
+
+	hl := NewHealthLoop(reg, nil)
+	hl.OnTransition = func(p *Plugin, old, new domain.PluginStatus) {
+		transitionPlugin = p
+		oldStatus = old
+		newStatus = new
+	}
+	hl.checkAll(context.Background())
+
+	require.NotNil(t, transitionPlugin, "OnTransition should have been called")
+	assert.Equal(t, "executor", transitionPlugin.Name)
+	assert.Equal(t, domain.PluginStatusError, oldStatus)
+	assert.Equal(t, domain.PluginStatusEnabled, newStatus)
+}
+
+func TestHealthLoop_OnTransition_NotFiredWhenStable(t *testing.T) {
+	reg := NewRegistry("pro")
+
+	// Plugin is healthy and stays healthy — no transition.
+	mock := &mockPluginServiceClient{
+		healthCheckFunc: func(_ context.Context, _ *connect.Request[pluginv1.HealthCheckRequest]) (*connect.Response[pluginv1.HealthCheckResponse], error) {
+			return connect.NewResponse(&pluginv1.HealthCheckResponse{
+				Status: pluginv1.Status_STATUS_SERVING,
+			}), nil
+		},
+	}
+
+	require.NoError(t, reg.Register(&Plugin{
+		Name:         "executor",
+		Addr:         "http://executor:50070",
+		Status:       domain.PluginStatusEnabled,
+		Capabilities: []string{CapExecutor},
+		PluginClient: mock,
+	}))
+
+	callCount := 0
+	hl := NewHealthLoop(reg, nil)
+	hl.OnTransition = func(_ *Plugin, _, _ domain.PluginStatus) {
+		callCount++
+	}
+	hl.checkAll(context.Background())
+
+	assert.Equal(t, 0, callCount, "OnTransition should not fire when health status is stable")
+}
+
 func TestHealthLoop_PersistsTransitionToCatalog(t *testing.T) {
 	reg := NewRegistry("pro")
 	catalog := newMemoryCatalog()

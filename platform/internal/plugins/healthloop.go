@@ -27,6 +27,11 @@ type HealthLoop struct {
 	cancel   context.CancelFunc
 	done     chan struct{}
 	mu       sync.Mutex
+
+	// OnTransition is called after a plugin's health status changes.
+	// Fired on enabled→error and error→enabled transitions.
+	// Set by the caller (main.go) to trigger re-wiring (e.g., executor fallback).
+	OnTransition func(plugin *Plugin, oldStatus, newStatus domain.PluginStatus)
 }
 
 // NewHealthLoop creates a periodic health checker that iterates the registry.
@@ -106,6 +111,9 @@ func (hl *HealthLoop) checkAll(ctx context.Context) {
 				_ = hl.catalog.UpdatePluginHealth(ctx, p.Name, false, err.Error())
 				_ = hl.catalog.UpdatePluginStatus(ctx, p.Name, domain.PluginStatusError, err.Error())
 			}
+			if hl.OnTransition != nil {
+				hl.OnTransition(p, domain.PluginStatusEnabled, domain.PluginStatusError)
+			}
 		} else if !wasHealthy && nowHealthy {
 			// Transition: error → enabled. Re-enable.
 			slog.Info("plugin recovered, re-enabling",
@@ -116,6 +124,9 @@ func (hl *HealthLoop) checkAll(ctx context.Context) {
 			if hl.catalog != nil {
 				_ = hl.catalog.UpdatePluginHealth(ctx, p.Name, true, "")
 				_ = hl.catalog.UpdatePluginStatus(ctx, p.Name, domain.PluginStatusEnabled, "")
+			}
+			if hl.OnTransition != nil {
+				hl.OnTransition(p, domain.PluginStatusError, domain.PluginStatusEnabled)
 			}
 		}
 	}

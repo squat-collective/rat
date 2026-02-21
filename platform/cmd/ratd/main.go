@@ -454,50 +454,113 @@ func main() {
 		slog.Info("cloud plugin registered (credentials via plugin proxy)")
 	}
 
-	// Wire executor: plugin executor (Pro) takes priority over WarmPoolExecutor (Community).
-	if registry.ExecutorEnabled() {
-		addr := registry.GetExecutorAddr()
-		exec := executor.NewPluginExecutor(addr, srv.Runs, grpcClient)
-		exec.OnRunComplete = func(ctx context.Context, run *domain.Run, status domain.RunStatus) {
-			if status != domain.RunStatusSuccess || srv.Triggers == nil {
-				return
-			}
-			srv.EvaluatePipelineSuccessTriggers(ctx, run)
+	// Wire executor: AtomicExecutor provides thread-safe dynamic swapping.
+	// Plugin executor (Pro) takes priority; community executor is the fallback.
+	// When an executor plugin registers/unregisters at runtime, the OnExecutorChanged
+	// callback swaps the active executor without downtime.
+	atomicExec := executor.NewAtomicExecutor()
+	srv.Executor = atomicExec
+
+	onComplete := func(ctx context.Context, run *domain.Run, status domain.RunStatus) {
+		if status != domain.RunStatusSuccess || srv.Triggers == nil {
+			return
 		}
-		srv.Executor = exec
-		srv.RunnerHealth = transport.NewTCPHealthChecker(addr, "runner")
-		exec.Start(ctx)
-		stopExecutor = func() { exec.Stop() }
-		slog.Info("executor initialized (plugin)", "addr", addr)
-	} else if runnerAddr := os.Getenv("RUNNER_ADDR"); runnerAddr != "" {
+		srv.EvaluatePipelineSuccessTriggers(ctx, run)
+	}
+
+	// Build the community executor from RUNNER_ADDR (if set).
+	// This is kept running as a persistent fallback — never stopped.
+	type stoppable interface{ Stop() }
+	var communityExec api.Executor
+	var stopCommunityExec func()
+	if runnerAddr := os.Getenv("RUNNER_ADDR"); runnerAddr != "" {
 		addrs := executor.ParseRunnerAddrs(runnerAddr)
 		srv.RunnerHealth = transport.NewTCPHealthChecker(addrs[0], "runner")
-		onComplete := func(ctx context.Context, run *domain.Run, status domain.RunStatus) {
-			if status != domain.RunStatusSuccess || srv.Triggers == nil {
-				return
-			}
-			srv.EvaluatePipelineSuccessTriggers(ctx, run)
-		}
 
 		if len(addrs) > 1 {
-			// Multiple runner replicas — use round-robin dispatch with
-			// RESOURCE_EXHAUSTED failover across all runners.
 			rr := executor.NewRoundRobinExecutor(addrs, srv.Runs, grpcClient)
 			rr.SetLandingZones(srv.LandingZones)
 			rr.SetOnRunComplete(onComplete)
-			srv.Executor = rr
 			rr.Start(ctx)
-			stopExecutor = func() { rr.Stop() }
-			slog.Info("executor initialized (round-robin)", "runners", len(addrs), "runner_addrs", strings.Join(addrs, ","))
+			communityExec = rr
+			stopCommunityExec = func() { rr.Stop() }
+			slog.Info("community executor ready (round-robin)", "runners", len(addrs), "runner_addrs", strings.Join(addrs, ","))
 		} else {
-			// Single runner — use direct WarmPoolExecutor (original behavior).
 			exec := executor.NewWarmPoolExecutor(addrs[0], srv.Runs, grpcClient)
 			exec.LandingZones = srv.LandingZones
 			exec.OnRunComplete = onComplete
-			srv.Executor = exec
 			exec.Start(ctx)
-			stopExecutor = func() { exec.Stop() }
-			slog.Info("executor initialized (warmpool)", "runner_addr", addrs[0])
+			communityExec = exec
+			stopCommunityExec = func() { exec.Stop() }
+			slog.Info("community executor ready (warmpool)", "runner_addr", addrs[0])
+		}
+	}
+
+	// Track the currently active plugin executor so we can stop it on swap.
+	var activePluginExec stoppable
+
+	// activatePluginExecutor creates and starts a new PluginExecutor, swaps it
+	// into the AtomicExecutor, and stops the previous plugin executor (if any).
+	activatePluginExecutor := func(addr string) {
+		pluginExec := executor.NewPluginExecutor(addr, srv.Runs, grpcClient)
+		pluginExec.OnRunComplete = onComplete
+		pluginExec.Start(ctx)
+
+		old := atomicExec.Swap(pluginExec)
+		srv.RunnerHealth = transport.NewTCPHealthChecker(addr, "runner")
+
+		// Stop the previous plugin executor (not the community one — it keeps running).
+		if activePluginExec != nil {
+			activePluginExec.Stop()
+		}
+		activePluginExec = pluginExec
+
+		_ = old // community exec keeps running for in-flight fallback
+		slog.Info("executor activated (plugin)", "addr", addr)
+	}
+
+	// activateCommunityExecutor swaps in the community executor and stops the
+	// previous plugin executor.
+	activateCommunityExecutor := func() {
+		if communityExec == nil {
+			slog.Warn("no community executor available for fallback")
+			return
+		}
+		atomicExec.Swap(communityExec)
+
+		if activePluginExec != nil {
+			activePluginExec.Stop()
+			activePluginExec = nil
+		}
+		slog.Info("executor activated (community fallback)")
+	}
+
+	// Initial activation: plugin executor if already registered, else community.
+	if registry.ExecutorEnabled() {
+		addr := registry.GetExecutorAddr()
+		activatePluginExecutor(addr)
+	} else if communityExec != nil {
+		atomicExec.Swap(communityExec)
+		slog.Info("executor initialized (community)")
+	}
+
+	// Dynamic re-wiring: fired when an executor plugin registers or unregisters.
+	mgr.OnExecutorChanged = func(reg *plugins.Registry) {
+		if reg.ExecutorEnabled() {
+			addr := reg.GetExecutorAddr()
+			activatePluginExecutor(addr)
+		} else {
+			activateCommunityExecutor()
+		}
+	}
+
+	// Shutdown hook: stop both plugin and community executors.
+	stopExecutor = func() {
+		if activePluginExec != nil {
+			activePluginExec.Stop()
+		}
+		if stopCommunityExec != nil {
+			stopCommunityExec()
 		}
 	}
 
@@ -596,6 +659,9 @@ func main() {
 	// Start plugin health loop (30s interval, checks all registered plugins).
 	// Catalog may be nil if Postgres is not available — health loop handles that.
 	healthLoop := plugins.NewHealthLoop(registry, mgr.Catalog())
+	healthLoop.OnTransition = func(p *plugins.Plugin, _, _ domain.PluginStatus) {
+		mgr.NotifyHealthTransition(p.Name)
+	}
 	healthLoop.Start(ctx)
 	stopHealthLoop = func() { healthLoop.Stop() }
 	slog.Info("plugin health loop started")
