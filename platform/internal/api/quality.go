@@ -182,6 +182,17 @@ func (s *Server) HandleRunQualityTests(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Publish quality_failed event when tests fail (best-effort).
+	if failed > 0 && s.EventBus != nil {
+		_ = s.EventBus.Publish(r.Context(), "quality_failed", map[string]interface{}{
+			"namespace": namespace,
+			"layer":     layer,
+			"name":      name,
+			"failed":    failed,
+			"total":     len(results),
+		})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"results": results,
 		"passed":  passed,

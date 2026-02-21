@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	connect "connectrpc.com/connect"
+	"github.com/google/uuid"
 	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
 	"github.com/rat-data/rat/platform/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -353,4 +354,129 @@ func TestManager_NotifyHealthTransition_UnknownPlugin_NoPanic(t *testing.T) {
 
 	// Should not panic when plugin doesn't exist.
 	mgr.NotifyHealthTransition("nonexistent")
+}
+
+// ── Policy Enforcement Tests ──────────────────────────────────────────────
+
+// memoryPolicyStore is a test double for PluginPolicyLister.
+type memoryPolicyStore struct {
+	policies []domain.PluginPolicy
+}
+
+func (m *memoryPolicyStore) ListPluginPolicies(_ context.Context) ([]domain.PluginPolicy, error) {
+	return m.policies, nil
+}
+
+func TestEvaluatePolicies_DenyBlocksRegistration(t *testing.T) {
+	catalog := newMemoryCatalog()
+	mgr := NewManager(catalog, "pro", nil)
+	mgr.SetPolicies(&memoryPolicyStore{
+		policies: []domain.PluginPolicy{
+			{ID: uuid.MustParse("00000000-0000-0000-0000-000000000001"), Rule: "deny", Pattern: "evil-*"},
+		},
+	})
+
+	// Start a mock plugin server.
+	ts := startMockPluginServer(t, []string{"custom"})
+	defer ts.Close()
+
+	err := mgr.Register(context.Background(), "evil-plugin", ts.URL)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "denied by policy")
+	assert.Contains(t, err.Error(), "evil-plugin")
+
+	// Plugin should NOT be in the registry.
+	assert.Nil(t, mgr.Registry().Get("evil-plugin"))
+}
+
+func TestEvaluatePolicies_AllowPermitsRegistration(t *testing.T) {
+	catalog := newMemoryCatalog()
+	mgr := NewManager(catalog, "pro", nil)
+	mgr.SetPolicies(&memoryPolicyStore{
+		policies: []domain.PluginPolicy{
+			{ID: uuid.MustParse("00000000-0000-0000-0000-000000000001"), Rule: "allow", Pattern: "good-*"},
+			{ID: uuid.MustParse("00000000-0000-0000-0000-000000000002"), Rule: "deny", Pattern: "*"},
+		},
+	})
+
+	ts := startMockPluginServer(t, []string{"custom"})
+	defer ts.Close()
+
+	err := mgr.Register(context.Background(), "good-plugin", ts.URL)
+	require.NoError(t, err)
+
+	// Plugin should be in the registry.
+	assert.NotNil(t, mgr.Registry().Get("good-plugin"))
+}
+
+func TestEvaluatePolicies_NoPoliciesDefaultAllow(t *testing.T) {
+	catalog := newMemoryCatalog()
+	mgr := NewManager(catalog, "pro", nil)
+	mgr.SetPolicies(&memoryPolicyStore{policies: nil})
+
+	ts := startMockPluginServer(t, []string{"custom"})
+	defer ts.Close()
+
+	err := mgr.Register(context.Background(), "any-plugin", ts.URL)
+	require.NoError(t, err)
+	assert.NotNil(t, mgr.Registry().Get("any-plugin"))
+}
+
+func TestEvaluatePolicies_FirstMatchWins(t *testing.T) {
+	catalog := newMemoryCatalog()
+	mgr := NewManager(catalog, "pro", nil)
+	mgr.SetPolicies(&memoryPolicyStore{
+		policies: []domain.PluginPolicy{
+			// First: allow auth-* specifically
+			{ID: uuid.MustParse("00000000-0000-0000-0000-000000000001"), Rule: "allow", Pattern: "auth-*"},
+			// Second: deny everything
+			{ID: uuid.MustParse("00000000-0000-0000-0000-000000000002"), Rule: "deny", Pattern: "*"},
+		},
+	})
+
+	ts := startMockPluginServer(t, []string{CapAuth})
+	defer ts.Close()
+
+	// auth-keycloak matches first rule (allow) — should succeed.
+	err := mgr.Register(context.Background(), "auth-keycloak", ts.URL)
+	require.NoError(t, err)
+	assert.NotNil(t, mgr.Registry().Get("auth-keycloak"))
+}
+
+func TestEvaluatePolicies_KindScopedPolicy(t *testing.T) {
+	catalog := newMemoryCatalog()
+	mgr := NewManager(catalog, "pro", nil)
+	mgr.SetPolicies(&memoryPolicyStore{
+		policies: []domain.PluginPolicy{
+			// Deny platform plugins matching "custom-*"
+			{
+				ID:      uuid.MustParse("00000000-0000-0000-0000-000000000001"),
+				Rule:    "deny",
+				Pattern: "custom-*",
+				Kind:    string(domain.PluginKindRunner),
+			},
+		},
+	})
+
+	ts := startMockPluginServer(t, []string{CapAuth})
+	defer ts.Close()
+
+	// custom-executor has platform kind (from CapAuth), policy targets runner kind — no match.
+	// Should be allowed (no matching policy = default allow).
+	err := mgr.Register(context.Background(), "custom-executor", ts.URL)
+	require.NoError(t, err)
+	assert.NotNil(t, mgr.Registry().Get("custom-executor"))
+}
+
+func TestEvaluatePolicies_NilPoliciesStore_NoEnforcement(t *testing.T) {
+	catalog := newMemoryCatalog()
+	mgr := NewManager(catalog, "pro", nil)
+	// No SetPolicies call — policies is nil.
+
+	ts := startMockPluginServer(t, []string{"custom"})
+	defer ts.Close()
+
+	err := mgr.Register(context.Background(), "any-plugin", ts.URL)
+	require.NoError(t, err)
+	assert.NotNil(t, mgr.Registry().Get("any-plugin"))
 }

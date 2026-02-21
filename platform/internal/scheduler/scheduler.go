@@ -15,6 +15,11 @@ import (
 	"github.com/rat-data/rat/platform/internal/executor"
 )
 
+// EventPublisher publishes events to the event bus.
+type EventPublisher interface {
+	Publish(ctx context.Context, channel string, payload interface{}) error
+}
+
 // Scheduler checks enabled schedules and fires runs when they're due.
 type Scheduler struct {
 	schedules api.ScheduleStore
@@ -25,6 +30,7 @@ type Scheduler struct {
 	parser    cron.Parser
 	cancel    context.CancelFunc
 	done      chan struct{}
+	EventBus  EventPublisher // Optional: publishes schedule_fired events when set.
 }
 
 // New creates a Scheduler with the given stores and check interval.
@@ -153,6 +159,16 @@ func (s *Scheduler) tick(ctx context.Context) {
 			}
 			slog.Error("scheduler: executor submit failed", "run_id", run.ID, "error", err)
 			// Continue — run was created, just not dispatched
+		}
+
+		// Publish schedule_fired event (best-effort).
+		if s.EventBus != nil {
+			_ = s.EventBus.Publish(ctx, "schedule_fired", map[string]interface{}{
+				"schedule_id": sched.ID.String(),
+				"pipeline_id": sched.PipelineID.String(),
+				"run_id":      run.ID.String(),
+				"cron_expr":   sched.CronExpr,
+			})
 		}
 
 		// Compute the next run time from NOW (catch up once, then advance to future)

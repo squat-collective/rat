@@ -95,3 +95,12 @@ export type {
   CreateWebhookRequest,
   CreateWebhookResponse,
 } from "./webhooks";
+export type {
+  PluginStatus,
+  PluginKind,
+  PluginEntry,
+  PluginSource,
+  CreatePluginSourceRequest,
+  PluginPolicy,
+  CreatePluginPolicyRequest,
+} from "./plugins";

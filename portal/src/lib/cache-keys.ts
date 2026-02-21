@@ -84,6 +84,15 @@ export const KEYS = {
   // --- Health / Features ---
   features: () => "features" as const,
 
+  // --- Plugins ---
+  plugins: (status?: string, kind?: string) =>
+    status || kind
+      ? (`plugins-${status ?? "all"}-${kind ?? "all"}` as const)
+      : ("plugins" as const),
+  plugin: (name: string) => `plugin-${name}` as const,
+  pluginSources: () => "plugin-sources" as const,
+  pluginPolicies: () => "plugin-policies" as const,
+
   // --- Retention ---
   retentionConfig: () => "retention-config" as const,
   reaperStatus: () => "reaper-status" as const,
@@ -121,5 +130,8 @@ export const KEYS = {
     /** Matches landing-samples keys for a specific zone. */
     landingSamples: (ns: string, name: string) => (key: unknown): boolean =>
       typeof key === "string" && key.startsWith(`landing-samples-${ns}-${name}`),
+    /** Matches all plugin-related keys (plugins list, plugin detail, sources, policies). */
+    plugins: (key: unknown): boolean =>
+      typeof key === "string" && key.startsWith("plugin"),
   },
 } as const;

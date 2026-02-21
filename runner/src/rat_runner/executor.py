@@ -46,6 +46,8 @@ from rat_runner.models import MergeStrategy, PipelineConfig, QualityTestResult, 
 from rat_runner.nessie import create_branch, delete_branch, merge_branch
 from rat_runner.python_exec import execute_python_pipeline
 from rat_runner.quality import has_error_failures, run_quality_tests
+from rat_runner.plugin_protocols import HookContext
+from rat_runner.plugin_registry import PluginRegistry
 from rat_runner.templating import (
     compile_sql,
     extract_landing_zones,
@@ -77,6 +79,7 @@ class _PipelineContext:
     s3_config: S3Config
     nessie_config: NessieConfig
     log: RunLogger
+    registry: PluginRegistry = field(default_factory=PluginRegistry)
     published_versions: dict[str, str] = field(default_factory=dict)
 
     # Set during Phase 0
@@ -281,6 +284,11 @@ def _execute_sql_path(ctx: _PipelineContext) -> pa.Table:
 
     ns, layer, name = ctx.run.namespace, ctx.run.layer, ctx.run.pipeline_name
 
+    # Collect plugin Jinja helpers from registry
+    plugin_helpers: dict[str, object] = {}
+    for helper_name, helper in ctx.registry.get_helpers().items():
+        plugin_helpers[helper_name] = helper
+
     ctx.log.info("Compiling SQL template")
     compiled_sql = compile_sql(
         ctx.raw_sql,  # type: ignore[arg-type]
@@ -291,6 +299,7 @@ def _execute_sql_path(ctx: _PipelineContext) -> pa.Table:
         ctx.nessie_config,
         config=ctx.config,
         watermark_value=watermark_value,
+        plugin_helpers=plugin_helpers or None,
     )
     ctx.log.debug(f"Compiled SQL:\n{compiled_sql}")
 
@@ -305,9 +314,9 @@ def _execute_sql_path(ctx: _PipelineContext) -> pa.Table:
 def _phase3_write_iceberg(ctx: _PipelineContext) -> None:
     """Write the result table to Iceberg using the configured merge strategy.
 
-    Dispatches to the appropriate write function based on merge strategy.
-    Falls back to full_refresh when required config (unique_key, partition_column)
-    is missing.
+    Checks the plugin registry first for a matching strategy (including built-in
+    strategies when installed as a package). Falls back to direct dispatch when
+    the registry doesn't have the strategy (e.g. development/testing).
     """
     _check_cancelled(ctx.run)
     assert ctx.result is not None
@@ -319,6 +328,26 @@ def _phase3_write_iceberg(ctx: _PipelineContext) -> None:
 
     strategy = ctx.config.merge_strategy if ctx.config else MergeStrategy.FULL_REFRESH
 
+    # Try plugin registry first (includes built-in strategies when installed as package)
+    plugin_strategy = ctx.registry.get_strategy(str(strategy))
+    if plugin_strategy:
+        ctx.log.info(f"Using strategy '{strategy}' via plugin registry")
+        _engine_conn = ctx.engine.conn if ctx.engine else None
+        rows = plugin_strategy.execute(
+            ctx.result,
+            ctx.table_name,
+            ctx.s3_config,
+            ctx.nessie_config,
+            ctx.location,
+            ctx.config,
+            branch=ctx.branch_name,
+            conn=_engine_conn,
+        )
+        ctx.run.rows_written = rows
+        ctx.log.info(f"Strategy '{strategy}' complete ({rows} rows)")
+        return
+
+    # Fall back to built-in dispatch (for development/testing without package install)
     _engine_conn = ctx.engine.conn if ctx.engine else None
     _partition_by = ctx.config.partition_by if ctx.config and ctx.config.partition_by else None
 
@@ -536,6 +565,19 @@ def _post_success(ctx: _PipelineContext) -> None:
 # ── Public entry point ───────────────────────────────────────────────
 
 
+def _build_hook_context(ctx: _PipelineContext) -> HookContext:
+    """Build a HookContext from the current pipeline context."""
+    return HookContext(
+        namespace=ctx.run.namespace,
+        layer=ctx.run.layer,
+        name=ctx.run.pipeline_name,
+        run_id=ctx.run.run_id,
+        config=ctx.config,
+        logger=ctx.log,
+        branch=ctx.branch_name,
+    )
+
+
 def execute_pipeline(
     run: RunState,
     s3_config: S3Config,
@@ -562,21 +604,54 @@ def execute_pipeline(
     if run.env:
         s3_config = s3_config.with_overrides(run.env)
 
+    # Discover plugins for this run (fresh scan each run).
+    registry = PluginRegistry()
+    registry.discover()
+
     ctx = _PipelineContext(
         run=run,
         s3_config=s3_config,
         nessie_config=nessie_config,
         log=log,
+        registry=registry,
         published_versions=published_versions or {},
     )
 
     try:
         _phase0_create_branch(ctx)
         _phase1_detect_and_load(ctx)
+
+        # Dispatch pre_execute hooks
+        hook_ctx = _build_hook_context(ctx)
+        registry.dispatch_hooks("pre_execute", hook_ctx)
+
         _phase2_build_result(ctx)
+
+        # Dispatch pre_write hooks
+        hook_ctx = _build_hook_context(ctx)
+        registry.dispatch_hooks("pre_write", hook_ctx)
+
         _phase3_write_iceberg(ctx)
+
+        # Dispatch post_write hooks
+        hook_ctx = _build_hook_context(ctx)
+        registry.dispatch_hooks("post_write", hook_ctx)
+
+        # Dispatch pre_quality hooks
+        hook_ctx = _build_hook_context(ctx)
+        registry.dispatch_hooks("pre_quality", hook_ctx)
+
         quality_results = _phase4_quality_tests(ctx)
+
+        # Dispatch post_quality hooks
+        hook_ctx = _build_hook_context(ctx)
+        registry.dispatch_hooks("post_quality", hook_ctx)
+
         _phase5_resolve_branch(ctx, quality_results)
+
+        # Dispatch post_execute hooks
+        hook_ctx = _build_hook_context(ctx)
+        registry.dispatch_hooks("post_execute", hook_ctx)
 
     except CancelledError:
         run.status = RunStatus.CANCELLED

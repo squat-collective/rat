@@ -77,6 +77,7 @@ def compile_sql(
     config: PipelineConfig | None = None,
     watermark_value: str | None = None,
     landing_zone_fn: Callable[[str], str] | None = None,
+    plugin_helpers: dict[str, Callable[..., object]] | None = None,
 ) -> str:
     """Compile a Jinja SQL template with ref() resolution.
 
@@ -117,18 +118,29 @@ def compile_sql(
 
     env = SandboxedEnvironment(undefined=jinja2.StrictUndefined)
     template = env.from_string(raw_sql)
-    rendered = template.render(
-        ref=ref_fn,
-        landing_zone=landing_zone_fn,
-        this=this,
-        run_started_at=run_started_at,
-        is_incremental=is_incremental,
-        is_scd2=is_scd2,
-        is_snapshot=is_snapshot,
-        is_append_only=is_append_only,
-        is_delete_insert=is_delete_insert,
-        watermark_value=watermark_value,
-    )
+
+    template_vars: dict[str, object] = {
+        "ref": ref_fn,
+        "landing_zone": landing_zone_fn,
+        "this": this,
+        "run_started_at": run_started_at,
+        "is_incremental": is_incremental,
+        "is_scd2": is_scd2,
+        "is_snapshot": is_snapshot,
+        "is_append_only": is_append_only,
+        "is_delete_insert": is_delete_insert,
+        "watermark_value": watermark_value,
+    }
+
+    # Register plugin Jinja helpers (won't override built-in vars)
+    if plugin_helpers:
+        for name, helper in plugin_helpers.items():
+            if name not in template_vars:
+                template_vars[name] = helper
+            else:
+                logger.warning("Plugin Jinja helper '%s' conflicts with built-in, skipping", name)
+
+    rendered = template.render(**template_vars)
 
     # Strip metadata comment lines from output
     lines = rendered.splitlines()

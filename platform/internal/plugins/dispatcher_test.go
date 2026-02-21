@@ -157,3 +157,84 @@ func TestPlugin_SubscribedTo(t *testing.T) {
 	assert.True(t, p.subscribedTo("pipeline_created"))
 	assert.False(t, p.subscribedTo("pipeline_updated"))
 }
+
+func TestEventDispatcher_SubscribesToAllChannels(t *testing.T) {
+	bus := newMemoryDispatchBus()
+	reg := NewRegistry("pro")
+
+	d := NewEventDispatcher(reg, bus)
+	d.Start(context.Background())
+	defer d.Stop()
+
+	// Give the goroutines a moment to subscribe.
+	time.Sleep(50 * time.Millisecond)
+
+	// All 8 channels should have subscribers.
+	bus.mu.Lock()
+	defer bus.mu.Unlock()
+
+	expectedChannels := []string{
+		ChannelRunCompleted,
+		ChannelPipelineCreated,
+		ChannelPipelineUpdated,
+		ChannelPipelinePublished,
+		ChannelPipelineDeleted,
+		ChannelFileUploaded,
+		ChannelQualityFailed,
+		ChannelScheduleFired,
+	}
+
+	for _, ch := range expectedChannels {
+		assert.NotEmptyf(t, bus.subscribers[ch], "expected subscribers for channel %s", ch)
+	}
+}
+
+func TestEventDispatcher_DispatchesNewChannelEvents(t *testing.T) {
+	// Test that new event channels (pipeline_published, file_uploaded, etc.)
+	// are dispatched to plugins that subscribe to them.
+	newChannels := []string{
+		ChannelPipelinePublished,
+		ChannelPipelineDeleted,
+		ChannelFileUploaded,
+		ChannelQualityFailed,
+		ChannelScheduleFired,
+	}
+
+	for _, channel := range newChannels {
+		t.Run(channel, func(t *testing.T) {
+			bus := newMemoryDispatchBus()
+			reg := NewRegistry("pro")
+
+			received := make(chan string, 1)
+			mock := &mockPluginServiceClient{
+				handleEventFunc: func(_ context.Context, req *connect.Request[pluginv1.HandleEventRequest]) (*connect.Response[pluginv1.HandleEventResponse], error) {
+					received <- req.Msg.EventType
+					return connect.NewResponse(&pluginv1.HandleEventResponse{}), nil
+				},
+			}
+
+			require.NoError(t, reg.Register(&Plugin{
+				Name:         "test-plugin",
+				Addr:         "http://test:50090",
+				Status:       domain.PluginStatusEnabled,
+				EventTypes:   []string{channel},
+				PluginClient: mock,
+			}))
+
+			d := NewEventDispatcher(reg, bus)
+			d.Start(context.Background())
+			defer d.Stop()
+
+			time.Sleep(50 * time.Millisecond)
+
+			bus.Publish(channel, map[string]string{"test": "data"})
+
+			select {
+			case eventType := <-received:
+				assert.Equal(t, channel, eventType)
+			case <-time.After(2 * time.Second):
+				t.Fatalf("timed out waiting for %s event dispatch", channel)
+			}
+		})
+	}
+}

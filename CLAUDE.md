@@ -492,10 +492,10 @@ proto/
 ├── query/v1/query.proto           # query service (4 RPCs)
 ├── executor/v1/executor.proto     # executor plugin service (Submit, GetRunStatus, StreamLogs, Cancel)
 ├── plugin/v1/plugin.proto         # base PluginService — HealthCheck (every plugin implements)
-├── auth/v1/auth.proto             # auth plugin — Authenticate, Authorize
 ├── cloud/v1/cloud.proto           # cloud plugin — GetCredentials
+├── identity/v1/identity.proto     # identity types (user context)
 ├── sharing/v1/sharing.proto       # sharing plugin — ShareResource, RevokeAccess, ListAccess, TransferOwnership
-└── enforcement/v1/enforcement.proto  # enforcement plugin — CanAccess, GetCredentials
+└── permission/v1/permission.proto # permission plugin — CheckPermission, GetIdentity
 ```
 
 ### Rules

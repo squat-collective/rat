@@ -5,10 +5,23 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
+import pytest
 
 from rat_runner.config import NessieConfig, S3Config
 from rat_runner.executor import execute_pipeline
 from rat_runner.models import PipelineConfig, QualityTestResult, RunState, RunStatus
+
+
+@pytest.fixture(autouse=True)
+def _empty_registry():
+    """Prevent plugin discovery — tests exercise the built-in fallback dispatch."""
+    mock_registry = MagicMock()
+    mock_registry.get_strategy.return_value = None
+    mock_registry.get_helpers.return_value = {}
+    mock_registry.dispatch_hooks.return_value = None
+
+    with patch("rat_runner.executor.PluginRegistry", return_value=mock_registry):
+        yield
 
 
 def _make_run(**kwargs) -> RunState:

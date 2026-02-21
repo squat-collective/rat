@@ -20,9 +20,14 @@ import (
 
 // Well-known channel names for LISTEN/NOTIFY.
 const (
-	ChannelRunCompleted    = "run_completed"
-	ChannelPipelineCreated = "pipeline_created"
-	ChannelPipelineUpdated = "pipeline_updated"
+	ChannelRunCompleted      = "run_completed"
+	ChannelPipelineCreated   = "pipeline_created"
+	ChannelPipelineUpdated   = "pipeline_updated"
+	ChannelPipelinePublished = "pipeline_published"
+	ChannelPipelineDeleted   = "pipeline_deleted"
+	ChannelFileUploaded      = "file_uploaded"
+	ChannelQualityFailed     = "quality_failed"
+	ChannelScheduleFired     = "schedule_fired"
 )
 
 // Event represents a single notification received from Postgres NOTIFY.
@@ -38,12 +43,37 @@ type RunCompletedPayload struct {
 	Status     string `json:"status"`
 }
 
-// PipelineEventPayload is the JSON payload for pipeline_created/updated events.
+// PipelineEventPayload is the JSON payload for pipeline_created/updated/published/deleted events.
 type PipelineEventPayload struct {
 	PipelineID string `json:"pipeline_id"`
 	Namespace  string `json:"namespace"`
 	Layer      string `json:"layer"`
 	Name       string `json:"name"`
+}
+
+// FileUploadedPayload is the JSON payload for file_uploaded events.
+type FileUploadedPayload struct {
+	Path      string `json:"path"`
+	Namespace string `json:"namespace"`
+	Size      int64  `json:"size"`
+}
+
+// QualityFailedPayload is the JSON payload for quality_failed events.
+type QualityFailedPayload struct {
+	PipelineID string `json:"pipeline_id,omitempty"`
+	Namespace  string `json:"namespace"`
+	Layer      string `json:"layer"`
+	Name       string `json:"name"`
+	Failed     int    `json:"failed"`
+	Total      int    `json:"total"`
+}
+
+// ScheduleFiredPayload is the JSON payload for schedule_fired events.
+type ScheduleFiredPayload struct {
+	ScheduleID string `json:"schedule_id"`
+	PipelineID string `json:"pipeline_id"`
+	RunID      string `json:"run_id"`
+	CronExpr   string `json:"cron_expr"`
 }
 
 // EventBus defines the interface for publishing and subscribing to events.

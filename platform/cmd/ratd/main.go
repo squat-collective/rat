@@ -343,10 +343,11 @@ func main() {
 		pipelineStore := postgres.NewPipelineStore(pool)
 		runStore := postgres.NewRunStore(pool)
 
-		// Wire event bus into stores for automatic NOTIFY on state changes.
+		// Wire event bus into stores and server for automatic NOTIFY on state changes.
 		if eventBus != nil {
 			pipelineStore.EventBus = eventBus
 			runStore.EventBus = eventBus
+			srv.EventBus = eventBus
 		}
 
 		srv.Pipelines = pipelineStore
@@ -367,9 +368,13 @@ func main() {
 		// Wire plugin catalog persistence now that Postgres is available.
 		pluginStore := postgres.NewPluginStore(pool)
 		srv.PluginCatalog = pluginStore
+		srv.PluginSources = pluginStore
+		srv.PluginPolicies = pluginStore
 		srv.PluginManager = mgr
 
 		// Reconnect Manager to persistent catalog and load saved plugins.
+		mgr.SetPolicies(pluginStore)
+		mgr.SetSources(pluginStore)
 		mgr.SetCatalog(pluginStore)
 		if err := mgr.LoadFromCatalog(ctx); err != nil {
 			slog.Warn("failed to load plugins from catalog", "error", err)
@@ -578,6 +583,9 @@ func main() {
 		// Wire scheduler when executor is available.
 		if srv.Executor != nil {
 			sched := scheduler.New(srv.Schedules, srv.Pipelines, srv.Runs, srv.Executor, 30*time.Second)
+			if eventBus != nil {
+				sched.EventBus = eventBus
+			}
 			sched.Start(ctx)
 			stopScheduler = func() { sched.Stop() }
 			slog.Info("scheduler started")

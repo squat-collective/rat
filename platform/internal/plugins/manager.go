@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path"
 	"time"
 
 	connect "connectrpc.com/connect"
@@ -31,12 +32,24 @@ type PluginCatalog interface {
 	UpdatePluginConfig(ctx context.Context, name string, config json.RawMessage) (*domain.PluginEntry, error)
 }
 
+// PluginPolicyLister loads plugin policies for evaluation during registration.
+type PluginPolicyLister interface {
+	ListPluginPolicies(ctx context.Context) ([]domain.PluginPolicy, error)
+}
+
+// PluginSourceLister loads plugin sources for validation during registration.
+type PluginSourceLister interface {
+	ListPluginSources(ctx context.Context) ([]domain.PluginSource, error)
+}
+
 // Manager orchestrates the plugin lifecycle: registration, describe,
 // enable/disable, and removal. It owns both the in-memory Registry and the
 // persistent catalog (Postgres).
 type Manager struct {
 	registry   *Registry
 	catalog    PluginCatalog
+	policies   PluginPolicyLister
+	sources    PluginSourceLister
 	httpClient *http.Client
 	edition    string
 
@@ -68,6 +81,16 @@ func (m *Manager) SetCatalog(catalog PluginCatalog) {
 // Catalog returns the persistent catalog, or nil if not set.
 func (m *Manager) Catalog() PluginCatalog {
 	return m.catalog
+}
+
+// SetPolicies sets the policy store for registration-time enforcement.
+func (m *Manager) SetPolicies(policies PluginPolicyLister) {
+	m.policies = policies
+}
+
+// SetSources sets the source store for registration-time validation.
+func (m *Manager) SetSources(sources PluginSourceLister) {
+	m.sources = sources
 }
 
 // Registry returns the live in-memory Registry for read access.
@@ -123,6 +146,14 @@ func (m *Manager) Register(ctx context.Context, name, addr string) error {
 
 	// 2. Describe (with fallback for legacy plugins)
 	capabilities, eventTypes, version, descriptor := m.describePlugin(ctx, name, pluginClient)
+
+	// 2.5. Evaluate policies (if store is available)
+	if m.policies != nil {
+		kind := inferKind(capabilities)
+		if err := m.evaluatePolicies(ctx, name, kind); err != nil {
+			return err
+		}
+	}
 
 	// 3. Build the in-memory plugin
 	p := &Plugin{
@@ -354,6 +385,48 @@ func inferCapabilitiesFromEntry(entry domain.PluginEntry) []string {
 		}
 	}
 	return InferCapabilitiesFromName(entry.Name)
+}
+
+// evaluatePolicies checks plugin allow/deny policies. Policies are evaluated
+// in order — first match wins (like firewall rules). If no policies exist,
+// registration is allowed (backward compatible).
+func (m *Manager) evaluatePolicies(ctx context.Context, name string, kind domain.PluginKind) error {
+	policies, err := m.policies.ListPluginPolicies(ctx)
+	if err != nil {
+		return fmt.Errorf("load plugin policies: %w", err)
+	}
+
+	// No policies = default allow (backward compat).
+	if len(policies) == 0 {
+		return nil
+	}
+
+	for _, policy := range policies {
+		// Check name pattern match.
+		matched, matchErr := path.Match(policy.Pattern, name)
+		if matchErr != nil {
+			slog.Warn("invalid policy pattern, skipping", "policy_id", policy.ID, "pattern", policy.Pattern, "error", matchErr)
+			continue
+		}
+		if !matched {
+			continue
+		}
+
+		// If policy is kind-scoped, also match the kind.
+		if policy.Kind != "" && policy.Kind != string(kind) {
+			continue
+		}
+
+		// First match wins.
+		if policy.Rule == "deny" {
+			return fmt.Errorf("plugin %q denied by policy %s (pattern: %s)", name, policy.ID, policy.Pattern)
+		}
+		// Rule is "allow" — permit registration.
+		return nil
+	}
+
+	// No matching policy — default allow.
+	return nil
 }
 
 // fireCallbacks triggers the appropriate runtime re-wiring callbacks

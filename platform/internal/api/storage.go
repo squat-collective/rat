@@ -207,6 +207,15 @@ func (s *Server) HandleWriteFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Publish file_uploaded event (best-effort).
+	if s.EventBus != nil {
+		_ = s.EventBus.Publish(r.Context(), "file_uploaded", map[string]interface{}{
+			"path":      path,
+			"namespace": namespaceFromPath(path),
+			"size":      int64(len(req.Content)),
+		})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"path":       path,
 		"status":     "written",
@@ -311,6 +320,15 @@ func (s *Server) HandleUploadFile(w http.ResponseWriter, r *http.Request) {
 		if s.PipelineCache != nil {
 			s.PipelineCache.Delete(pipelineCacheKey(pipelineRef.Namespace, pipelineRef.Layer, pipelineRef.Name))
 		}
+	}
+
+	// Publish file_uploaded event (best-effort).
+	if s.EventBus != nil {
+		_ = s.EventBus.Publish(r.Context(), "file_uploaded", map[string]interface{}{
+			"path":      destPath,
+			"namespace": namespaceFromPath(destPath),
+			"size":      header.Size,
+		})
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{

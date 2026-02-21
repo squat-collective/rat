@@ -296,6 +296,11 @@ func DefaultWebhookRateLimitConfig() WebhookRateLimitConfig {
 	}
 }
 
+// EventPublisher publishes events to the event bus (Postgres NOTIFY or in-memory for tests).
+type EventPublisher interface {
+	Publish(ctx context.Context, channel string, payload interface{}) error
+}
+
 // Server holds dependencies for all API handlers.
 type Server struct {
 	Pipelines     PipelineStore
@@ -312,6 +317,7 @@ type Server struct {
 	Triggers      PipelineTriggerStore
 	Audit         AuditStore
 	Settings      SettingsStore
+	EventBus      EventPublisher // Optional: publishes events for plugin dispatch.
 	Auth           func(http.Handler) http.Handler
 	Authorizer     Authorizer
 	Executor       Executor
@@ -322,6 +328,8 @@ type Server struct {
 	PluginManager  PluginManager   // lifecycle operations (register, enable, disable, remove)
 	PluginCatalog  PluginLister    // read-only catalog queries
 	PluginRegistry PluginRegistryLive // live registry for proxy route lookups
+	PluginSources  PluginSourceStore  // plugin source repository management
+	PluginPolicies PluginPolicyStore  // plugin allow/deny policy management
 	CORSOrigins   []string          // Allowed CORS origins. Defaults to ["http://localhost:3000"].
 	RateLimit        *RateLimitConfig   // Per-IP rate limiting config. Nil disables rate limiting.
 	RateLimiterStop  func()            // Populated by NewRouter when rate limiting is enabled.
@@ -477,6 +485,12 @@ func NewRouter(srv *Server) chi.Router {
 		// Plugin management endpoints (authenticated).
 		if srv.PluginManager != nil {
 			MountPluginRoutes(vr, srv)
+		}
+		if srv.PluginSources != nil {
+			MountPluginSourceRoutes(vr, srv)
+		}
+		if srv.PluginPolicies != nil {
+			MountPluginPolicyRoutes(vr, srv)
 		}
 
 		// Plugin UI bundle proxy: /api/v1/plugins/{name}/ui/bundle.js

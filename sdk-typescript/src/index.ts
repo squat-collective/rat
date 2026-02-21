@@ -101,6 +101,13 @@ export type {
   WebhookListResponse,
   CreateWebhookRequest,
   CreateWebhookResponse,
+  PluginStatus,
+  PluginKind,
+  PluginEntry,
+  PluginSource,
+  CreatePluginSourceRequest,
+  PluginPolicy,
+  CreatePluginPolicyRequest,
 } from "./models";
 
 export { HealthResource } from "./resources/health";
@@ -114,3 +121,4 @@ export { TriggersResource } from "./resources/triggers";
 export { QualityResource } from "./resources/quality";
 export { LineageResource } from "./resources/lineage";
 export { RetentionResource } from "./resources/retention";
+export { PluginsResource } from "./resources/plugins";

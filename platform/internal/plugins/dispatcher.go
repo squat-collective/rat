@@ -16,9 +16,14 @@ const eventDispatchTimeout = 5 * time.Second
 // Well-known event channel names. Mirrors the constants in the postgres package
 // to avoid an import cycle (plugins → postgres → api → plugins).
 const (
-	ChannelRunCompleted    = "run_completed"
-	ChannelPipelineCreated = "pipeline_created"
-	ChannelPipelineUpdated = "pipeline_updated"
+	ChannelRunCompleted      = "run_completed"
+	ChannelPipelineCreated   = "pipeline_created"
+	ChannelPipelineUpdated   = "pipeline_updated"
+	ChannelPipelinePublished = "pipeline_published"
+	ChannelPipelineDeleted   = "pipeline_deleted"
+	ChannelFileUploaded      = "file_uploaded"
+	ChannelQualityFailed     = "quality_failed"
+	ChannelScheduleFired     = "schedule_fired"
 )
 
 // DispatchEvent represents a notification from the event bus.
@@ -60,6 +65,11 @@ func (d *EventDispatcher) Start(ctx context.Context) {
 		ChannelRunCompleted,
 		ChannelPipelineCreated,
 		ChannelPipelineUpdated,
+		ChannelPipelinePublished,
+		ChannelPipelineDeleted,
+		ChannelFileUploaded,
+		ChannelQualityFailed,
+		ChannelScheduleFired,
 	}
 
 	go func() {

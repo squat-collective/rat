@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Shield, CheckCircle, XCircle, AlertTriangle, Trash2, KeyRound, User } from "lucide-react";
+import { Shield, CheckCircle, XCircle, AlertTriangle, Trash2, KeyRound, User, Puzzle } from "lucide-react";
 import Link from "next/link";
 import { serverApi, type FeaturesResponse } from "@/lib/server-api";
 import { auth, authEnabled } from "@/lib/auth/server";
@@ -127,6 +127,22 @@ export default async function SettingsPage() {
           <p className="text-xs text-muted-foreground">
             Configure automatic cleanup of old runs, logs, orphan branches, and
             Iceberg snapshots.
+          </p>
+        </div>
+      </Link>
+
+      {/* Plugin Management */}
+      <Link href="/settings/plugins" className="block">
+        <div className="brutal-card p-4 space-y-2 hover:border-primary/50 transition-colors cursor-pointer">
+          <div className="flex items-center gap-2">
+            <Puzzle className="h-4 w-4 text-primary" />
+            <h2 className="text-xs font-bold tracking-wider text-muted-foreground">
+              Plugin Management
+            </h2>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            View, configure, enable/disable, and remove plugins. Manage sources
+            and policies.
           </p>
         </div>
       </Link>

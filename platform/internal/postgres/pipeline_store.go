@@ -244,7 +244,20 @@ func (s *PipelineStore) DeletePipeline(ctx context.Context, namespace, layer, na
 	_, err := s.pool.Exec(ctx,
 		`UPDATE pipelines SET deleted_at = NOW() WHERE namespace = $1 AND layer = $2 AND name = $3 AND deleted_at IS NULL`,
 		namespace, layer, name)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Best-effort event publishing.
+	if s.EventBus != nil {
+		_ = s.EventBus.Publish(ctx, ChannelPipelineDeleted, PipelineEventPayload{
+			Namespace: namespace,
+			Layer:     layer,
+			Name:      name,
+		})
+	}
+
+	return nil
 }
 
 func (s *PipelineStore) SetDraftDirty(ctx context.Context, namespace, layer, name string, dirty bool) error {
@@ -264,7 +277,20 @@ func (s *PipelineStore) PublishPipeline(ctx context.Context, namespace, layer, n
 		`UPDATE pipelines SET published_at = NOW(), published_versions = $4, draft_dirty = false, updated_at = NOW()
 		 WHERE namespace = $1 AND layer = $2 AND name = $3 AND deleted_at IS NULL`,
 		namespace, layer, name, versionsJSON)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Best-effort event publishing.
+	if s.EventBus != nil {
+		_ = s.EventBus.Publish(ctx, ChannelPipelinePublished, PipelineEventPayload{
+			Namespace: namespace,
+			Layer:     layer,
+			Name:      name,
+		})
+	}
+
+	return nil
 }
 
 // UpdatePipelineRetention sets per-pipeline retention overrides (JSONB).

@@ -3,7 +3,7 @@
 import useSWR, { useSWRConfig } from "swr";
 import { useApiClient } from "@/providers/api-provider";
 import { useCallback, useMemo, useState } from "react";
-import type { UpdatePipelineRequest, CreateTriggerRequest, UpdateTriggerRequest, CreateQualityTestRequest, PreviewResponse, UpdateNamespaceRequest, UpdateLandingZoneRequest, UpdateTableMetadataRequest, PipelineConfig } from "@squat-collective/rat-client";
+import type { UpdatePipelineRequest, CreateTriggerRequest, UpdateTriggerRequest, CreateQualityTestRequest, PreviewResponse, UpdateNamespaceRequest, UpdateLandingZoneRequest, UpdateTableMetadataRequest, PipelineConfig, CreatePluginSourceRequest, CreatePluginPolicyRequest } from "@squat-collective/rat-client";
 import yaml from "js-yaml";
 import { KEYS } from "@/lib/cache-keys";
 
@@ -598,4 +598,194 @@ export function useTriggerReaper() {
   }, [api, mutate]);
 
   return { trigger, running };
+}
+
+/** Plugins */
+export function usePlugins(filter?: { status?: string; kind?: string }) {
+  const api = useApiClient();
+  return useSWR(
+    KEYS.plugins(filter?.status, filter?.kind),
+    () => api.plugins.list(filter),
+    { refreshInterval: 10000 },
+  );
+}
+
+export function usePlugin(name: string) {
+  const api = useApiClient();
+  return useSWR(
+    name ? KEYS.plugin(name) : null,
+    () => api.plugins.get(name),
+  );
+}
+
+export function useTogglePlugin() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const toggle = useCallback(
+    async (name: string, enable: boolean) => {
+      setLoading(true);
+      setError(null);
+      try {
+        if (enable) {
+          await api.plugins.enable(name);
+        } else {
+          await api.plugins.disable(name);
+        }
+        await mutate(KEYS.match.plugins);
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { toggle, loading, error };
+}
+
+export function useUpdatePluginConfig() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [updating, setUpdating] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const updateConfig = useCallback(
+    async (name: string, config: Record<string, unknown>) => {
+      setUpdating(true);
+      setError(null);
+      try {
+        const result = await api.plugins.updateConfig(name, config);
+        await mutate(KEYS.match.plugins);
+        return result;
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        throw err;
+      } finally {
+        setUpdating(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { updateConfig, updating, error };
+}
+
+export function useRemovePlugin() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+
+  const remove = useCallback(
+    async (name: string) => {
+      await api.plugins.remove(name);
+      await mutate(KEYS.match.plugins);
+    },
+    [api, mutate],
+  );
+
+  return { remove };
+}
+
+/** Plugin Sources */
+export function usePluginSources() {
+  const api = useApiClient();
+  return useSWR(KEYS.pluginSources(), () => api.plugins.listSources());
+}
+
+export function useCreatePluginSource() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const create = useCallback(
+    async (req: CreatePluginSourceRequest) => {
+      setCreating(true);
+      setError(null);
+      try {
+        const result = await api.plugins.createSource(req);
+        await mutate(KEYS.pluginSources());
+        return result;
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        throw err;
+      } finally {
+        setCreating(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { create, creating, error };
+}
+
+export function useDeletePluginSource() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+
+  const deleteSource = useCallback(
+    async (id: string) => {
+      await api.plugins.deleteSource(id);
+      await mutate(KEYS.pluginSources());
+    },
+    [api, mutate],
+  );
+
+  return { deleteSource };
+}
+
+/** Plugin Policies */
+export function usePluginPolicies() {
+  const api = useApiClient();
+  return useSWR(KEYS.pluginPolicies(), () => api.plugins.listPolicies());
+}
+
+export function useCreatePluginPolicy() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const create = useCallback(
+    async (req: CreatePluginPolicyRequest) => {
+      setCreating(true);
+      setError(null);
+      try {
+        const result = await api.plugins.createPolicy(req);
+        await mutate(KEYS.pluginPolicies());
+        return result;
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        throw err;
+      } finally {
+        setCreating(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { create, creating, error };
+}
+
+export function useDeletePluginPolicy() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+
+  const deletePolicy = useCallback(
+    async (id: string) => {
+      await api.plugins.deletePolicy(id);
+      await mutate(KEYS.pluginPolicies());
+    },
+    [api, mutate],
+  );
+
+  return { deletePolicy };
 }
