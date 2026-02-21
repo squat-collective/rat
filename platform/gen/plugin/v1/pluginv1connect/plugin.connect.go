@@ -36,12 +36,35 @@ const (
 	// PluginServiceHealthCheckProcedure is the fully-qualified name of the PluginService's HealthCheck
 	// RPC.
 	PluginServiceHealthCheckProcedure = "/ratatouille.plugin.v1.PluginService/HealthCheck"
+	// PluginServiceDescribeProcedure is the fully-qualified name of the PluginService's Describe RPC.
+	PluginServiceDescribeProcedure = "/ratatouille.plugin.v1.PluginService/Describe"
+	// PluginServiceHandleEventProcedure is the fully-qualified name of the PluginService's HandleEvent
+	// RPC.
+	PluginServiceHandleEventProcedure = "/ratatouille.plugin.v1.PluginService/HandleEvent"
+	// PluginServiceAuthenticateProcedure is the fully-qualified name of the PluginService's
+	// Authenticate RPC.
+	PluginServiceAuthenticateProcedure = "/ratatouille.plugin.v1.PluginService/Authenticate"
+	// PluginServiceAuthorizeProcedure is the fully-qualified name of the PluginService's Authorize RPC.
+	PluginServiceAuthorizeProcedure = "/ratatouille.plugin.v1.PluginService/Authorize"
 )
 
 // PluginServiceClient is a client for the ratatouille.plugin.v1.PluginService service.
 type PluginServiceClient interface {
 	// Check if the plugin is healthy and ready to serve requests.
 	HealthCheck(context.Context, *connect.Request[v1.HealthCheckRequest]) (*connect.Response[v1.HealthCheckResponse], error)
+	// Describe returns the plugin's capabilities, routes, event subscriptions,
+	// UI descriptors, and config schema. Called by ratd after phone-home registration.
+	// Legacy plugins that return Unimplemented are handled via name-based inference.
+	Describe(context.Context, *connect.Request[v1.DescribeRequest]) (*connect.Response[v1.DescribeResponse], error)
+	// HandleEvent delivers a platform event to the plugin (e.g., run_completed).
+	// Plugins declare which events they subscribe to via DescribeResponse.event_subscriptions.
+	HandleEvent(context.Context, *connect.Request[v1.HandleEventRequest]) (*connect.Response[v1.HandleEventResponse], error)
+	// Authenticate validates a bearer token and returns the authenticated user.
+	// Only implemented by plugins that declare the "auth" capability.
+	Authenticate(context.Context, *connect.Request[v1.AuthenticateRequest]) (*connect.Response[v1.AuthenticateResponse], error)
+	// Authorize checks whether a user may perform an action on a resource.
+	// Only implemented by plugins that declare the "enforcement" capability.
+	Authorize(context.Context, *connect.Request[v1.AuthorizeRequest]) (*connect.Response[v1.AuthorizeResponse], error)
 }
 
 // NewPluginServiceClient constructs a client for the ratatouille.plugin.v1.PluginService service.
@@ -61,12 +84,40 @@ func NewPluginServiceClient(httpClient connect.HTTPClient, baseURL string, opts 
 			connect.WithSchema(pluginServiceMethods.ByName("HealthCheck")),
 			connect.WithClientOptions(opts...),
 		),
+		describe: connect.NewClient[v1.DescribeRequest, v1.DescribeResponse](
+			httpClient,
+			baseURL+PluginServiceDescribeProcedure,
+			connect.WithSchema(pluginServiceMethods.ByName("Describe")),
+			connect.WithClientOptions(opts...),
+		),
+		handleEvent: connect.NewClient[v1.HandleEventRequest, v1.HandleEventResponse](
+			httpClient,
+			baseURL+PluginServiceHandleEventProcedure,
+			connect.WithSchema(pluginServiceMethods.ByName("HandleEvent")),
+			connect.WithClientOptions(opts...),
+		),
+		authenticate: connect.NewClient[v1.AuthenticateRequest, v1.AuthenticateResponse](
+			httpClient,
+			baseURL+PluginServiceAuthenticateProcedure,
+			connect.WithSchema(pluginServiceMethods.ByName("Authenticate")),
+			connect.WithClientOptions(opts...),
+		),
+		authorize: connect.NewClient[v1.AuthorizeRequest, v1.AuthorizeResponse](
+			httpClient,
+			baseURL+PluginServiceAuthorizeProcedure,
+			connect.WithSchema(pluginServiceMethods.ByName("Authorize")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // pluginServiceClient implements PluginServiceClient.
 type pluginServiceClient struct {
-	healthCheck *connect.Client[v1.HealthCheckRequest, v1.HealthCheckResponse]
+	healthCheck  *connect.Client[v1.HealthCheckRequest, v1.HealthCheckResponse]
+	describe     *connect.Client[v1.DescribeRequest, v1.DescribeResponse]
+	handleEvent  *connect.Client[v1.HandleEventRequest, v1.HandleEventResponse]
+	authenticate *connect.Client[v1.AuthenticateRequest, v1.AuthenticateResponse]
+	authorize    *connect.Client[v1.AuthorizeRequest, v1.AuthorizeResponse]
 }
 
 // HealthCheck calls ratatouille.plugin.v1.PluginService.HealthCheck.
@@ -74,10 +125,43 @@ func (c *pluginServiceClient) HealthCheck(ctx context.Context, req *connect.Requ
 	return c.healthCheck.CallUnary(ctx, req)
 }
 
+// Describe calls ratatouille.plugin.v1.PluginService.Describe.
+func (c *pluginServiceClient) Describe(ctx context.Context, req *connect.Request[v1.DescribeRequest]) (*connect.Response[v1.DescribeResponse], error) {
+	return c.describe.CallUnary(ctx, req)
+}
+
+// HandleEvent calls ratatouille.plugin.v1.PluginService.HandleEvent.
+func (c *pluginServiceClient) HandleEvent(ctx context.Context, req *connect.Request[v1.HandleEventRequest]) (*connect.Response[v1.HandleEventResponse], error) {
+	return c.handleEvent.CallUnary(ctx, req)
+}
+
+// Authenticate calls ratatouille.plugin.v1.PluginService.Authenticate.
+func (c *pluginServiceClient) Authenticate(ctx context.Context, req *connect.Request[v1.AuthenticateRequest]) (*connect.Response[v1.AuthenticateResponse], error) {
+	return c.authenticate.CallUnary(ctx, req)
+}
+
+// Authorize calls ratatouille.plugin.v1.PluginService.Authorize.
+func (c *pluginServiceClient) Authorize(ctx context.Context, req *connect.Request[v1.AuthorizeRequest]) (*connect.Response[v1.AuthorizeResponse], error) {
+	return c.authorize.CallUnary(ctx, req)
+}
+
 // PluginServiceHandler is an implementation of the ratatouille.plugin.v1.PluginService service.
 type PluginServiceHandler interface {
 	// Check if the plugin is healthy and ready to serve requests.
 	HealthCheck(context.Context, *connect.Request[v1.HealthCheckRequest]) (*connect.Response[v1.HealthCheckResponse], error)
+	// Describe returns the plugin's capabilities, routes, event subscriptions,
+	// UI descriptors, and config schema. Called by ratd after phone-home registration.
+	// Legacy plugins that return Unimplemented are handled via name-based inference.
+	Describe(context.Context, *connect.Request[v1.DescribeRequest]) (*connect.Response[v1.DescribeResponse], error)
+	// HandleEvent delivers a platform event to the plugin (e.g., run_completed).
+	// Plugins declare which events they subscribe to via DescribeResponse.event_subscriptions.
+	HandleEvent(context.Context, *connect.Request[v1.HandleEventRequest]) (*connect.Response[v1.HandleEventResponse], error)
+	// Authenticate validates a bearer token and returns the authenticated user.
+	// Only implemented by plugins that declare the "auth" capability.
+	Authenticate(context.Context, *connect.Request[v1.AuthenticateRequest]) (*connect.Response[v1.AuthenticateResponse], error)
+	// Authorize checks whether a user may perform an action on a resource.
+	// Only implemented by plugins that declare the "enforcement" capability.
+	Authorize(context.Context, *connect.Request[v1.AuthorizeRequest]) (*connect.Response[v1.AuthorizeResponse], error)
 }
 
 // NewPluginServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -93,10 +177,42 @@ func NewPluginServiceHandler(svc PluginServiceHandler, opts ...connect.HandlerOp
 		connect.WithSchema(pluginServiceMethods.ByName("HealthCheck")),
 		connect.WithHandlerOptions(opts...),
 	)
+	pluginServiceDescribeHandler := connect.NewUnaryHandler(
+		PluginServiceDescribeProcedure,
+		svc.Describe,
+		connect.WithSchema(pluginServiceMethods.ByName("Describe")),
+		connect.WithHandlerOptions(opts...),
+	)
+	pluginServiceHandleEventHandler := connect.NewUnaryHandler(
+		PluginServiceHandleEventProcedure,
+		svc.HandleEvent,
+		connect.WithSchema(pluginServiceMethods.ByName("HandleEvent")),
+		connect.WithHandlerOptions(opts...),
+	)
+	pluginServiceAuthenticateHandler := connect.NewUnaryHandler(
+		PluginServiceAuthenticateProcedure,
+		svc.Authenticate,
+		connect.WithSchema(pluginServiceMethods.ByName("Authenticate")),
+		connect.WithHandlerOptions(opts...),
+	)
+	pluginServiceAuthorizeHandler := connect.NewUnaryHandler(
+		PluginServiceAuthorizeProcedure,
+		svc.Authorize,
+		connect.WithSchema(pluginServiceMethods.ByName("Authorize")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/ratatouille.plugin.v1.PluginService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case PluginServiceHealthCheckProcedure:
 			pluginServiceHealthCheckHandler.ServeHTTP(w, r)
+		case PluginServiceDescribeProcedure:
+			pluginServiceDescribeHandler.ServeHTTP(w, r)
+		case PluginServiceHandleEventProcedure:
+			pluginServiceHandleEventHandler.ServeHTTP(w, r)
+		case PluginServiceAuthenticateProcedure:
+			pluginServiceAuthenticateHandler.ServeHTTP(w, r)
+		case PluginServiceAuthorizeProcedure:
+			pluginServiceAuthorizeHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -108,4 +224,20 @@ type UnimplementedPluginServiceHandler struct{}
 
 func (UnimplementedPluginServiceHandler) HealthCheck(context.Context, *connect.Request[v1.HealthCheckRequest]) (*connect.Response[v1.HealthCheckResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ratatouille.plugin.v1.PluginService.HealthCheck is not implemented"))
+}
+
+func (UnimplementedPluginServiceHandler) Describe(context.Context, *connect.Request[v1.DescribeRequest]) (*connect.Response[v1.DescribeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ratatouille.plugin.v1.PluginService.Describe is not implemented"))
+}
+
+func (UnimplementedPluginServiceHandler) HandleEvent(context.Context, *connect.Request[v1.HandleEventRequest]) (*connect.Response[v1.HandleEventResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ratatouille.plugin.v1.PluginService.HandleEvent is not implemented"))
+}
+
+func (UnimplementedPluginServiceHandler) Authenticate(context.Context, *connect.Request[v1.AuthenticateRequest]) (*connect.Response[v1.AuthenticateResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ratatouille.plugin.v1.PluginService.Authenticate is not implemented"))
+}
+
+func (UnimplementedPluginServiceHandler) Authorize(context.Context, *connect.Request[v1.AuthorizeRequest]) (*connect.Response[v1.AuthorizeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ratatouille.plugin.v1.PluginService.Authorize is not implemented"))
 }

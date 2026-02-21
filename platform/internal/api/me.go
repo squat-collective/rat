@@ -29,7 +29,7 @@ func (s *Server) HandleMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, MeResponse{
-		UserID:      user.UserId,
+		UserID:      user.UserID,
 		Email:       user.Email,
 		DisplayName: user.DisplayName,
 		Roles:       roles,

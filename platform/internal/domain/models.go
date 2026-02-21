@@ -361,6 +361,96 @@ type QuotaCheckResult struct {
 	Reason  string `json:"reason,omitempty"` // human-readable denial reason
 }
 
+// ── Plugin Catalog ─────────────────────────────────────────────
+
+// PluginStatus represents the lifecycle state of a registered plugin.
+type PluginStatus string
+
+const (
+	PluginStatusRegistered PluginStatus = "registered"
+	PluginStatusEnabled    PluginStatus = "enabled"
+	PluginStatusDisabled   PluginStatus = "disabled"
+	PluginStatusError      PluginStatus = "error"
+)
+
+// ValidPluginStatus returns true if s is a known plugin status.
+func ValidPluginStatus(s string) bool {
+	switch PluginStatus(s) {
+	case PluginStatusRegistered, PluginStatusEnabled, PluginStatusDisabled, PluginStatusError:
+		return true
+	}
+	return false
+}
+
+// PluginKind indicates the platform layer a plugin targets.
+type PluginKind string
+
+const (
+	PluginKindPlatform PluginKind = "platform"
+	PluginKindRunner   PluginKind = "runner"
+	PluginKindPortal   PluginKind = "portal"
+)
+
+// ValidPluginKind returns true if s is a known plugin kind.
+func ValidPluginKind(s string) bool {
+	switch PluginKind(s) {
+	case PluginKindPlatform, PluginKindRunner, PluginKindPortal:
+		return true
+	}
+	return false
+}
+
+// PluginEntry represents a plugin registered in the catalog.
+type PluginEntry struct {
+	ID           uuid.UUID       `json:"id"`
+	Name         string          `json:"name"`
+	Kind         PluginKind      `json:"kind"`
+	Version      string          `json:"version"`
+	Status       PluginStatus    `json:"status"`
+	Error        string          `json:"error,omitempty"`
+	Descriptor   json.RawMessage `json:"descriptor,omitempty"`
+	Config       json.RawMessage `json:"config,omitempty"`
+	Addr         string          `json:"addr"`
+	Healthy      bool            `json:"healthy"`
+	RegisteredAt time.Time       `json:"registered_at"`
+	EnabledAt    *time.Time      `json:"enabled_at,omitempty"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
+// PluginFilter constrains ListPlugins queries.
+type PluginFilter struct {
+	Status string `json:"status,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+}
+
+// PluginSource describes a repository from which plugins can be discovered.
+type PluginSource struct {
+	ID        uuid.UUID `json:"id"`
+	Type      string    `json:"type"` // "oci", "local", "git"
+	URL       string    `json:"url"`
+	Trusted   bool      `json:"trusted"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// PluginPolicy is an allow/deny rule governing which plugins may register.
+type PluginPolicy struct {
+	ID        uuid.UUID `json:"id"`
+	Rule      string    `json:"rule"` // "allow" or "deny"
+	Pattern   string    `json:"pattern"`
+	Kind      string    `json:"kind,omitempty"` // empty = all kinds
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// UserIdentity represents an authenticated user extracted from auth plugins.
+// Replaces the protobuf authv1.UserIdentity for use in domain/context code.
+type UserIdentity struct {
+	UserID      string   `json:"user_id"`
+	Email       string   `json:"email"`
+	DisplayName string   `json:"display_name"`
+	Roles       []string `json:"roles"`
+}
+
 // LicenseInfo describes the license status for display.
 type LicenseInfo struct {
 	Valid     bool     `json:"valid"`

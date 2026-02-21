@@ -8,10 +8,32 @@ option go_package = "github.com/rat-data/rat/platform/gen/plugin/v1;pluginv1";
 
 // PluginService is the base service every plugin container must implement.
 // ratd calls HealthCheck on startup to determine plugin availability.
+// Plugins that support the open registry also implement Describe and HandleEvent.
+// Auth/enforcement plugins additionally implement Authenticate and Authorize
+// so ratd can call them from its request lifecycle (middleware).
 service PluginService {
   // Check if the plugin is healthy and ready to serve requests.
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+
+  // Describe returns the plugin's capabilities, routes, event subscriptions,
+  // UI descriptors, and config schema. Called by ratd after phone-home registration.
+  // Legacy plugins that return Unimplemented are handled via name-based inference.
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+
+  // HandleEvent delivers a platform event to the plugin (e.g., run_completed).
+  // Plugins declare which events they subscribe to via DescribeResponse.event_subscriptions.
+  rpc HandleEvent(HandleEventRequest) returns (HandleEventResponse);
+
+  // Authenticate validates a bearer token and returns the authenticated user.
+  // Only implemented by plugins that declare the "auth" capability.
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+
+  // Authorize checks whether a user may perform an action on a resource.
+  // Only implemented by plugins that declare the "enforcement" capability.
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
 }
+
+// ── Health Check ───────────────────────────────────────────────
 
 message HealthCheckRequest {}
 
@@ -26,4 +48,102 @@ enum Status {
   STATUS_UNSPECIFIED = 0;
   STATUS_SERVING = 1;
   STATUS_NOT_SERVING = 2;
+}
+
+// ── Describe ───────────────────────────────────────────────────
+
+message DescribeRequest {}
+
+message DescribeResponse {
+  string name = 1;                           // unique plugin name (e.g., "auth-keycloak")
+  string version = 2;                        // semver version string
+  string description = 3;                    // human-readable description
+  repeated string capabilities = 4;          // well-known capabilities: "auth", "executor", "sharing", "enforcement", "cloud"
+  repeated RouteDeclaration routes = 5;      // HTTP routes the plugin exposes (proxied via /api/v1/x/{plugin}/...)
+  repeated string event_subscriptions = 6;   // event channels to subscribe to (e.g., "run_completed", "pipeline_created")
+  bool provides_worker = 7;                  // true if the plugin runs background work
+  PluginUIDescriptor ui = 8;                 // portal UI integration metadata
+  string config_schema_json = 9;             // JSON Schema for the plugin's config object
+}
+
+// RouteDeclaration describes an HTTP route the plugin exposes.
+message RouteDeclaration {
+  string method = 1;          // HTTP method (GET, POST, PUT, DELETE)
+  string path = 2;            // route path relative to plugin root (e.g., "/users")
+  bool auth_required = 3;     // whether ratd should enforce auth before proxying
+  string description = 4;     // human-readable description of the endpoint
+}
+
+// PluginUIDescriptor describes how the plugin integrates with the portal UI.
+message PluginUIDescriptor {
+  string bundle_url = 1;                     // URL to the plugin's JS bundle
+  repeated UISlotDeclaration slots = 2;      // UI slots the plugin fills
+  repeated UINavItem nav_items = 3;          // navigation items to add to the portal sidebar
+  repeated UIRoute routes = 4;              // client-side routes the plugin handles
+}
+
+// UISlotDeclaration describes a UI slot the plugin fills in the portal.
+message UISlotDeclaration {
+  string slot_id = 1;           // well-known slot ID (e.g., "pipeline.sidebar", "dashboard.widget")
+  string component_name = 2;    // exported component name from the bundle
+  int32 priority = 3;           // rendering order (lower = first)
+}
+
+// UINavItem describes a navigation item added to the portal sidebar.
+message UINavItem {
+  string label = 1;         // display text
+  string icon = 2;          // icon name (lucide icon set)
+  string path = 3;          // client-side route path
+  int32 priority = 4;       // ordering (lower = higher in sidebar)
+}
+
+// UIRoute describes a client-side route the plugin handles.
+message UIRoute {
+  string path = 1;              // route path pattern (e.g., "/x/my-plugin/settings")
+  string component_name = 2;    // exported component from the bundle
+}
+
+// ── Handle Event ───────────────────────────────────────────────
+
+message HandleEventRequest {
+  string event_type = 1;      // channel name (e.g., "run_completed")
+  bytes payload = 2;          // JSON-encoded event payload
+  string event_id = 3;        // unique event identifier for deduplication
+  string timestamp = 4;       // RFC3339 event timestamp
+}
+
+message HandleEventResponse {}
+
+// ── Authenticate ───────────────────────────────────────────────
+
+message AuthenticateRequest {
+  string token = 1;           // bearer token from Authorization header
+}
+
+message AuthenticateResponse {
+  bool authenticated = 1;     // true if the token is valid
+  UserIdentity user = 2;      // populated when authenticated == true
+  string error_message = 3;   // human-readable error when authenticated == false
+}
+
+// UserIdentity represents an authenticated user.
+message UserIdentity {
+  string user_id = 1;
+  string email = 2;
+  string display_name = 3;
+  repeated string roles = 4;
+}
+
+// ── Authorize ──────────────────────────────────────────────────
+
+message AuthorizeRequest {
+  string user_id = 1;
+  string resource_type = 2;   // e.g., "pipeline", "namespace", "landing_zone"
+  string resource_id = 3;     // resource identifier
+  string action = 4;          // e.g., "read", "write", "delete", "admin"
+}
+
+message AuthorizeResponse {
+  bool allowed = 1;
+  string reason = 2;          // explanation when denied
 }

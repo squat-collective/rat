@@ -34,7 +34,7 @@ func (s *Server) requireAccess(w http.ResponseWriter, r *http.Request, resourceT
 		return true // no authorizer configured = allow all
 	}
 
-	allowed, err := authorizer.CanAccess(r.Context(), user.UserId, resourceType, resourceID, action)
+	allowed, err := authorizer.CanAccess(r.Context(), user.UserID, resourceType, resourceID, action)
 	if err != nil {
 		errorJSON(w, "authorization check failed", "INTERNAL", http.StatusInternalServerError)
 		return false

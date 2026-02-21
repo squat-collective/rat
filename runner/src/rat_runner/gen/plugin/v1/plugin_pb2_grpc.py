@@ -11,6 +11,9 @@ class PluginServiceStub(object):
 
     PluginService is the base service every plugin container must implement.
     ratd calls HealthCheck on startup to determine plugin availability.
+    Plugins that support the open registry also implement Describe and HandleEvent.
+    Auth/enforcement plugins additionally implement Authenticate and Authorize
+    so ratd can call them from its request lifecycle (middleware).
     """
 
     def __init__(self, channel):
@@ -24,6 +27,26 @@ class PluginServiceStub(object):
                 request_serializer=plugin_dot_v1_dot_plugin__pb2.HealthCheckRequest.SerializeToString,
                 response_deserializer=plugin_dot_v1_dot_plugin__pb2.HealthCheckResponse.FromString,
                 _registered_method=True)
+        self.Describe = channel.unary_unary(
+                '/ratatouille.plugin.v1.PluginService/Describe',
+                request_serializer=plugin_dot_v1_dot_plugin__pb2.DescribeRequest.SerializeToString,
+                response_deserializer=plugin_dot_v1_dot_plugin__pb2.DescribeResponse.FromString,
+                _registered_method=True)
+        self.HandleEvent = channel.unary_unary(
+                '/ratatouille.plugin.v1.PluginService/HandleEvent',
+                request_serializer=plugin_dot_v1_dot_plugin__pb2.HandleEventRequest.SerializeToString,
+                response_deserializer=plugin_dot_v1_dot_plugin__pb2.HandleEventResponse.FromString,
+                _registered_method=True)
+        self.Authenticate = channel.unary_unary(
+                '/ratatouille.plugin.v1.PluginService/Authenticate',
+                request_serializer=plugin_dot_v1_dot_plugin__pb2.AuthenticateRequest.SerializeToString,
+                response_deserializer=plugin_dot_v1_dot_plugin__pb2.AuthenticateResponse.FromString,
+                _registered_method=True)
+        self.Authorize = channel.unary_unary(
+                '/ratatouille.plugin.v1.PluginService/Authorize',
+                request_serializer=plugin_dot_v1_dot_plugin__pb2.AuthorizeRequest.SerializeToString,
+                response_deserializer=plugin_dot_v1_dot_plugin__pb2.AuthorizeResponse.FromString,
+                _registered_method=True)
 
 
 class PluginServiceServicer(object):
@@ -32,10 +55,46 @@ class PluginServiceServicer(object):
 
     PluginService is the base service every plugin container must implement.
     ratd calls HealthCheck on startup to determine plugin availability.
+    Plugins that support the open registry also implement Describe and HandleEvent.
+    Auth/enforcement plugins additionally implement Authenticate and Authorize
+    so ratd can call them from its request lifecycle (middleware).
     """
 
     def HealthCheck(self, request, context):
         """Check if the plugin is healthy and ready to serve requests.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Describe(self, request, context):
+        """Describe returns the plugin's capabilities, routes, event subscriptions,
+        UI descriptors, and config schema. Called by ratd after phone-home registration.
+        Legacy plugins that return Unimplemented are handled via name-based inference.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def HandleEvent(self, request, context):
+        """HandleEvent delivers a platform event to the plugin (e.g., run_completed).
+        Plugins declare which events they subscribe to via DescribeResponse.event_subscriptions.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Authenticate(self, request, context):
+        """Authenticate validates a bearer token and returns the authenticated user.
+        Only implemented by plugins that declare the "auth" capability.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Authorize(self, request, context):
+        """Authorize checks whether a user may perform an action on a resource.
+        Only implemented by plugins that declare the "enforcement" capability.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -48,6 +107,26 @@ def add_PluginServiceServicer_to_server(servicer, server):
                     servicer.HealthCheck,
                     request_deserializer=plugin_dot_v1_dot_plugin__pb2.HealthCheckRequest.FromString,
                     response_serializer=plugin_dot_v1_dot_plugin__pb2.HealthCheckResponse.SerializeToString,
+            ),
+            'Describe': grpc.unary_unary_rpc_method_handler(
+                    servicer.Describe,
+                    request_deserializer=plugin_dot_v1_dot_plugin__pb2.DescribeRequest.FromString,
+                    response_serializer=plugin_dot_v1_dot_plugin__pb2.DescribeResponse.SerializeToString,
+            ),
+            'HandleEvent': grpc.unary_unary_rpc_method_handler(
+                    servicer.HandleEvent,
+                    request_deserializer=plugin_dot_v1_dot_plugin__pb2.HandleEventRequest.FromString,
+                    response_serializer=plugin_dot_v1_dot_plugin__pb2.HandleEventResponse.SerializeToString,
+            ),
+            'Authenticate': grpc.unary_unary_rpc_method_handler(
+                    servicer.Authenticate,
+                    request_deserializer=plugin_dot_v1_dot_plugin__pb2.AuthenticateRequest.FromString,
+                    response_serializer=plugin_dot_v1_dot_plugin__pb2.AuthenticateResponse.SerializeToString,
+            ),
+            'Authorize': grpc.unary_unary_rpc_method_handler(
+                    servicer.Authorize,
+                    request_deserializer=plugin_dot_v1_dot_plugin__pb2.AuthorizeRequest.FromString,
+                    response_serializer=plugin_dot_v1_dot_plugin__pb2.AuthorizeResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -63,6 +142,9 @@ class PluginService(object):
 
     PluginService is the base service every plugin container must implement.
     ratd calls HealthCheck on startup to determine plugin availability.
+    Plugins that support the open registry also implement Describe and HandleEvent.
+    Auth/enforcement plugins additionally implement Authenticate and Authorize
+    so ratd can call them from its request lifecycle (middleware).
     """
 
     @staticmethod
@@ -82,6 +164,114 @@ class PluginService(object):
             '/ratatouille.plugin.v1.PluginService/HealthCheck',
             plugin_dot_v1_dot_plugin__pb2.HealthCheckRequest.SerializeToString,
             plugin_dot_v1_dot_plugin__pb2.HealthCheckResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Describe(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ratatouille.plugin.v1.PluginService/Describe',
+            plugin_dot_v1_dot_plugin__pb2.DescribeRequest.SerializeToString,
+            plugin_dot_v1_dot_plugin__pb2.DescribeResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def HandleEvent(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ratatouille.plugin.v1.PluginService/HandleEvent',
+            plugin_dot_v1_dot_plugin__pb2.HandleEventRequest.SerializeToString,
+            plugin_dot_v1_dot_plugin__pb2.HandleEventResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Authenticate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ratatouille.plugin.v1.PluginService/Authenticate',
+            plugin_dot_v1_dot_plugin__pb2.AuthenticateRequest.SerializeToString,
+            plugin_dot_v1_dot_plugin__pb2.AuthenticateResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Authorize(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ratatouille.plugin.v1.PluginService/Authorize',
+            plugin_dot_v1_dot_plugin__pb2.AuthorizeRequest.SerializeToString,
+            plugin_dot_v1_dot_plugin__pb2.AuthorizeResponse.FromString,
             options,
             channel_credentials,
             insecure,

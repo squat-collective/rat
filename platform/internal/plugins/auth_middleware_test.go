@@ -9,13 +9,83 @@ import (
 	"testing"
 
 	connect "connectrpc.com/connect"
-	authv1 "github.com/rat-data/rat/platform/gen/auth/v1"
+	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
+	"github.com/rat-data/rat/platform/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// mockPluginServiceClient implements pluginv1connect.PluginServiceClient
+// for the new Registry-based tests. This mock covers the full interface
+// that will be generated after `make proto` (HealthCheck, Describe,
+// HandleEvent, Authenticate, Authorize).
+type mockPluginServiceClient struct {
+	healthCheckFunc  func(ctx context.Context, req *connect.Request[pluginv1.HealthCheckRequest]) (*connect.Response[pluginv1.HealthCheckResponse], error)
+	describeFunc     func(ctx context.Context, req *connect.Request[pluginv1.DescribeRequest]) (*connect.Response[pluginv1.DescribeResponse], error)
+	handleEventFunc  func(ctx context.Context, req *connect.Request[pluginv1.HandleEventRequest]) (*connect.Response[pluginv1.HandleEventResponse], error)
+	authenticateFunc func(ctx context.Context, req *connect.Request[pluginv1.AuthenticateRequest]) (*connect.Response[pluginv1.AuthenticateResponse], error)
+	authorizeFunc    func(ctx context.Context, req *connect.Request[pluginv1.AuthorizeRequest]) (*connect.Response[pluginv1.AuthorizeResponse], error)
+}
+
+func (m *mockPluginServiceClient) HealthCheck(ctx context.Context, req *connect.Request[pluginv1.HealthCheckRequest]) (*connect.Response[pluginv1.HealthCheckResponse], error) {
+	if m.healthCheckFunc != nil {
+		return m.healthCheckFunc(ctx, req)
+	}
+	return connect.NewResponse(&pluginv1.HealthCheckResponse{
+		Status: pluginv1.Status_STATUS_SERVING,
+	}), nil
+}
+
+func (m *mockPluginServiceClient) Describe(ctx context.Context, req *connect.Request[pluginv1.DescribeRequest]) (*connect.Response[pluginv1.DescribeResponse], error) {
+	if m.describeFunc != nil {
+		return m.describeFunc(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("not implemented"))
+}
+
+func (m *mockPluginServiceClient) HandleEvent(ctx context.Context, req *connect.Request[pluginv1.HandleEventRequest]) (*connect.Response[pluginv1.HandleEventResponse], error) {
+	if m.handleEventFunc != nil {
+		return m.handleEventFunc(ctx, req)
+	}
+	return connect.NewResponse(&pluginv1.HandleEventResponse{}), nil
+}
+
+func (m *mockPluginServiceClient) Authenticate(ctx context.Context, req *connect.Request[pluginv1.AuthenticateRequest]) (*connect.Response[pluginv1.AuthenticateResponse], error) {
+	if m.authenticateFunc != nil {
+		return m.authenticateFunc(ctx, req)
+	}
+	return connect.NewResponse(&pluginv1.AuthenticateResponse{
+		Authenticated: true,
+		User: &pluginv1.UserIdentity{
+			UserId:      "u-default",
+			Email:       "default@rat.dev",
+			DisplayName: "Default",
+		},
+	}), nil
+}
+
+func (m *mockPluginServiceClient) Authorize(ctx context.Context, req *connect.Request[pluginv1.AuthorizeRequest]) (*connect.Response[pluginv1.AuthorizeResponse], error) {
+	if m.authorizeFunc != nil {
+		return m.authorizeFunc(ctx, req)
+	}
+	return connect.NewResponse(&pluginv1.AuthorizeResponse{Allowed: true}), nil
+}
+
+// helper to register a mock auth plugin in a fresh registry.
+func registryWithAuth(mock *mockPluginServiceClient) *Registry {
+	reg := NewRegistry("pro")
+	_ = reg.Register(&Plugin{
+		Name:         "auth",
+		Addr:         "http://auth:50060",
+		Status:       domain.PluginStatusEnabled,
+		Capabilities: []string{CapAuth},
+		PluginClient: mock,
+	})
+	return reg
+}
+
 // handler that captures the user from context
-func captureUserHandler(captured **authv1.UserIdentity) http.Handler {
+func captureUserHandler(captured **domain.UserIdentity) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := UserFromContext(r.Context())
 		*captured = user
@@ -24,7 +94,7 @@ func captureUserHandler(captured **authv1.UserIdentity) http.Handler {
 }
 
 func TestAuthMiddleware_NoPlugin_PassesThrough(t *testing.T) {
-	reg := &Registry{edition: "community"}
+	reg := NewRegistry("community")
 	mw := reg.AuthMiddleware()
 
 	called := false
@@ -43,11 +113,11 @@ func TestAuthMiddleware_NoPlugin_PassesThrough(t *testing.T) {
 }
 
 func TestAuthMiddleware_ValidToken_SetsUserContext(t *testing.T) {
-	mock := &mockAuthClient{
-		authenticateFunc: func(_ context.Context, req *connect.Request[authv1.AuthenticateRequest]) (*connect.Response[authv1.AuthenticateResponse], error) {
-			return connect.NewResponse(&authv1.AuthenticateResponse{
+	mock := &mockPluginServiceClient{
+		authenticateFunc: func(_ context.Context, req *connect.Request[pluginv1.AuthenticateRequest]) (*connect.Response[pluginv1.AuthenticateResponse], error) {
+			return connect.NewResponse(&pluginv1.AuthenticateResponse{
 				Authenticated: true,
-				User: &authv1.UserIdentity{
+				User: &pluginv1.UserIdentity{
 					UserId:      "u-789",
 					Email:       "colette@rat.dev",
 					DisplayName: "Colette",
@@ -57,12 +127,9 @@ func TestAuthMiddleware_ValidToken_SetsUserContext(t *testing.T) {
 		},
 	}
 
-	reg := &Registry{
-		edition: "pro",
-		auth:    &authPlugin{client: mock},
-	}
+	reg := registryWithAuth(mock)
 
-	var captured *authv1.UserIdentity
+	var captured *domain.UserIdentity
 	handler := reg.AuthMiddleware()(captureUserHandler(&captured))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines", http.NoBody)
@@ -73,15 +140,13 @@ func TestAuthMiddleware_ValidToken_SetsUserContext(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	require.NotNil(t, captured)
-	assert.Equal(t, "u-789", captured.UserId)
+	assert.Equal(t, "u-789", captured.UserID)
 	assert.Equal(t, "colette@rat.dev", captured.Email)
 }
 
 func TestAuthMiddleware_MissingToken_Returns401(t *testing.T) {
-	reg := &Registry{
-		edition: "pro",
-		auth:    &authPlugin{client: &mockAuthClient{}},
-	}
+	mock := &mockPluginServiceClient{}
+	reg := registryWithAuth(mock)
 
 	handler := reg.AuthMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler should not be called")
@@ -100,19 +165,16 @@ func TestAuthMiddleware_MissingToken_Returns401(t *testing.T) {
 }
 
 func TestAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
-	mock := &mockAuthClient{
-		authenticateFunc: func(_ context.Context, req *connect.Request[authv1.AuthenticateRequest]) (*connect.Response[authv1.AuthenticateResponse], error) {
-			return connect.NewResponse(&authv1.AuthenticateResponse{
+	mock := &mockPluginServiceClient{
+		authenticateFunc: func(_ context.Context, req *connect.Request[pluginv1.AuthenticateRequest]) (*connect.Response[pluginv1.AuthenticateResponse], error) {
+			return connect.NewResponse(&pluginv1.AuthenticateResponse{
 				Authenticated: false,
 				ErrorMessage:  "token expired",
 			}), nil
 		},
 	}
 
-	reg := &Registry{
-		edition: "pro",
-		auth:    &authPlugin{client: mock},
-	}
+	reg := registryWithAuth(mock)
 
 	handler := reg.AuthMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler should not be called")
@@ -132,16 +194,13 @@ func TestAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
 }
 
 func TestAuthMiddleware_PluginError_Returns401(t *testing.T) {
-	mock := &mockAuthClient{
-		authenticateFunc: func(_ context.Context, req *connect.Request[authv1.AuthenticateRequest]) (*connect.Response[authv1.AuthenticateResponse], error) {
+	mock := &mockPluginServiceClient{
+		authenticateFunc: func(_ context.Context, req *connect.Request[pluginv1.AuthenticateRequest]) (*connect.Response[pluginv1.AuthenticateResponse], error) {
 			return nil, connect.NewError(connect.CodeUnavailable, errors.New("plugin down"))
 		},
 	}
 
-	reg := &Registry{
-		edition: "pro",
-		auth:    &authPlugin{client: mock},
-	}
+	reg := registryWithAuth(mock)
 
 	handler := reg.AuthMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler should not be called")

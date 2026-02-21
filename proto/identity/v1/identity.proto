@@ -1,0 +1,177 @@
+syntax = "proto3";
+package ratatouille.identity.v1;
+
+option go_package = "github.com/rat-data/rat/platform/gen/identity/v1;identityv1";
+
+import "google/protobuf/timestamp.proto";
+
+// IdentityService provides user and group management against an identity provider.
+// Phase 1: read-only operations (list, get, search users and groups).
+// Phase 2: write operations (create, update, delete users, reset password).
+//
+// Implemented by identity provider plugins (e.g., auth-keycloak).
+// Called by ratd for user management in the admin portal.
+service IdentityService {
+  // ── Capabilities ────────────────────────────────────────────────
+
+  // Returns what this identity provider supports (read-only vs full CRUD).
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+
+  // ── Users ───────────────────────────────────────────────────────
+
+  // Paginated user list with optional search filter.
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+
+  // Single user detail by ID (includes group membership).
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+
+  // Lightweight autocomplete search (no group lookup).
+  rpc SearchUsers(SearchUsersRequest) returns (SearchUsersResponse);
+
+  // Create a new user in the identity provider. Phase 2.
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+
+  // Update an existing user. Phase 2.
+  rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);
+
+  // Delete a user from the identity provider. Phase 2.
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+
+  // Reset a user's password. Phase 2.
+  rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse);
+
+  // ── Groups ──────────────────────────────────────────────────────
+
+  // List all groups from the identity provider (read-only).
+  rpc ListIdentityGroups(ListIdentityGroupsRequest) returns (ListIdentityGroupsResponse);
+}
+
+// ============================================================================
+// Shared Types
+// ============================================================================
+
+// User represents a full user record from the identity provider.
+message User {
+  string id = 1;                                // unique user ID (e.g., Keycloak UUID)
+  string email = 2;                             // email address
+  string display_name = 3;                      // computed display name
+  string first_name = 4;                        // given name
+  string last_name = 5;                         // family name
+  bool enabled = 6;                             // whether the account is active
+  google.protobuf.Timestamp created_at = 7;     // account creation time
+  repeated IdentityGroup groups = 8;            // groups the user belongs to
+  map<string, string> attributes = 9;           // provider-specific attributes
+}
+
+// UserSummary is a lightweight user representation for autocomplete/search.
+message UserSummary {
+  string id = 1;                                // unique user ID
+  string email = 2;                             // email address
+  string display_name = 3;                      // computed display name
+}
+
+// IdentityGroup represents a group from the identity provider.
+message IdentityGroup {
+  string id = 1;                                // group ID
+  string name = 2;                              // human-readable group name
+  string path = 3;                              // hierarchical path (e.g., "/admin")
+}
+
+// ============================================================================
+// Capabilities RPC
+// ============================================================================
+
+message GetCapabilitiesRequest {}
+
+message GetCapabilitiesResponse {
+  string provider_name = 1;                     // e.g., "keycloak", "ldap", "azure-ad"
+  bool can_create_users = 2;                    // supports CreateUser
+  bool can_update_users = 3;                    // supports UpdateUser
+  bool can_delete_users = 4;                    // supports DeleteUser
+  bool can_reset_password = 5;                  // supports ResetPassword
+  bool can_manage_groups = 6;                   // supports group write operations
+}
+
+// ============================================================================
+// User RPCs
+// ============================================================================
+
+message ListUsersRequest {
+  string search = 1;                            // optional: filter by name/email
+  int32 limit = 2;                              // max results (default: 50)
+  int32 offset = 3;                             // pagination offset
+}
+
+message ListUsersResponse {
+  repeated User users = 1;                      // user records
+  int32 total_count = 2;                        // total matching users (for pagination)
+}
+
+message GetUserRequest {
+  string user_id = 1;                           // user ID to look up
+}
+
+message GetUserResponse {
+  User user = 1;                                // full user detail
+}
+
+message SearchUsersRequest {
+  string query = 1;                             // search query (name, email, username)
+  int32 limit = 2;                              // max results (default: 10)
+}
+
+message SearchUsersResponse {
+  repeated UserSummary users = 1;               // lightweight user matches
+}
+
+// Phase 2 — stub messages for forward compatibility.
+
+message CreateUserRequest {
+  string email = 1;
+  string first_name = 2;
+  string last_name = 3;
+  bool enabled = 4;
+  string password = 5;
+}
+
+message CreateUserResponse {
+  User user = 1;
+}
+
+message UpdateUserRequest {
+  string user_id = 1;
+  string email = 2;
+  string first_name = 3;
+  string last_name = 4;
+  bool enabled = 5;
+}
+
+message UpdateUserResponse {
+  User user = 1;
+}
+
+message DeleteUserRequest {
+  string user_id = 1;
+}
+
+message DeleteUserResponse {
+  bool deleted = 1;
+}
+
+message ResetPasswordRequest {
+  string user_id = 1;
+  string new_password = 2;
+  bool temporary = 3;                           // if true, user must change on next login
+}
+
+message ResetPasswordResponse {}
+
+// ============================================================================
+// Group RPCs
+// ============================================================================
+
+message ListIdentityGroupsRequest {}
+
+message ListIdentityGroupsResponse {
+  repeated IdentityGroup groups = 1;            // all groups from the provider
+}

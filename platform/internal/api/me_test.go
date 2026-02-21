@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/rat-data/rat/platform/internal/api"
-	authv1 "github.com/rat-data/rat/platform/gen/auth/v1"
+	"github.com/rat-data/rat/platform/internal/domain"
 	"github.com/rat-data/rat/platform/internal/plugins"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,8 +17,8 @@ func TestHandleMe_Authenticated_ReturnsUser(t *testing.T) {
 	srv := &api.Server{}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", http.NoBody)
-	ctx := plugins.ContextWithUser(req.Context(), &authv1.UserIdentity{
-		UserId:      "usr_123",
+	ctx := plugins.ContextWithUser(req.Context(), &domain.UserIdentity{
+		UserID:      "usr_123",
 		Email:       "tom@example.com",
 		DisplayName: "Tom",
 		Roles:       []string{"admin", "editor"},
@@ -60,11 +60,11 @@ func TestHandleMe_EmptyRoles_ReturnsEmptyArray(t *testing.T) {
 	srv := &api.Server{}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", http.NoBody)
-	ctx := plugins.ContextWithUser(req.Context(), &authv1.UserIdentity{
-		UserId:      "usr_456",
+	ctx := plugins.ContextWithUser(req.Context(), &domain.UserIdentity{
+		UserID:      "usr_456",
 		Email:       "alice@example.com",
 		DisplayName: "Alice",
-		// Roles is nil (not set in proto)
+		// Roles is nil (no roles assigned)
 	})
 	req = req.WithContext(ctx)
 

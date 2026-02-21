@@ -222,7 +222,7 @@ func (s *Server) HandleCreatePipeline(w http.ResponseWriter, r *http.Request) {
 
 	// Set owner from auth context (nil in community mode).
 	if user := plugins.UserFromContext(r.Context()); user != nil {
-		pipeline.Owner = &user.UserId
+		pipeline.Owner = &user.UserID
 	}
 
 	if err := s.Pipelines.CreatePipeline(r.Context(), pipeline); err != nil {

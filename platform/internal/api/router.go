@@ -28,6 +28,7 @@ import (
 	cloudv1 "github.com/rat-data/rat/platform/gen/cloud/v1"
 	"github.com/rat-data/rat/platform/internal/cache"
 	"github.com/rat-data/rat/platform/internal/domain"
+	"github.com/rat-data/rat/platform/internal/plugins"
 )
 
 // maxJSONBodySize is the maximum size for JSON request bodies (1MB).
@@ -253,6 +254,11 @@ type PluginRegistry interface {
 	Features() domain.Features
 }
 
+// PluginRegistryLive provides live plugin lookup for the route proxy.
+type PluginRegistryLive interface {
+	Get(name string) *plugins.Plugin
+}
+
 // CloudProvider vends scoped cloud credentials for pipeline runs.
 // Implemented by the plugins.Registry when the cloud plugin is loaded.
 type CloudProvider interface {
@@ -306,13 +312,16 @@ type Server struct {
 	Triggers      PipelineTriggerStore
 	Audit         AuditStore
 	Settings      SettingsStore
-	Auth          func(http.Handler) http.Handler
-	Authorizer    Authorizer
-	Executor      Executor
-	Reaper        ReaperRunner
-	Plugins       PluginRegistry
-	Cloud         CloudProvider
-	LicenseInfo   *domain.LicenseInfo
+	Auth           func(http.Handler) http.Handler
+	Authorizer     Authorizer
+	Executor       Executor
+	Reaper         ReaperRunner
+	Plugins        PluginRegistry
+	Cloud          CloudProvider
+	LicenseInfo    *domain.LicenseInfo
+	PluginManager  PluginManager   // lifecycle operations (register, enable, disable, remove)
+	PluginCatalog  PluginLister    // read-only catalog queries
+	PluginRegistry PluginRegistryLive // live registry for proxy route lookups
 	CORSOrigins   []string          // Allowed CORS origins. Defaults to ["http://localhost:3000"].
 	RateLimit        *RateLimitConfig   // Per-IP rate limiting config. Nil disables rate limiting.
 	RateLimiterStop  func()            // Populated by NewRouter when rate limiting is enabled.
@@ -410,6 +419,11 @@ func NewRouter(srv *Server) chi.Router {
 	// Called by runner/plugins for push-based status updates.
 	MountInternalRoutes(r, srv)
 
+	// Plugin phone-home (no auth — plugins call this to self-register).
+	if srv.PluginManager != nil {
+		MountPluginInternalRoutes(r, srv)
+	}
+
 	// API v1
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(limitJSONBody)
@@ -455,6 +469,19 @@ func NewRouter(srv *Server) chi.Router {
 		if srv.Versions != nil {
 			MountVersionRoutes(vr, srv)
 		}
+
+		// Permission management endpoints (authenticated).
+		// Handlers check for permission provider internally.
+		MountPermissionRoutes(vr, srv)
+
+		// Plugin management endpoints (authenticated).
+		if srv.PluginManager != nil {
+			MountPluginRoutes(vr, srv)
+		}
+
+		// Plugin route proxy: /api/v1/x/{plugin}/* → plugin.Addr/*
+		// Always mount — handler returns 503 if PluginRegistry is nil.
+		MountPluginProxyRoutes(vr, srv)
 	})
 
 	return r

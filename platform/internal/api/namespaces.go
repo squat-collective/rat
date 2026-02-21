@@ -95,7 +95,7 @@ func (s *Server) HandleCreateNamespace(w http.ResponseWriter, r *http.Request) {
 	// Set created_by from auth context (nil in community mode).
 	var createdBy *string
 	if user := plugins.UserFromContext(r.Context()); user != nil {
-		createdBy = &user.UserId
+		createdBy = &user.UserID
 	}
 
 	if err := s.Namespaces.CreateNamespace(r.Context(), req.Name, createdBy); err != nil {

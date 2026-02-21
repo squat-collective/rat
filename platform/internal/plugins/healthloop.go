@@ -11,58 +11,32 @@ import (
 
 	connect "connectrpc.com/connect"
 	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
-	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
-	"github.com/rat-data/rat/platform/internal/config"
+	"github.com/rat-data/rat/platform/internal/domain"
 )
 
 // healthCheckInterval is the default interval between periodic health checks.
 const healthCheckInterval = 30 * time.Second
 
-// pluginHealthState tracks the health check client and current status of a plugin.
-type pluginHealthState struct {
-	name   string
-	addr   string
-	client pluginv1connect.PluginServiceClient
-	// healthy is the last known health status. When false, the plugin is
-	// considered disabled. The Registry's enabledMu protects reads/writes
-	// to the Registry's plugin fields based on this.
-	healthy bool
-}
-
-// HealthLoop runs periodic health checks on all loaded plugins.
-// Unhealthy plugins are disabled (set to nil in the Registry) and re-enabled
-// when they recover. This prevents cascading failures when a plugin container
-// restarts or becomes temporarily unavailable.
+// HealthLoop runs periodic health checks on all registered plugins.
+// Unhealthy plugins transition to error status; recovered plugins are re-enabled.
+// Uses the live Registry to iterate all plugins dynamically.
 type HealthLoop struct {
 	registry *Registry
-	states   []pluginHealthState
+	catalog  PluginCatalog // optional — for persisting health transitions
 	interval time.Duration
 	cancel   context.CancelFunc
 	done     chan struct{}
-	mu       sync.Mutex // protects states
+	mu       sync.Mutex
 }
 
-// NewHealthLoop creates a periodic health checker for all plugins in the config.
-// Call Start() to begin the background goroutine.
-func NewHealthLoop(registry *Registry, cfg *config.Config, factory *pluginClientFactory, httpClient connect.HTTPClient) *HealthLoop {
-	hl := &HealthLoop{
+// NewHealthLoop creates a periodic health checker that iterates the registry.
+// Pass nil catalog if no persistence is desired (tests).
+func NewHealthLoop(registry *Registry, catalog PluginCatalog) *HealthLoop {
+	return &HealthLoop{
 		registry: registry,
+		catalog:  catalog,
 		interval: healthCheckInterval,
 	}
-
-	// Build health check clients for each configured plugin.
-	for name, pluginCfg := range cfg.Plugins {
-		addr := ensureScheme(pluginCfg.Addr)
-		client := factory.newPluginClient(httpClient, addr)
-		hl.states = append(hl.states, pluginHealthState{
-			name:    name,
-			addr:    addr,
-			client:  client,
-			healthy: true, // assume healthy at startup (Load already checked)
-		})
-	}
-
-	return hl
 }
 
 // Start begins the periodic health check goroutine.
@@ -96,61 +70,53 @@ func (hl *HealthLoop) Stop() {
 	}
 }
 
-// checkAll runs a health check against each tracked plugin.
-// Transitions: healthy -> unhealthy (disable) or unhealthy -> healthy (re-enable).
+// checkAll runs a health check against each registered plugin.
+// Transitions: enabled→error (disable) or error→enabled (re-enable).
 func (hl *HealthLoop) checkAll(ctx context.Context) {
 	hl.mu.Lock()
-	states := make([]pluginHealthState, len(hl.states))
-	copy(states, hl.states)
-	hl.mu.Unlock()
+	defer hl.mu.Unlock()
 
-	for i := range states {
-		s := &states[i]
+	plugins := hl.registry.All()
+
+	for _, p := range plugins {
+		// Skip disabled plugins — they need explicit Enable() to restart.
+		if p.Status == domain.PluginStatusDisabled {
+			continue
+		}
+
+		if p.PluginClient == nil {
+			continue
+		}
+
 		checkCtx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
-		_, err := s.client.HealthCheck(checkCtx, connect.NewRequest(&pluginv1.HealthCheckRequest{}))
+		_, err := p.PluginClient.HealthCheck(checkCtx, connect.NewRequest(&pluginv1.HealthCheckRequest{}))
 		cancel()
 
-		wasHealthy := s.healthy
+		wasHealthy := p.Status == domain.PluginStatusEnabled
 		nowHealthy := err == nil
 
 		if wasHealthy && !nowHealthy {
-			// Transition: healthy -> unhealthy. Disable the plugin.
-			slog.Warn("plugin health check failed, disabling",
-				"plugin", s.name, "addr", s.addr, "error", err)
-			hl.registry.disablePlugin(s.name)
-			s.healthy = false
+			// Transition: enabled → error. Mark as error.
+			slog.Warn("plugin health check failed, marking as error",
+				"plugin", p.Name, "addr", p.Addr, "error", err)
+			p.Status = domain.PluginStatusError
+			p.Error = err.Error()
+
+			if hl.catalog != nil {
+				_ = hl.catalog.UpdatePluginHealth(ctx, p.Name, false, err.Error())
+				_ = hl.catalog.UpdatePluginStatus(ctx, p.Name, domain.PluginStatusError, err.Error())
+			}
 		} else if !wasHealthy && nowHealthy {
-			// Transition: unhealthy -> healthy. Re-enable the plugin.
+			// Transition: error → enabled. Re-enable.
 			slog.Info("plugin recovered, re-enabling",
-				"plugin", s.name, "addr", s.addr)
-			// Note: re-enabling requires re-creating the client connection.
-			// For now, we mark as healthy. Full re-enablement would require
-			// re-running the loadXxx method. This is logged so operators
-			// know a restart may be needed for full functionality.
-			slog.Info("plugin marked healthy — restart ratd to fully re-enable",
-				"plugin", s.name)
-			s.healthy = true
+				"plugin", p.Name, "addr", p.Addr)
+			p.Status = domain.PluginStatusEnabled
+			p.Error = ""
+
+			if hl.catalog != nil {
+				_ = hl.catalog.UpdatePluginHealth(ctx, p.Name, true, "")
+				_ = hl.catalog.UpdatePluginStatus(ctx, p.Name, domain.PluginStatusEnabled, "")
+			}
 		}
-	}
-
-	hl.mu.Lock()
-	copy(hl.states, states)
-	hl.mu.Unlock()
-}
-
-// disablePlugin sets the plugin's client to nil, effectively disabling it.
-// The Features() method will reflect the plugin as disabled.
-func (r *Registry) disablePlugin(name string) {
-	switch name {
-	case PluginAuth:
-		r.auth = nil
-	case PluginExecutor:
-		r.executor = nil
-	case PluginSharing:
-		r.sharing = nil
-	case PluginEnforcement:
-		r.enforcement = nil
-	case PluginCloud:
-		r.cloud = nil
 	}
 }

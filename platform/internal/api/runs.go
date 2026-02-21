@@ -209,7 +209,7 @@ func (s *Server) HandleCreateRun(w http.ResponseWriter, r *http.Request) {
 	if s.Cloud != nil && s.Cloud.CloudEnabled() {
 		user := plugins.UserFromContext(r.Context())
 		if user != nil {
-			creds, err := s.Cloud.GetCredentials(r.Context(), user.UserId, req.Namespace)
+			creds, err := s.Cloud.GetCredentials(r.Context(), user.UserID, req.Namespace)
 			if err != nil {
 				slog.Warn("cloud credentials unavailable, using defaults", "error", err)
 			} else {

@@ -221,17 +221,25 @@ func main() {
 		slog.Info("gRPC TLS enabled", "ca", tlsCfg.CACertFile)
 	}
 
-	// Load plugins (connects to plugin containers, health-checks).
+	// Load plugins via the new open Manager.
+	// 1. Create Manager with an empty registry.
+	// 2. If Postgres is available later, create PluginStore and load from catalog.
+	// 3. For backward compat, register any plugins declared in rat.yaml config.
 	ctx := context.Background()
-	registry, err := plugins.Load(ctx, cfg, grpcClient)
-	if err != nil {
-		slog.Error("failed to load plugins", "error", err)
-		os.Exit(1)
-	}
+	mgr := plugins.NewManager(nil, cfg.Edition, grpcClient) // catalog set after Postgres init
+	registry := mgr.Registry()
 	srv.Plugins = registry
+	srv.PluginRegistry = registry
+
+	// Register any plugins declared in rat.yaml config (backward compat).
+	// These are registered immediately via health-check + describe.
+	for name, pluginCfg := range cfg.Plugins {
+		if err := mgr.Register(ctx, name, pluginCfg.Addr); err != nil {
+			slog.Warn("config plugin registration failed, disabled", "name", name, "addr", pluginCfg.Addr, "error", err)
+		}
+	}
 
 	// Auth middleware: plugin auth (Pro) takes priority over API key (Community).
-	// If an auth plugin is loaded, use it. Otherwise, check RAT_API_KEY.
 	if registry.AuthEnabled() {
 		srv.Auth = registry.AuthMiddleware()
 	} else if apiKey := os.Getenv("RAT_API_KEY"); apiKey != "" {
@@ -239,6 +247,24 @@ func main() {
 		slog.Info("API key authentication enabled")
 	} else {
 		srv.Auth = auth.Noop()
+	}
+
+	// Runtime re-wiring callbacks — fired when plugins register/unregister.
+	mgr.OnAuthChanged = func(reg *plugins.Registry) {
+		if reg.AuthEnabled() {
+			srv.Auth = reg.AuthMiddleware()
+			slog.Info("auth middleware re-wired (plugin change)")
+		} else if apiKey := os.Getenv("RAT_API_KEY"); apiKey != "" {
+			srv.Auth = auth.APIKey(apiKey)
+		} else {
+			srv.Auth = auth.Noop()
+		}
+	}
+	mgr.OnEnforcementChanged = func(reg *plugins.Registry) {
+		if reg.EnforcementEnabled() && srv.Pipelines != nil {
+			srv.Authorizer = plugins.NewPluginAuthorizer(reg, srv.Pipelines)
+			slog.Info("enforcement authorizer re-wired (plugin change)")
+		}
 	}
 
 	// Decode license key for display (no validation — enforcement is in plugins).
@@ -266,13 +292,15 @@ func main() {
 
 	// Shutdown hooks — populated below, called in order during graceful shutdown.
 	var (
-		stopLeader    func()
-		stopScheduler func()
-		stopEvaluator func()
-		stopReaper    func()
-		stopExecutor  func()
-		stopEventBus  func()
-		closePool     func()
+		stopLeader       func()
+		stopScheduler    func()
+		stopEvaluator    func()
+		stopReaper       func()
+		stopExecutor     func()
+		stopEventBus     func()
+		stopHealthLoop   func()
+		stopDispatcher   func()
+		closePool        func()
 	)
 
 	// Event bus — populated below when DATABASE_URL is set.
@@ -335,6 +363,17 @@ func main() {
 
 		srv.DBHealth = postgres.NewHealthChecker(pool)
 		slog.Info("postgres stores initialized")
+
+		// Wire plugin catalog persistence now that Postgres is available.
+		pluginStore := postgres.NewPluginStore(pool)
+		srv.PluginCatalog = pluginStore
+		srv.PluginManager = mgr
+
+		// Reconnect Manager to persistent catalog and load saved plugins.
+		mgr.SetCatalog(pluginStore)
+		if err := mgr.LoadFromCatalog(ctx); err != nil {
+			slog.Warn("failed to load plugins from catalog", "error", err)
+		}
 
 		// Wire enforcement authorizer after Postgres stores are available.
 		if registry.EnforcementEnabled() {
@@ -407,10 +446,12 @@ func main() {
 		slog.Warn("S3_ENDPOINT not set, running without storage")
 	}
 
-	// Wire cloud provider if cloud plugin is available.
+	// Cloud provider: the new registry does not implement CloudProvider directly.
+	// Cloud credentials will be accessed via the plugin proxy (/api/v1/x/cloud/...)
+	// once the cloud plugin is updated. For now, cloud credential injection in
+	// runs.go is skipped when srv.Cloud is nil (falls back to default S3 creds).
 	if registry.CloudEnabled() {
-		srv.Cloud = registry
-		slog.Info("cloud provider initialized (plugin)")
+		slog.Info("cloud plugin registered (credentials via plugin proxy)")
 	}
 
 	// Wire executor: plugin executor (Pro) takes priority over WarmPoolExecutor (Community).
@@ -552,6 +593,21 @@ func main() {
 		stopLeader = stopFn
 	}
 
+	// Start plugin health loop (30s interval, checks all registered plugins).
+	// Catalog may be nil if Postgres is not available — health loop handles that.
+	healthLoop := plugins.NewHealthLoop(registry, mgr.Catalog())
+	healthLoop.Start(ctx)
+	stopHealthLoop = func() { healthLoop.Stop() }
+	slog.Info("plugin health loop started")
+
+	// Start event dispatcher if event bus is available.
+	if eventBus != nil {
+		adapter := &eventBusAdapter{bus: eventBus}
+		dispatcher := plugins.NewEventDispatcher(registry, adapter)
+		dispatcher.Start(ctx)
+		stopDispatcher = func() { dispatcher.Stop() }
+	}
+
 	// Warn if S3 or Postgres credentials are still set to well-known defaults.
 	// These are fine for local development but dangerous in production.
 	warnDefaultCredentials()
@@ -636,7 +692,15 @@ func main() {
 		slog.Error("http shutdown error", "error", err)
 	}
 
-	// Ordered cleanup: leader (stops scheduler/evaluator/reaper) → executor → event bus → database pool.
+	// Ordered cleanup: health loop → dispatcher → leader → executor → event bus → database pool.
+	if stopHealthLoop != nil {
+		stopHealthLoop()
+		slog.Info("plugin health loop stopped")
+	}
+	if stopDispatcher != nil {
+		stopDispatcher()
+		slog.Info("event dispatcher stopped")
+	}
 	if stopLeader != nil {
 		stopLeader()
 		slog.Info("leader elector stopped")
@@ -663,4 +727,25 @@ func main() {
 	}
 
 	slog.Info("ratd shutdown complete")
+}
+
+// eventBusAdapter bridges postgres.EventBus (returns <-chan postgres.Event) to
+// plugins.DispatchEventBus (returns <-chan plugins.DispatchEvent).
+type eventBusAdapter struct {
+	bus *postgres.PgEventBus
+}
+
+func (a *eventBusAdapter) Subscribe(channel string) (<-chan plugins.DispatchEvent, func()) {
+	pgCh, cancel := a.bus.Subscribe(channel)
+	out := make(chan plugins.DispatchEvent, cap(pgCh))
+	go func() {
+		defer close(out)
+		for ev := range pgCh {
+			out <- plugins.DispatchEvent{
+				Channel: ev.Channel,
+				Payload: ev.Payload,
+			}
+		}
+	}()
+	return out, cancel
 }

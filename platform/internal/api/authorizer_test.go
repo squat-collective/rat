@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	authv1 "github.com/rat-data/rat/platform/gen/auth/v1"
 	"github.com/rat-data/rat/platform/internal/api"
 	"github.com/rat-data/rat/platform/internal/domain"
 	"github.com/rat-data/rat/platform/internal/plugins"
@@ -57,8 +56,8 @@ func TestRequireAccess_AuthorizerDenies_Returns403(t *testing.T) {
 
 	// With user context → authorizer denies → 403
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/pipelines/default/bronze/orders", http.NoBody)
-	ctx := plugins.ContextWithUser(req.Context(), &authv1.UserIdentity{
-		UserId: "bob",
+	ctx := plugins.ContextWithUser(req.Context(), &domain.UserIdentity{
+		UserID: "bob",
 		Email:  "bob@test.com",
 	})
 	req = req.WithContext(ctx)
@@ -79,8 +78,8 @@ func TestRequireAccess_AuthorizerAllows_Proceeds(t *testing.T) {
 	body := `{"description":"new desc"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/pipelines/default/bronze/orders", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	ctx := plugins.ContextWithUser(req.Context(), &authv1.UserIdentity{
-		UserId: "alice",
+	ctx := plugins.ContextWithUser(req.Context(), &domain.UserIdentity{
+		UserID: "alice",
 		Email:  "alice@test.com",
 	})
 	req = req.WithContext(ctx)
@@ -97,8 +96,8 @@ func TestCreatePipeline_SetsOwnerFromContext(t *testing.T) {
 	body := `{"namespace":"default","layer":"bronze","name":"orders","type":"sql"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/pipelines", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	ctx := plugins.ContextWithUser(req.Context(), &authv1.UserIdentity{
-		UserId: "alice",
+	ctx := plugins.ContextWithUser(req.Context(), &domain.UserIdentity{
+		UserID: "alice",
 		Email:  "alice@test.com",
 	})
 	req = req.WithContext(ctx)
