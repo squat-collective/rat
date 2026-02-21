@@ -13,10 +13,22 @@ export type PluginNavItem = {
   priority: number;
 };
 
+/** Props passed to a plugin route component. */
+export type PluginRouteProps = {
+  path: string[]; // URL segments after /x/ (e.g. ["my-plugin", "settings"])
+};
+
+/** A full-page route registered by a plugin. */
+export type PluginRoute = {
+  path: string; // e.g. "/x/my-plugin"
+  component: React.ComponentType<PluginRouteProps>;
+};
+
 /** Merged registry from all loaded plugins. */
 export type PluginRegistry = {
   slots: Record<string, SlotComponent<any>[]>;
   navItems: PluginNavItem[];
+  routes: PluginRoute[];
 };
 
 const PluginContext = createContext<PluginRegistry | null>(null);

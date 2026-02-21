@@ -20,7 +20,7 @@ beforeEach(() => {
 
 describe("PluginWrapper", () => {
   it("renders children directly when loadPlugins resolves empty registry", async () => {
-    mockLoadPlugins.mockResolvedValue({ slots: {}, navItems: [] });
+    mockLoadPlugins.mockResolvedValue({ slots: {}, navItems: [], routes: [] });
 
     render(
       <PluginWrapper nonce="test-nonce">
@@ -53,6 +53,7 @@ describe("PluginWrapper", () => {
     mockLoadPlugins.mockResolvedValue({
       slots: { "test-slot": [] },
       navItems: [{ label: "Test", icon: "puzzle", href: "/test", priority: 1 }],
+      routes: [],
     });
 
     render(

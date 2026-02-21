@@ -20,7 +20,7 @@ describe("PluginSlot", () => {
   });
 
   it("renders nothing when slot has no registered components", () => {
-    const registry: PluginRegistry = { slots: {}, navItems: [] };
+    const registry: PluginRegistry = { slots: {}, navItems: [], routes: [] };
     const { container } = render(
       <PluginRegistryProvider registry={registry}>
         <PluginSlot name="sidebar-user" />
@@ -33,7 +33,7 @@ describe("PluginSlot", () => {
     const UserMenu: SlotComponent = () => <div>User Menu</div>;
     const registry: PluginRegistry = {
       slots: { "sidebar-user": [UserMenu] },
-      navItems: [],
+      navItems: [], routes: [],
     };
     render(
       <PluginRegistryProvider registry={registry}>
@@ -48,7 +48,7 @@ describe("PluginSlot", () => {
     const CompB: SlotComponent = () => <div>Component B</div>;
     const registry: PluginRegistry = {
       slots: { "sidebar-user": [CompA, CompB] },
-      navItems: [],
+      navItems: [], routes: [],
     };
     render(
       <PluginRegistryProvider registry={registry}>
@@ -65,7 +65,7 @@ describe("PluginSlot", () => {
     );
     const registry: PluginRegistry = {
       slots: { "sidebar-nav-extra": [NavExtra] },
-      navItems: [],
+      navItems: [], routes: [],
     };
     render(
       <PluginRegistryProvider registry={registry}>
@@ -78,7 +78,7 @@ describe("PluginSlot", () => {
   it("renders nothing for unknown slot name", () => {
     const registry: PluginRegistry = {
       slots: { "sidebar-user": [() => <div>User</div>] },
-      navItems: [],
+      navItems: [], routes: [],
     };
     const { container } = render(
       <PluginRegistryProvider registry={registry}>

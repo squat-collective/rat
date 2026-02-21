@@ -28,7 +28,7 @@ describe("loadPlugins", () => {
 
     const reg = await loadPlugins("test-nonce");
 
-    expect(reg).toEqual({ slots: {}, navItems: [] });
+    expect(reg).toEqual({ slots: {}, navItems: [], routes: [] });
   });
 
   it("returns empty registry when fetch fails", async () => {
@@ -38,7 +38,7 @@ describe("loadPlugins", () => {
 
     const reg = await loadPlugins("test-nonce");
 
-    expect(reg).toEqual({ slots: {}, navItems: [] });
+    expect(reg).toEqual({ slots: {}, navItems: [], routes: [] });
   });
 
   it("returns empty registry when fetch throws", async () => {
@@ -46,7 +46,7 @@ describe("loadPlugins", () => {
 
     const reg = await loadPlugins("test-nonce");
 
-    expect(reg).toEqual({ slots: {}, navItems: [] });
+    expect(reg).toEqual({ slots: {}, navItems: [], routes: [] });
   });
 
   it("sets up __RAT_REGISTER_PLUGIN on window", async () => {
@@ -140,5 +140,53 @@ describe("loadPlugins", () => {
     expect(reg.navItems).toHaveLength(2);
     expect(reg.navItems[0].label).toBe("A");
     expect(reg.navItems[1].label).toBe("B");
+  });
+
+  it("merges routes from multiple plugins", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify([
+        {
+          name: "plugin-a",
+          status: "enabled",
+          descriptor: { ui: { bundle_url: "http://a:3000/bundle.js" } },
+        },
+        {
+          name: "plugin-b",
+          status: "enabled",
+          descriptor: { ui: { bundle_url: "http://b:3000/bundle.js" } },
+        },
+      ]), { status: 200 }),
+    );
+
+    const origCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+      const el = origCreateElement(tag);
+      if (tag === "script") {
+        setTimeout(() => {
+          const src = (el as HTMLScriptElement).src;
+          if (src.includes("plugin-a")) {
+            window.__RAT_REGISTER_PLUGIN!("plugin-a", {
+              routes: [{ path: "/x/plugin-a", component: (() => null) as any }],
+            });
+          } else if (src.includes("plugin-b")) {
+            window.__RAT_REGISTER_PLUGIN!("plugin-b", {
+              routes: [
+                { path: "/x/plugin-b", component: (() => null) as any },
+                { path: "/x/plugin-b-admin", component: (() => null) as any },
+              ],
+            });
+          }
+          el.dispatchEvent(new Event("load"));
+        }, 0);
+      }
+      return el;
+    });
+
+    const reg = await loadPlugins("test-nonce");
+
+    expect(reg.routes).toHaveLength(3);
+    expect(reg.routes[0].path).toBe("/x/plugin-a");
+    expect(reg.routes[1].path).toBe("/x/plugin-b");
+    expect(reg.routes[2].path).toBe("/x/plugin-b-admin");
   });
 });

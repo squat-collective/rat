@@ -15,6 +15,7 @@ describe("usePluginRegistry", () => {
     const registry: PluginRegistry = {
       slots: { "sidebar-user": [() => null] },
       navItems: [],
+      routes: [],
     };
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <PluginRegistryProvider registry={registry}>
@@ -26,13 +27,13 @@ describe("usePluginRegistry", () => {
   });
 
   it("accepts empty registry", () => {
-    const registry: PluginRegistry = { slots: {}, navItems: [] };
+    const registry: PluginRegistry = { slots: {}, navItems: [], routes: [] };
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <PluginRegistryProvider registry={registry}>
         {children}
       </PluginRegistryProvider>
     );
     const { result } = renderHook(() => usePluginRegistry(), { wrapper });
-    expect(result.current).toEqual({ slots: {}, navItems: [] });
+    expect(result.current).toEqual({ slots: {}, navItems: [], routes: [] });
   });
 });

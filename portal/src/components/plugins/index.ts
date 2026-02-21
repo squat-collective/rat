@@ -9,5 +9,7 @@ export {
 export type {
   PluginRegistry,
   PluginNavItem,
+  PluginRoute,
+  PluginRouteProps,
   SlotComponent,
 } from "./plugin-context";

@@ -1,10 +1,11 @@
-import type { PluginRegistry, PluginNavItem, SlotComponent } from "./plugin-context";
+import type { PluginRegistry, PluginNavItem, PluginRoute, SlotComponent } from "./plugin-context";
 import { PUBLIC_API_URL } from "@/lib/api-client";
 
 /** Shape a plugin bundle passes to window.__RAT_REGISTER_PLUGIN. */
 export type PluginRegistration = {
   slots?: Record<string, SlotComponent<any>[]>;
   navItems?: PluginNavItem[];
+  routes?: PluginRoute[];
 };
 
 /** Extends Window with the RAT plugin registration hook. */
@@ -90,6 +91,7 @@ function mergeRegistrations(
 ): PluginRegistry {
   const slots: Record<string, SlotComponent<any>[]> = {};
   const navItems: PluginNavItem[] = [];
+  const routes: PluginRoute[] = [];
 
   for (const [, reg] of registrations) {
     // Merge slots.
@@ -106,11 +108,16 @@ function mergeRegistrations(
     if (reg.navItems) {
       navItems.push(...reg.navItems);
     }
+
+    // Merge routes.
+    if (reg.routes) {
+      routes.push(...reg.routes);
+    }
   }
 
-  return { slots, navItems };
+  return { slots, navItems, routes };
 }
 
 function emptyRegistry(): PluginRegistry {
-  return { slots: {}, navItems: [] };
+  return { slots: {}, navItems: [], routes: [] };
 }
