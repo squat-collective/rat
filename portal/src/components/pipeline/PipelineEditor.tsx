@@ -42,6 +42,7 @@ import { cn } from "@/lib/utils";
 import { PreviewPanel } from "@/components/preview-panel";
 import { QualityTestDialog } from "@/components/quality-test-dialog";
 import { Play, Save, Upload, X } from "lucide-react";
+import { PluginSlot } from "@/components/plugins";
 
 const CodeEditor = dynamic(
   () => import("@/components/code-editor").then((m) => m.CodeEditor),
@@ -475,6 +476,7 @@ export function PipelineEditor({
                     <Save className="h-3 w-3" />
                     {saving ? "Saving..." : "Save"}
                   </Button>
+                  <PluginSlot name="pipeline-editor-toolbar" />
                 </div>
               </div>
             )}

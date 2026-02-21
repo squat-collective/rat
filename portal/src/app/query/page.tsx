@@ -10,6 +10,7 @@ import { useScreenGlitch } from "@/components/screen-glitch";
 import { Button } from "@/components/ui/button";
 import { Play, AlertTriangle } from "lucide-react";
 import type { QueryResult } from "@squat-collective/rat-client";
+import { PluginSlot } from "@/components/plugins";
 
 export default function QueryPage() {
   const api = useApiClient();
@@ -87,6 +88,7 @@ export default function QueryPage() {
               <Play className="h-3 w-3" />
               {loading ? "Running..." : "Execute"}
             </Button>
+            <PluginSlot name="query-toolbar" />
           </div>
         </div>
 
@@ -105,6 +107,7 @@ export default function QueryPage() {
                 </span>
                 <span>{result.duration_ms}ms</span>
               </div>
+              <PluginSlot name="query-results-tabs" />
               <DataTable
                 columns={result.columns.map((c) => c.name)}
                 rows={result.rows}

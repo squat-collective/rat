@@ -16,6 +16,7 @@ import {
   PipelineSettings,
 } from "@/components/pipeline";
 import type { PipelineVersion } from "@squat-collective/rat-client";
+import { PluginSlot } from "@/components/plugins";
 
 export default function PipelineDetailPage() {
   return (
@@ -78,6 +79,8 @@ function PipelineDetailInner() {
         triggerGlitch={triggerGlitch}
       />
 
+      <PluginSlot name="pipeline-detail-header" />
+
       {/* Tabs */}
       <Tabs defaultValue={initialTab}>
         <TabsList>
@@ -85,6 +88,7 @@ function PipelineDetailInner() {
           <TabsTrigger value="code">Code</TabsTrigger>
           <TabsTrigger value="quality">Quality</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
+          <PluginSlot name="pipeline-detail-tabs" />
         </TabsList>
 
         {/* Overview Tab */}
@@ -123,6 +127,8 @@ function PipelineDetailInner() {
             triggerGlitch={triggerGlitch}
           />
         </TabsContent>
+
+        <PluginSlot name="pipeline-actions" />
       </Tabs>
     </div>
   );

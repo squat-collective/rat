@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { ArrowLeft, Save } from "lucide-react";
+import { PluginSlot } from "@/components/plugins";
 
 const TABS = ["Schema", "Docs", "Preview"] as const;
 type Tab = (typeof TABS)[number];
@@ -42,6 +43,8 @@ export default function TableDetailPage() {
         </div>
       </div>
 
+      <PluginSlot name="table-actions" />
+
       {/* Tabs */}
       <div className="flex gap-1 border-b">
         {TABS.map((tab) => (
@@ -58,6 +61,7 @@ export default function TableDetailPage() {
             {tab}
           </button>
         ))}
+        <PluginSlot name="table-detail-tabs" />
       </div>
 
       {activeTab === "Schema" && (

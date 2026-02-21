@@ -14,6 +14,7 @@ import Link from "next/link";
 import { ArrowLeft, XCircle } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
 import { QualityTestDetailDialog } from "@/components/quality-test-detail-dialog";
+import { PluginSlot } from "@/components/plugins";
 
 interface ParsedQualityResult {
   name: string;
@@ -176,6 +177,8 @@ export default function RunDetailPage() {
         </div>
       </div>
 
+      <PluginSlot name="run-detail-header" />
+
       {/* Info cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="brutal-card bg-card p-3">
@@ -292,6 +295,8 @@ export default function RunDetailPage() {
         </div>
       )}
 
+      <PluginSlot name="run-detail-tabs" />
+
       {/* Error */}
       {run.error && (
         <div className="error-block px-4 py-3 text-xs text-destructive">
@@ -304,6 +309,7 @@ export default function RunDetailPage() {
         <h2 className="text-xs font-bold tracking-wider text-muted-foreground mb-2">
           Logs
         </h2>
+        <PluginSlot name="run-log-filters" />
         <div className="border-2 border-border/50 bg-card/50 overflow-auto max-h-[400px] p-3 font-mono text-[11px]">
           {displayLogs.length > 0 ? (
             displayLogs.map((log, i) => (
@@ -331,6 +337,8 @@ export default function RunDetailPage() {
           )}
         </div>
       </div>
+
+      <PluginSlot name="run-actions" />
 
       {/* Full ID */}
       <div className="text-[10px] text-muted-foreground font-mono">

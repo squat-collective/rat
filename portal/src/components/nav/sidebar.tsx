@@ -176,6 +176,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           <ThemeToggle collapsed={collapsed} />
         </div>
 
+        <PluginSlot name="sidebar-footer" />
+
         {/* Collapse toggle */}
         <div className="border-t border-border/50 px-3 py-2 flex justify-center">
           <Tooltip>

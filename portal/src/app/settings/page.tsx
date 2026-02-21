@@ -3,6 +3,7 @@ import { Shield, CheckCircle, XCircle, AlertTriangle, Trash2, KeyRound, User } f
 import Link from "next/link";
 import { serverApi, type FeaturesResponse } from "@/lib/server-api";
 import { auth, authEnabled } from "@/lib/auth/server";
+import { PluginSlot } from "@/components/plugins";
 
 export const metadata: Metadata = {
   title: "Settings | RAT",
@@ -29,6 +30,8 @@ export default async function SettingsPage() {
       <h1 className="text-lg font-bold tracking-wider gradient-text">
         Settings
       </h1>
+
+      <PluginSlot name="settings-nav" />
 
       {/* Edition info */}
       <div className="brutal-card p-4 space-y-2">
@@ -207,6 +210,8 @@ export default async function SettingsPage() {
           </div>
         </div>
       )}
+
+      <PluginSlot name="settings-sections" />
     </div>
   );
 }

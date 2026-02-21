@@ -29,6 +29,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     >
       <Sidebar collapsed={collapsed} onToggle={toggle} />
       <main className="flex-1 overflow-auto rat-bg brick-texture relative">
+        <PluginSlot name="global-banner" />
         <LicenseBanner />
         <PluginSlot name="main-header" />
         <div className="relative z-10 p-6 min-h-full">{children}</div>
