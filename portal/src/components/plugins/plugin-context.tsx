@@ -5,8 +5,19 @@ import { createContext, useContext } from "react";
 /** A component that can be rendered in a plugin slot. */
 export type SlotComponent<P = Record<string, unknown>> = React.ComponentType<P>;
 
-/** Maps slot names to arrays of components registered for that slot. */
-export type PluginRegistry = Record<string, SlotComponent<any>[]>;
+/** A navigation item injected by a plugin into the sidebar. */
+export type PluginNavItem = {
+  label: string;
+  icon: string; // lucide icon name
+  href: string;
+  priority: number;
+};
+
+/** Merged registry from all loaded plugins. */
+export type PluginRegistry = {
+  slots: Record<string, SlotComponent<any>[]>;
+  navItems: PluginNavItem[];
+};
 
 const PluginContext = createContext<PluginRegistry | null>(null);
 

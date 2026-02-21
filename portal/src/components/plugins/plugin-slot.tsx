@@ -18,7 +18,7 @@ export function PluginSlot({ name, fallback, ...props }: PluginSlotProps) {
     return fallback ? <>{fallback}</> : null;
   }
 
-  const components = registry[name];
+  const components = registry.slots[name];
   if (!components || components.length === 0) {
     return null;
   }

@@ -6,6 +6,7 @@ import "./globals.css";
 import { SessionProvider } from "@/providers/session-provider";
 import { ApiProvider } from "@/providers/api-provider";
 import { PluginWrapper } from "@/components/plugins";
+import { ReactGlobals } from "@/components/plugins/react-globals";
 import { AppShell } from "@/components/app-shell";
 
 const jetbrains = JetBrains_Mono({ subsets: ["latin"] });
@@ -34,7 +35,8 @@ export default async function RootLayout({
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem nonce={nonce}>
           <SessionProvider>
             <ApiProvider>
-              <PluginWrapper>
+              <ReactGlobals />
+              <PluginWrapper nonce={nonce}>
                 <AppShell>{children}</AppShell>
               </PluginWrapper>
             </ApiProvider>

@@ -479,6 +479,10 @@ func NewRouter(srv *Server) chi.Router {
 			MountPluginRoutes(vr, srv)
 		}
 
+		// Plugin UI bundle proxy: /api/v1/plugins/{name}/ui/bundle.js
+		// Always mount — handler returns 503 if PluginRegistry is nil.
+		MountPluginBundleRoutes(vr, srv)
+
 		// Plugin route proxy: /api/v1/x/{plugin}/* → plugin.Addr/*
 		// Always mount — handler returns 503 if PluginRegistry is nil.
 		MountPluginProxyRoutes(vr, srv)
