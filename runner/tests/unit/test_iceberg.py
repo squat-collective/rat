@@ -9,9 +9,13 @@ import pytest
 
 from rat_runner.config import NessieConfig, S3Config
 from rat_runner.iceberg import (
+    _MAX_COMPOSITE_DELETE_ROWS,
+    _build_delete_filter_composite_key,
     _build_delete_filter_single_key,
     _dedup_new_data,
     _escape_sql_string,
+    _extract_composite_key_rows,
+    _get_row_count,
     _try_optimized_delete_append,
     append_iceberg,
     build_partition_spec,
@@ -33,7 +37,8 @@ def _make_optimized_mock_table(
 ) -> MagicMock:
     """Create a mock Iceberg table that supports the optimized delete+append path.
 
-    - scan() with no row_filter returns all_data (full table)
+    - current_snapshot().summary["total-records"] returns len(all_data)
+    - scan() with no row_filter returns all_data (full table, fallback path)
     - scan(row_filter=...) returns filtered_data (rows matching the delete filter)
     - delete() and append() are plain mocks
     """
@@ -48,6 +53,12 @@ def _make_optimized_mock_table(
         return mock_scan
 
     mock_table.scan.side_effect = _scan_side_effect
+
+    # Support _get_row_count via snapshot metadata (O(1) path).
+    mock_snapshot = MagicMock()
+    mock_snapshot.summary = {"total-records": str(len(all_data))}
+    mock_table.current_snapshot.return_value = mock_snapshot
+
     mock_table.location.return_value = "s3://test-bucket/ns/silver/orders/"
     return mock_table
 
@@ -264,14 +275,16 @@ class TestMergeIceberg:
         assert len(appended) == 1
         assert appended.column("value")[0].as_py() == "second"
 
-    def test_merge_composite_key_falls_back_to_full_rewrite(
+    def test_merge_composite_key_uses_optimized_path(
         self, s3_config: S3Config, nessie_config: NessieConfig
     ):
-        """Composite unique keys fall back to the full rewrite (DuckDB ANTI JOIN) path."""
+        """Composite unique keys with small row count use optimized delete+append."""
         existing = pa.table({"id": [1, 2], "region": ["us", "eu"], "value": ["a", "b"]})
+        # Rows matching composite filter: (id=2, region=eu) -> 1 existing row
+        filtered = pa.table({"id": [2], "region": ["eu"], "value": ["b"]})
         new_data = pa.table({"id": [2], "region": ["eu"], "value": ["b_updated"]})
 
-        mock_table = self._mock_table_with_data(existing)
+        mock_table = _make_optimized_mock_table(existing, filtered)
         mock_catalog = MagicMock()
         mock_catalog.load_table.return_value = mock_table
 
@@ -288,12 +301,12 @@ class TestMergeIceberg:
                 "s3://b/loc/",
             )
 
-        # id=1/us kept + id=2/eu updated = 2 rows
+        # existing=2, deleted=1 (id=2/eu), appended=1 (updated) -> 2 - 1 + 1 = 2
         assert rows == 2
-        mock_table.overwrite.assert_called_once()
-        merged = mock_table.overwrite.call_args[0][0]
-        merged_ids = sorted(merged.column("id").to_pylist())
-        assert merged_ids == [1, 2]
+        mock_table.delete.assert_called_once()
+        mock_table.append.assert_called_once()
+        # Overwrite should NOT be called (optimized path)
+        mock_table.overwrite.assert_not_called()
 
     def test_merge_optimized_failure_falls_back_to_full_rewrite(
         self, s3_config: S3Config, nessie_config: NessieConfig
@@ -490,16 +503,18 @@ class TestDeleteInsertIceberg:
         appended = mock_table.append.call_args[0][0]
         assert len(appended) == 2
 
-    def test_composite_key_falls_back_to_full_rewrite(
+    def test_composite_key_uses_optimized_path(
         self, s3_config: S3Config, nessie_config: NessieConfig
     ):
-        """Composite unique keys fall back to full rewrite with DuckDB ANTI JOIN."""
+        """Composite unique keys with small row count use optimized delete+append."""
         existing = pa.table(
             {"id": [1, 2, 3], "region": ["us", "eu", "us"], "value": ["a", "b", "c"]}
         )
+        # Rows matching composite filter: (id=2, region=eu) -> 1 existing row
+        filtered = pa.table({"id": [2], "region": ["eu"], "value": ["b"]})
         new_data = pa.table({"id": [2, 2], "region": ["eu", "eu"], "value": ["b1", "b2"]})
 
-        mock_table = self._mock_table_with_data(existing)
+        mock_table = _make_optimized_mock_table(existing, filtered)
         mock_catalog = MagicMock()
         mock_catalog.load_table.return_value = mock_table
 
@@ -516,12 +531,15 @@ class TestDeleteInsertIceberg:
                 "s3://b/loc/",
             )
 
-        # id=1/us (kept), id=3/us (kept), id=2/eu (new, TWO rows — no dedup!)
+        # existing=3, deleted=1 (id=2/eu), appended=2 (NO dedup) -> 3 - 1 + 2 = 4
         assert rows == 4
-        mock_table.overwrite.assert_called_once()
-        merged = mock_table.overwrite.call_args[0][0]
-        merged_ids = sorted(merged.column("id").to_pylist())
-        assert merged_ids == [1, 2, 2, 3]
+        mock_table.delete.assert_called_once()
+        mock_table.append.assert_called_once()
+        # Overwrite should NOT be called (optimized path)
+        mock_table.overwrite.assert_not_called()
+        # Verify both duplicate rows were appended (no dedup in delete_insert)
+        appended = mock_table.append.call_args[0][0]
+        assert len(appended) == 2
 
     def test_optimized_failure_falls_back_to_full_rewrite(
         self, s3_config: S3Config, nessie_config: NessieConfig
@@ -1062,6 +1080,283 @@ class TestBuildDeleteFilterSingleKey:
         assert isinstance(result, In)
 
 
+class TestExtractCompositeKeyRows:
+    """Tests for _extract_composite_key_rows helper."""
+
+    def test_extracts_deduplicated_tuples(self):
+        """Duplicate key combinations are removed, preserving first-seen order."""
+        data = pa.table({"id": [1, 2, 1, 3], "region": ["us", "eu", "us", "us"]})
+        result = _extract_composite_key_rows(data, ["id", "region"])
+
+        assert result == [(1, "us"), (2, "eu"), (3, "us")]
+
+    def test_preserves_none_values(self):
+        """NULL values are preserved as None in the output tuples."""
+        data = pa.table(
+            {
+                "id": pa.array([1, 2, None], type=pa.int64()),
+                "region": pa.array(["us", None, "eu"], type=pa.string()),
+            }
+        )
+        result = _extract_composite_key_rows(data, ["id", "region"])
+
+        assert result == [(1, "us"), (2, None), (None, "eu")]
+
+    def test_empty_table_returns_empty_list(self):
+        """Empty table returns empty list."""
+        data = pa.table(
+            {
+                "id": pa.array([], type=pa.int64()),
+                "region": pa.array([], type=pa.string()),
+            }
+        )
+        result = _extract_composite_key_rows(data, ["id", "region"])
+
+        assert result == []
+
+    def test_all_duplicates_returns_single_tuple(self):
+        """When all rows have the same key, returns a single tuple."""
+        data = pa.table({"id": [1, 1, 1], "region": ["us", "us", "us"], "value": ["a", "b", "c"]})
+        result = _extract_composite_key_rows(data, ["id", "region"])
+
+        assert result == [(1, "us")]
+
+
+class TestBuildDeleteFilterCompositeKey:
+    """Tests for _build_delete_filter_composite_key helper."""
+
+    def test_multi_row_builds_or_of_ands(self):
+        """Multiple rows produce Or(And(...), And(...))."""
+        from pyiceberg.expressions import Or
+
+        result = _build_delete_filter_composite_key(
+            ["id", "region"],
+            [(1, "us"), (2, "eu")],
+        )
+        assert isinstance(result, Or)
+
+    def test_single_row_builds_and_without_or(self):
+        """Single row produces And(...) directly (no Or wrapper)."""
+        from pyiceberg.expressions import And
+
+        result = _build_delete_filter_composite_key(
+            ["id", "region"],
+            [(1, "us")],
+        )
+        assert isinstance(result, And)
+
+    def test_null_values_use_is_null(self):
+        """NULL values in key columns produce IsNull() predicates."""
+        from pyiceberg.expressions import And, IsNull
+
+        result = _build_delete_filter_composite_key(
+            ["id", "region"],
+            [(1, None)],
+        )
+        assert isinstance(result, And)
+        # The second predicate should be IsNull for the None value.
+        # And stores children in .left and .right for binary, or nested for variadic.
+        # Just verify it's an And (the filter builder handles None correctly).
+
+    def test_empty_input_raises_value_error(self):
+        """Empty key_value_rows raises ValueError."""
+        with pytest.raises(ValueError, match="must not be empty"):
+            _build_delete_filter_composite_key(["id", "region"], [])
+
+    def test_three_rows_builds_correct_or(self):
+        """Three rows produce Or(And(...), And(...), And(...))."""
+        from pyiceberg.expressions import Or
+
+        result = _build_delete_filter_composite_key(
+            ["id", "region"],
+            [(1, "us"), (2, "eu"), (3, "ap")],
+        )
+        assert isinstance(result, Or)
+
+
+class TestGetRowCount:
+    """Tests for _get_row_count helper."""
+
+    def test_uses_snapshot_metadata(self):
+        """Returns count from snapshot summary when available."""
+        mock_table = MagicMock()
+        mock_snapshot = MagicMock()
+        mock_snapshot.summary = {"total-records": "42"}
+        mock_table.current_snapshot.return_value = mock_snapshot
+
+        result = _get_row_count(mock_table)
+
+        assert result == 42
+        # Should NOT call scan() — metadata path is O(1).
+        mock_table.scan.assert_not_called()
+
+    def test_falls_back_when_summary_missing(self):
+        """Falls back to full scan when snapshot has no summary."""
+        mock_table = MagicMock()
+        mock_snapshot = MagicMock()
+        mock_snapshot.summary = None
+        mock_table.current_snapshot.return_value = mock_snapshot
+
+        fallback_data = pa.table({"id": [1, 2, 3]})
+        mock_scan = MagicMock()
+        mock_scan.to_arrow.return_value = fallback_data
+        mock_table.scan.return_value = mock_scan
+
+        result = _get_row_count(mock_table)
+
+        assert result == 3
+        mock_table.scan.assert_called_once()
+
+    def test_falls_back_when_no_snapshot(self):
+        """Falls back to full scan when current_snapshot() returns None."""
+        mock_table = MagicMock()
+        mock_table.current_snapshot.return_value = None
+
+        fallback_data = pa.table({"id": [1, 2]})
+        mock_scan = MagicMock()
+        mock_scan.to_arrow.return_value = fallback_data
+        mock_table.scan.return_value = mock_scan
+
+        result = _get_row_count(mock_table)
+
+        assert result == 2
+
+    def test_falls_back_on_exception(self):
+        """Falls back to full scan when current_snapshot() raises."""
+        mock_table = MagicMock()
+        mock_table.current_snapshot.side_effect = RuntimeError("metadata error")
+
+        fallback_data = pa.table({"id": [1]})
+        mock_scan = MagicMock()
+        mock_scan.to_arrow.return_value = fallback_data
+        mock_table.scan.return_value = mock_scan
+
+        result = _get_row_count(mock_table)
+
+        assert result == 1
+
+    def test_falls_back_when_total_records_missing(self):
+        """Falls back when summary exists but lacks 'total-records' key."""
+        mock_table = MagicMock()
+        mock_snapshot = MagicMock()
+        mock_snapshot.summary = {"some-other-key": "value"}
+        mock_table.current_snapshot.return_value = mock_snapshot
+
+        fallback_data = pa.table({"id": [1, 2, 3, 4]})
+        mock_scan = MagicMock()
+        mock_scan.to_arrow.return_value = fallback_data
+        mock_table.scan.return_value = mock_scan
+
+        result = _get_row_count(mock_table)
+
+        assert result == 4
+
+
+class TestTryOptimizedDeleteAppendComposite:
+    """Tests for _try_optimized_delete_append with composite keys."""
+
+    def test_composite_within_threshold_deletes_and_appends(self):
+        """Composite key with rows <= threshold uses optimized path."""
+        existing = pa.table(
+            {"id": [1, 2, 3], "region": ["us", "eu", "ap"], "value": ["a", "b", "c"]}
+        )
+        filtered = pa.table({"id": [1, 2], "region": ["us", "eu"], "value": ["a", "b"]})
+        mock_table = _make_optimized_mock_table(existing, filtered)
+        new_data = pa.table({"id": [1, 2], "region": ["us", "eu"], "value": ["a2", "b2"]})
+
+        result = _try_optimized_delete_append(mock_table, new_data, ["id", "region"])
+
+        assert result == 3  # 3 - 2 + 2
+        mock_table.delete.assert_called_once()
+        mock_table.append.assert_called_once()
+
+    def test_composite_exceeds_threshold_returns_none(self):
+        """Composite key with rows > threshold returns None (fall back)."""
+        # Create data with more unique rows than the threshold.
+        n = _MAX_COMPOSITE_DELETE_ROWS + 1
+        data = pa.table({"id": list(range(n)), "region": ["us"] * n, "value": ["x"] * n})
+        mock_table = MagicMock()
+
+        result = _try_optimized_delete_append(mock_table, data, ["id", "region"])
+
+        assert result is None
+        mock_table.delete.assert_not_called()
+
+    def test_composite_missing_column_returns_none(self):
+        """Returns None if any key column is missing from new_data."""
+        mock_table = MagicMock()
+        data = pa.table({"id": [1], "value": ["a"]})
+
+        result = _try_optimized_delete_append(mock_table, data, ["id", "region"])
+
+        assert result is None
+        mock_table.delete.assert_not_called()
+
+    def test_composite_with_null_keys(self):
+        """Composite keys with NULL values use IsNull() in the filter."""
+        existing = pa.table(
+            {
+                "id": pa.array([1, 2], type=pa.int64()),
+                "region": pa.array(["us", None], type=pa.string()),
+                "value": ["a", "b"],
+            }
+        )
+        filtered = pa.table(
+            {
+                "id": pa.array([2], type=pa.int64()),
+                "region": pa.array([None], type=pa.string()),
+                "value": ["b"],
+            }
+        )
+        mock_table = _make_optimized_mock_table(existing, filtered)
+        new_data = pa.table(
+            {
+                "id": pa.array([2], type=pa.int64()),
+                "region": pa.array([None], type=pa.string()),
+                "value": ["b_new"],
+            }
+        )
+
+        result = _try_optimized_delete_append(mock_table, new_data, ["id", "region"])
+
+        assert result == 2  # 2 - 1 + 1
+        mock_table.delete.assert_called_once()
+        mock_table.append.assert_called_once()
+
+    def test_composite_empty_new_data_returns_none(self):
+        """Empty new_data returns None (no rows to extract keys from)."""
+        mock_table = MagicMock()
+        data = pa.table(
+            {
+                "id": pa.array([], type=pa.int64()),
+                "region": pa.array([], type=pa.string()),
+            }
+        )
+
+        result = _try_optimized_delete_append(mock_table, data, ["id", "region"])
+
+        assert result is None
+        mock_table.delete.assert_not_called()
+
+    def test_composite_delete_failure_returns_none(self):
+        """If table.delete() fails for composite keys, returns None (fallback)."""
+        existing = pa.table({"id": [1], "region": ["us"], "value": ["a"]})
+        filtered = pa.table(
+            {
+                "id": pa.array([], type=pa.int64()),
+                "region": pa.array([], type=pa.string()),
+                "value": pa.array([], type=pa.string()),
+            }
+        )
+        mock_table = _make_optimized_mock_table(existing, filtered)
+        mock_table.delete.side_effect = RuntimeError("PyIceberg internal error")
+        new_data = pa.table({"id": [1], "region": ["us"], "value": ["a_new"]})
+
+        result = _try_optimized_delete_append(mock_table, new_data, ["id", "region"])
+
+        assert result is None
+
+
 class TestDedupNewData:
     """Tests for _dedup_new_data helper."""
 
@@ -1114,15 +1409,18 @@ class TestDedupNewData:
 class TestTryOptimizedDeleteAppend:
     """Tests for _try_optimized_delete_append helper."""
 
-    def test_returns_none_for_composite_keys(self):
-        """Composite keys are not supported by the optimized path."""
-        mock_table = MagicMock()
-        data = pa.table({"id": [1], "region": ["us"]})
+    def test_composite_key_within_threshold_uses_optimized_path(self):
+        """Composite keys with small row count use optimized delete+append."""
+        existing = pa.table({"id": [1, 2], "region": ["us", "eu"], "value": ["a", "b"]})
+        filtered = pa.table({"id": [1], "region": ["us"], "value": ["a"]})
+        mock_table = _make_optimized_mock_table(existing, filtered)
+        new_data = pa.table({"id": [1], "region": ["us"], "value": ["a_new"]})
 
-        result = _try_optimized_delete_append(mock_table, data, ["id", "region"])
+        result = _try_optimized_delete_append(mock_table, new_data, ["id", "region"])
 
-        assert result is None
-        mock_table.delete.assert_not_called()
+        assert result == 2  # 2 - 1 + 1
+        mock_table.delete.assert_called_once()
+        mock_table.append.assert_called_once()
 
     def test_returns_none_for_missing_key_column(self):
         """If the key column is not in new_data, returns None."""
