@@ -1,0 +1,24 @@
+[project]
+name = "rat-plugin-dbt-compat"
+version = "0.1.0"
+description = "dbt-style Jinja helpers for RAT SQL templates"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "rat-runner",
+]
+
+[project.entry-points."rat.jinja_helpers"]
+env_var = "rat_plugin_dbt_compat.helpers:EnvVarHelper"
+var = "rat_plugin_dbt_compat.helpers:VarHelper"
+generate_schema_name = "rat_plugin_dbt_compat.helpers:GenerateSchemaNameHelper"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rat_plugin_dbt_compat"]
