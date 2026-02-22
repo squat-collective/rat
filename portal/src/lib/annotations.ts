@@ -7,7 +7,7 @@
  * of truth for merge strategy; the UI displays them read-only.
  */
 
-import type { MergeStrategy } from "@squat-collective/rat-client";
+import type { BuiltinMergeStrategy, MergeStrategy } from "@squat-collective/rat-client";
 
 /** Parsed strategy-related annotations from pipeline source code. */
 export interface ParsedStrategyConfig {
@@ -24,10 +24,6 @@ export interface ParsedStrategyConfig {
 }
 
 const ANNOTATION_RE = /^(?:--|#)\s*@(\w+):\s*(.+)$/;
-
-const VALID_STRATEGIES = new Set<string>([
-  "full_refresh", "incremental", "append_only", "delete_insert", "scd2", "snapshot",
-]);
 
 /**
  * Extract @key: value annotations from pipeline source code.
@@ -50,12 +46,7 @@ export function extractAnnotations(source: string): ParsedStrategyConfig {
     }
   }
 
-  const mergeRaw = raw["merge_strategy"] ?? null;
-  const mergeStrategy = mergeRaw && VALID_STRATEGIES.has(mergeRaw)
-    ? (mergeRaw as MergeStrategy)
-    : mergeRaw
-      ? (mergeRaw as MergeStrategy) // pass through unknown values for display with warning
-      : null;
+  const mergeStrategy: MergeStrategy | null = raw["merge_strategy"] ?? null;
 
   const uniqueKeyRaw = raw["unique_key"] ?? null;
   const uniqueKey = uniqueKeyRaw
@@ -81,7 +72,7 @@ export function extractAnnotations(source: string): ParsedStrategyConfig {
 }
 
 /** Fields required/optional per strategy (matches FIELD_VISIBILITY). */
-const STRATEGY_FIELDS: Record<MergeStrategy, string[]> = {
+const STRATEGY_FIELDS: Record<BuiltinMergeStrategy, string[]> = {
   full_refresh: [],
   incremental: ["unique_key", "watermark_column"],
   append_only: [],
@@ -102,15 +93,18 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
 /**
  * Generate a copy-paste annotation block for a given strategy.
  *
+ * For built-in strategies, includes the required fields with placeholders.
+ * For plugin strategies, just outputs the `@merge_strategy` line.
+ *
  * @param strategy - The merge strategy to generate a snippet for
  * @param commentPrefix - "--" for SQL or "#" for Python
  */
 export function generateStrategySnippet(
-  strategy: MergeStrategy,
+  strategy: string,
   commentPrefix: "--" | "#",
 ): string {
   const lines = [`${commentPrefix} @merge_strategy: ${strategy}`];
-  const fields = STRATEGY_FIELDS[strategy] ?? [];
+  const fields = (STRATEGY_FIELDS as Record<string, string[]>)[strategy] ?? [];
   for (const field of fields) {
     const placeholder = FIELD_PLACEHOLDERS[field] ?? "value";
     lines.push(`${commentPrefix} @${field}: ${placeholder}`);

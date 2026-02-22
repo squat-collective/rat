@@ -12,6 +12,7 @@ export type {
   RollbackRequest,
   RollbackResponse,
   Layer,
+  BuiltinMergeStrategy,
   MergeStrategy,
 } from "./pipelines";
 export type {

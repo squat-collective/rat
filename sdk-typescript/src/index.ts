@@ -28,6 +28,7 @@ export type {
   RollbackRequest,
   RollbackResponse,
   Layer,
+  BuiltinMergeStrategy,
   MergeStrategy,
   Run,
   RunListResponse,

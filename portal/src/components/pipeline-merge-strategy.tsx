@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import type { MergeStrategy } from "@squat-collective/rat-client";
+import type { BuiltinMergeStrategy } from "@squat-collective/rat-client";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -17,6 +17,7 @@ import {
   generateStrategySnippet,
   type ParsedStrategyConfig,
 } from "@/lib/annotations";
+import { useRunnerPlugins } from "@/hooks/use-api";
 
 interface PipelineMergeStrategyProps {
   ns: string;
@@ -26,7 +27,13 @@ interface PipelineMergeStrategyProps {
   pipelineType: string;
 }
 
-const STRATEGIES: { value: MergeStrategy; label: string; description: string }[] = [
+interface StrategyEntry {
+  value: string;
+  label: string;
+  description: string;
+}
+
+const BUILTIN_STRATEGIES: StrategyEntry[] = [
   { value: "full_refresh", label: "Full Refresh", description: "Overwrite entire table each run" },
   { value: "incremental", label: "Incremental", description: "Merge new rows using unique key (dedup)" },
   { value: "append_only", label: "Append Only", description: "Always append, never overwrite" },
@@ -35,7 +42,9 @@ const STRATEGIES: { value: MergeStrategy; label: string; description: string }[]
   { value: "snapshot", label: "Snapshot", description: "Replace only touched partitions" },
 ];
 
-const STRATEGY_COLORS: Record<MergeStrategy, string> = {
+const BUILTIN_STRATEGY_NAMES = new Set(BUILTIN_STRATEGIES.map((s) => s.value));
+
+const BUILTIN_STRATEGY_COLORS: Record<BuiltinMergeStrategy, string> = {
   full_refresh: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30",
   incremental: "bg-green-500/20 text-green-400 border-green-500/30",
   append_only: "bg-blue-500/20 text-blue-400 border-blue-500/30",
@@ -44,8 +53,19 @@ const STRATEGY_COLORS: Record<MergeStrategy, string> = {
   snapshot: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30",
 };
 
-/** Fields that are required (not optional) per strategy. */
-const REQUIRED_FIELDS: Record<MergeStrategy, { field: string; label: string }[]> = {
+const PLUGIN_STRATEGY_COLOR = "bg-teal-500/20 text-teal-400 border-teal-500/30";
+
+function getStrategyColor(strategy: string): string {
+  return (BUILTIN_STRATEGY_COLORS as Record<string, string>)[strategy] ?? PLUGIN_STRATEGY_COLOR;
+}
+
+/** Humanize a snake_case name → Title Case. */
+function humanize(name: string): string {
+  return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Fields that are required (not optional) per built-in strategy. */
+const BUILTIN_REQUIRED_FIELDS: Record<BuiltinMergeStrategy, { field: string; label: string }[]> = {
   full_refresh: [],
   incremental: [{ field: "unique_key", label: "@unique_key" }],
   append_only: [],
@@ -57,6 +77,10 @@ const REQUIRED_FIELDS: Record<MergeStrategy, { field: string; label: string }[]>
   ],
   snapshot: [{ field: "partition_column", label: "@partition_column" }],
 };
+
+function getRequiredFields(strategy: string): { field: string; label: string }[] {
+  return (BUILTIN_REQUIRED_FIELDS as Record<string, { field: string; label: string }[]>)[strategy] ?? [];
+}
 
 /** Detected annotation fields to display. */
 const DISPLAY_FIELDS: { key: keyof ParsedStrategyConfig; label: string; defaultDisplay?: string }[] = [
@@ -79,6 +103,32 @@ export function PipelineMergeStrategy({
 }: PipelineMergeStrategyProps) {
   const commentPrefix = pipelineType === "python" ? "#" : "--";
 
+  // Fetch runner plugins to discover plugin strategies
+  const { data: runnerPlugins } = useRunnerPlugins();
+
+  // Build merged strategy list: builtins + plugin strategies
+  const allStrategies = useMemo<StrategyEntry[]>(() => {
+    const list = [...BUILTIN_STRATEGIES];
+    if (runnerPlugins) {
+      for (const plugin of runnerPlugins) {
+        if (plugin.group === "rat.strategies" && !BUILTIN_STRATEGY_NAMES.has(plugin.name)) {
+          list.push({
+            value: plugin.name,
+            label: humanize(plugin.name),
+            description: `Plugin: ${plugin.package_name}`,
+          });
+        }
+      }
+    }
+    return list;
+  }, [runnerPlugins]);
+
+  // Set of all known strategy names (builtins + plugins)
+  const knownStrategyNames = useMemo(
+    () => new Set(allStrategies.map((s) => s.value)),
+    [allStrategies],
+  );
+
   // Parse annotations from source code
   const parsed = useMemo<ParsedStrategyConfig | null>(
     () => (sourceCode ? extractAnnotations(sourceCode) : null),
@@ -86,14 +136,14 @@ export function PipelineMergeStrategy({
   );
 
   const strategy = parsed?.merge_strategy ?? null;
-  const isKnownStrategy = strategy !== null && STRATEGIES.some((s) => s.value === strategy);
-  const strategyInfo = STRATEGIES.find((s) => s.value === strategy);
-  const strategyColor = strategy && isKnownStrategy ? STRATEGY_COLORS[strategy] : "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
+  const isKnownStrategy = strategy !== null && knownStrategyNames.has(strategy);
+  const strategyInfo = allStrategies.find((s) => s.value === strategy);
+  const strategyColor = strategy && isKnownStrategy ? getStrategyColor(strategy) : "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
 
   // Missing required fields warning
   const missingFields = useMemo(() => {
     if (!strategy || !isKnownStrategy || !parsed) return [];
-    const required = REQUIRED_FIELDS[strategy] ?? [];
+    const required = getRequiredFields(strategy);
     return required.filter(({ field }) => {
       const val = parsed[field as keyof ParsedStrategyConfig];
       return val === null || val === undefined;
@@ -101,7 +151,7 @@ export function PipelineMergeStrategy({
   }, [strategy, isKnownStrategy, parsed]);
 
   // Snippet preview for other strategies
-  const [snippetStrategy, setSnippetStrategy] = useState<MergeStrategy | "">("");
+  const [snippetStrategy, setSnippetStrategy] = useState<string>("");
   const snippet = useMemo(
     () => snippetStrategy ? generateStrategySnippet(snippetStrategy, commentPrefix as "--" | "#") : null,
     [snippetStrategy, commentPrefix],
@@ -273,12 +323,12 @@ export function PipelineMergeStrategy({
             <Label htmlFor="merge-strategy-snippet" className="text-[10px] tracking-wider text-muted-foreground">
               Show snippet for:
             </Label>
-            <Select value={snippetStrategy} onValueChange={(v) => setSnippetStrategy(v as MergeStrategy)}>
+            <Select value={snippetStrategy} onValueChange={(v) => setSnippetStrategy(v)}>
               <SelectTrigger id="merge-strategy-snippet" className="text-xs h-7 w-44">
                 <SelectValue placeholder="Other strategies..." />
               </SelectTrigger>
               <SelectContent>
-                {STRATEGIES.map((s) => (
+                {allStrategies.map((s) => (
                   <SelectItem key={s.value} value={s.value}>
                     {s.label}
                   </SelectItem>
