@@ -575,6 +575,10 @@ def _build_hook_context(ctx: _PipelineContext) -> HookContext:
         config=ctx.config,
         logger=ctx.log,
         branch=ctx.branch_name,
+        extra={
+            "rows_written": ctx.run.rows_written,
+            "row_count": ctx.row_count,
+        },
     )
 
 
