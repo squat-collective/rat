@@ -638,6 +638,9 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
         request: runner_pb2.ListPluginsRequest,
         context: grpc.ServicerContext,
     ) -> runner_pb2.ListPluginsResponse:
+        # Fresh discovery each call so newly-installed plugins are reflected.
+        registry = PluginRegistry()
+        registry.discover()
         plugins = [
             runner_pb2.RunnerPlugin(
                 name=p.name,
@@ -645,7 +648,7 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
                 version=p.version,
                 package_name=p.package_name,
             )
-            for p in self._plugin_registry.list_plugins()
+            for p in registry.list_plugins()
         ]
         return runner_pb2.ListPluginsResponse(plugins=plugins)
 

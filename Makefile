@@ -296,7 +296,7 @@ clean: ## Remove all containers, volumes, and generated files
 # ── Documentation ──────────────────────────────────────────────
 docs: ## Start docs dev server (Nextra, port 3001)
 	@echo "📖 Starting docs dev server..."
-	@docker run --rm -it \
+	@docker run --rm \
 		-v $$(pwd)/website:/app -w /app \
 		-p 3001:3001 \
 		$(NODE_IMAGE) \

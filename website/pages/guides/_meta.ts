@@ -14,6 +14,8 @@ export default {
   lineage: "Lineage",
   "data-retention": "Data Retention",
   "table-metadata": "Table Metadata",
+  "---plugins": { type: "separator", title: "Plugins" },
+  "runner-plugins": "Runner Plugins",
   "---best-practices": { type: "separator", title: "Best Practices" },
   "best-practices": "Best Practices",
 };

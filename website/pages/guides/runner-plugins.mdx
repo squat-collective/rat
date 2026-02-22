@@ -1,0 +1,687 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '@/components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Runner Plugins
+
+Runner plugins extend RAT at the **data layer**. They are Python packages discovered via [entry points](https://packaging.python.org/en/latest/specifications/entry-points/) — install a package, and the next pipeline run picks it up automatically.
+
+Unlike [platform plugins](/contributing/architecture/plugin-system) (Go gRPC containers), runner plugins run inside the runner process itself. They have direct access to PyArrow tables, DuckDB connections, and the Iceberg catalog.
+
+---
+
+## What Can You Build?
+
+<Cards>
+  <Card title="Merge Strategies" href="#writing-a-merge-strategy">
+    Custom write logic — soft-delete, partition swap, merge-on-write, etc.
+  </Card>
+  <Card title="Hooks" href="#writing-a-hook">
+    Observe pipeline phases — log metrics, send alerts, validate schemas.
+  </Card>
+  <Card title="Jinja Helpers" href="#writing-a-jinja-helper">
+    Custom template functions — env_var(), var(), hash(), etc.
+  </Card>
+  <Card title="Pipeline Types" href="#extension-points-overview">
+    New languages — R, Scala, or any language that produces Arrow tables.
+  </Card>
+  <Card title="Source Connectors" href="#extension-points-overview">
+    External data — Postgres, MySQL, REST APIs, Kafka, etc.
+  </Card>
+</Cards>
+
+---
+
+## Quick Start
+
+Build and install a plugin in 5 minutes.
+
+<Steps>
+
+### Scaffold the package
+
+```bash
+mkdir rat-plugin-hello && cd rat-plugin-hello
+mkdir -p src/rat_plugin_hello
+touch src/rat_plugin_hello/__init__.py
+```
+
+### Implement a hook
+
+```python filename="src/rat_plugin_hello/hook.py"
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rat_runner.plugin_protocols import HookContext, HookPhase
+
+
+class HelloHook:
+    """Logs a greeting at the start of every pipeline run."""
+
+    @property
+    def phase(self) -> HookPhase:
+        return "pre_execute"
+
+    def __call__(self, context: HookContext) -> None:
+        table_ref = f"{context.namespace}.{context.layer}.{context.name}"
+        context.logger.info(f"[hello] Starting pipeline: {table_ref}")
+```
+
+### Register via entry points
+
+```toml filename="pyproject.toml"
+[project]
+name = "rat-plugin-hello"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "rat-runner"]
+
+[project.entry-points."rat.hooks"]
+hello = "rat_plugin_hello.hook:HelloHook"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rat_plugin_hello"]
+```
+
+### Install in the runner container
+
+```bash
+# From the project root
+docker compose exec runner pip install ./rat-plugin-hello
+```
+
+### Test it
+
+Run any pipeline — you'll see `[hello] Starting pipeline: ns.layer.name` in the run logs.
+
+</Steps>
+
+---
+
+## Extension Points Overview
+
+RAT's runner plugin system has 5 extension point groups. Each uses a Python `Protocol` (structural typing) — no base class inheritance required.
+
+| Group | Entry Point | Protocol | Purpose |
+|---|---|---|---|
+| Strategies | `rat.strategies` | `MergeStrategyProtocol` | How data is written to Iceberg |
+| Hooks | `rat.hooks` | `HookProtocol` | Observe/react to pipeline phases |
+| Jinja Helpers | `rat.jinja_helpers` | `JinjaHelperProtocol` | Custom SQL template functions |
+| Pipeline Types | `rat.pipeline_types` | `PipelineTypeProtocol` | New pipeline languages |
+| Sources | `rat.sources` | `SourceConnectorProtocol` | External data ingestion |
+
+<Callout type="info">
+All protocols are defined in `rat_runner.plugin_protocols` and use `@runtime_checkable`. You don't need to import or inherit from them — just match the method signatures (duck typing). But importing them for type checking is recommended.
+</Callout>
+
+---
+
+## Writing a Merge Strategy
+
+Merge strategies control how pipeline results are written to Iceberg tables. The built-in strategies (full_refresh, incremental, append_only, delete_insert, scd2, snapshot) cover most use cases, but you can add custom logic for specialized patterns.
+
+### Example: Soft-Delete Strategy
+
+This strategy marks rows as deleted instead of physically removing them — useful for audit trails and compliance.
+
+<Steps>
+
+### Define the class
+
+The class needs a `name` property and an `execute` method matching `MergeStrategyProtocol`:
+
+```python filename="src/rat_plugin_soft_delete/strategy.py"
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+import duckdb
+import pyarrow as pa
+
+from rat_runner.iceberg import get_catalog, write_iceberg
+
+if TYPE_CHECKING:
+    from rat_runner.config import NessieConfig, S3Config
+    from rat_runner.models import PipelineConfig
+
+logger = logging.getLogger(__name__)
+
+
+class SoftDeleteStrategy:
+    """Merge strategy that soft-deletes missing rows with a _deleted_at timestamp."""
+
+    @property
+    def name(self) -> str:
+        return "soft_delete"
+
+    def execute(
+        self,
+        data: pa.Table,
+        table_name: str,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+        location: str,
+        config: PipelineConfig | None,
+        branch: str = "main",
+        conn: duckdb.DuckDBPyConnection | None = None,
+    ) -> int:
+        if not config or not config.unique_key:
+            logger.warning("soft_delete requires unique_key — falling back to full_refresh")
+            return write_iceberg(data, table_name, s3_config, nessie_config, location, branch=branch)
+
+        unique_key = config.unique_key
+
+        # Load existing table from catalog
+        try:
+            catalog = get_catalog(s3_config, nessie_config, branch=branch)
+            ns, layer, tbl = table_name.split(".")
+            iceberg_table = catalog.load_table(f"{ns}.{layer}.{tbl}")
+            existing = iceberg_table.scan().to_arrow()
+        except Exception:
+            # First run — write with _deleted_at = NULL
+            null_col = pa.array([None] * len(data), type=pa.timestamp("us", tz="UTC"))
+            result = data.append_column("_deleted_at", null_col)
+            return write_iceberg(result, table_name, s3_config, nessie_config, location, branch=branch)
+
+        local_conn = conn or duckdb.connect()
+        try:
+            local_conn.register("incoming", data)
+            local_conn.register("existing", existing)
+            join_cond = " AND ".join(f"e.{k} = i.{k}" for k in unique_key)
+
+            # Find newly deleted rows (in existing but not in incoming)
+            newly_deleted = local_conn.execute(f"""
+                SELECT e.* FROM existing e
+                LEFT JOIN incoming i ON {join_cond}
+                WHERE i.{unique_key[0]} IS NULL AND e._deleted_at IS NULL
+            """).fetch_arrow_table()
+
+            # Stamp with _deleted_at
+            now = datetime.now(UTC)
+            deleted_at = pa.array([now] * len(newly_deleted), type=pa.timestamp("us", tz="UTC"))
+            if "_deleted_at" in newly_deleted.column_names:
+                newly_deleted = newly_deleted.drop("_deleted_at")
+            newly_deleted = newly_deleted.append_column("_deleted_at", deleted_at)
+
+            # Preserve previously soft-deleted rows
+            previously_deleted = local_conn.execute(
+                "SELECT * FROM existing WHERE _deleted_at IS NOT NULL"
+            ).fetch_arrow_table()
+
+            # UNION ALL: incoming (active) + newly deleted + previously deleted
+            null_col = pa.array([None] * len(data), type=pa.timestamp("us", tz="UTC"))
+            incoming_with_col = data.append_column("_deleted_at", null_col)
+            result = pa.concat_tables([incoming_with_col, newly_deleted, previously_deleted])
+        finally:
+            if conn is None:
+                local_conn.close()
+
+        return write_iceberg(result, table_name, s3_config, nessie_config, location, branch=branch)
+```
+
+### Register the entry point
+
+```toml filename="pyproject.toml"
+[project]
+name = "rat-plugin-soft-delete"
+version = "0.1.0"
+dependencies = ["pyarrow>=17.0", "duckdb>=1.1"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "rat-runner"]
+
+[project.entry-points."rat.strategies"]
+soft_delete = "rat_plugin_soft_delete.strategy:SoftDeleteStrategy"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+```
+
+### Use in a pipeline
+
+```sql filename="pipeline.sql"
+-- @merge_strategy: soft_delete
+-- @unique_key: customer_id
+
+SELECT customer_id, name, email, segment
+FROM {{ ref('bronze.raw_customers') }}
+```
+
+<Callout type="info">
+**Portal integration**: Plugin strategies automatically appear in the pipeline settings merge strategy dropdown alongside the 6 built-ins. The portal discovers them via `GET /api/v1/runner/plugins` — no configuration needed.
+</Callout>
+
+### Test the strategy
+
+```python filename="tests/test_strategy.py"
+import pyarrow as pa
+from unittest.mock import MagicMock, patch
+from rat_plugin_soft_delete.strategy import SoftDeleteStrategy
+
+
+def test_soft_delete_name():
+    strategy = SoftDeleteStrategy()
+    assert strategy.name == "soft_delete"
+
+
+def test_soft_delete_falls_back_without_unique_key():
+    strategy = SoftDeleteStrategy()
+    data = pa.table({"id": [1, 2], "name": ["a", "b"]})
+
+    with patch("rat_plugin_soft_delete.strategy.write_iceberg", return_value=2) as mock_write:
+        result = strategy.execute(
+            data=data,
+            table_name="ns.layer.tbl",
+            s3_config=MagicMock(),
+            nessie_config=MagicMock(),
+            location="s3://bucket/ns/layer/tbl/",
+            config=None,  # No config = no unique_key
+        )
+
+    assert result == 2
+    mock_write.assert_called_once()
+```
+
+</Steps>
+
+---
+
+## Writing a Hook
+
+Hooks observe pipeline phases without modifying the data flow. They are ideal for logging, metrics, notifications, and validation.
+
+### Hook Phases
+
+Hooks fire at 6 phase boundaries during the pipeline lifecycle:
+
+<Mermaid chart={`
+flowchart LR
+    A["pre_execute"] --> B["Execute\nSQL/Python"]
+    B --> C["pre_write"]
+    C --> D["Write\nIceberg"]
+    D --> E["post_write"]
+    E --> F["pre_quality"]
+    F --> G["Quality\nTests"]
+    G --> H["post_quality"]
+    H --> I["post_execute"]
+
+    style A fill:#a855f7,color:#fff
+    style C fill:#a855f7,color:#fff
+    style E fill:#a855f7,color:#fff
+    style F fill:#a855f7,color:#fff
+    style H fill:#a855f7,color:#fff
+    style I fill:#a855f7,color:#fff
+`} />
+
+### Example: Row Stats Hook
+
+This hook logs row counts and strategy info after every Iceberg write.
+
+```python filename="src/rat_plugin_row_stats/hook.py"
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rat_runner.plugin_protocols import HookContext, HookPhase
+
+
+class RowStatsHook:
+    """Logs row counts and config details after each Iceberg write."""
+
+    @property
+    def phase(self) -> HookPhase:
+        return "post_write"
+
+    def __call__(self, context: HookContext) -> None:
+        try:
+            table_ref = f"{context.namespace}.{context.layer}.{context.name}"
+            strategy = "unknown"
+            if context.config is not None:
+                strategy = str(context.config.merge_strategy)
+
+            rows = context.extra.get("rows_written", "?")
+            context.logger.info(
+                f"[row-stats] {table_ref}: wrote {rows} rows (strategy: {strategy})"
+            )
+
+            if context.config is not None and context.config.unique_key:
+                key_str = ", ".join(context.config.unique_key)
+                context.logger.info(f"[row-stats] unique_key: ({key_str})")
+        except Exception:
+            # Hooks must never crash pipelines
+            pass
+```
+
+```toml filename="pyproject.toml"
+[project.entry-points."rat.hooks"]
+row_stats = "rat_plugin_row_stats.hook:RowStatsHook"
+```
+
+### Error Handling Rules
+
+<Callout type="warning">
+**Hooks must never crash pipelines.** The registry wraps every hook in try/except, but you should also handle errors internally:
+
+- Wrap your entire `__call__` body in try/except
+- Use `context.logger.warn(...)` to report issues
+- Never raise exceptions — they are swallowed by the dispatcher
+- Never perform blocking I/O without timeouts (e.g., HTTP calls should have a 5s timeout)
+</Callout>
+
+---
+
+## Writing a Jinja Helper
+
+Jinja helpers add custom functions to SQL templates. They are the simplest type of plugin to write.
+
+### Example: dbt-Compatible Helpers
+
+This plugin adds `env_var()`, `var()`, and `generate_schema_name()` for teams migrating from dbt:
+
+```python filename="src/rat_plugin_dbt_compat/helpers.py"
+from __future__ import annotations
+import os
+
+
+class EnvVarHelper:
+    """Read environment variables in SQL templates.
+
+    Usage: {{ env_var('DB_HOST') }} or {{ env_var('DB_PORT', '5432') }}
+    """
+
+    @property
+    def name(self) -> str:
+        return "env_var"
+
+    def __call__(self, *args: object, **kwargs: object) -> object:
+        if not args:
+            raise TypeError("env_var() requires at least 1 argument (variable name)")
+        var_name = str(args[0])
+        default = args[1] if len(args) > 1 else None
+        value = os.environ.get(var_name)
+        if value is not None:
+            return value
+        if default is not None:
+            return default
+        raise ValueError(f"env_var('{var_name}'): not found and no default provided")
+
+
+class VarHelper:
+    """dbt-style project variables placeholder.
+
+    Usage: {{ var('batch_size') }}
+    """
+
+    @property
+    def name(self) -> str:
+        return "var"
+
+    def __call__(self, *args: object, **kwargs: object) -> object:
+        if not args:
+            raise TypeError("var() requires at least 1 argument")
+        return str(args[0])
+
+
+class GenerateSchemaNameHelper:
+    """dbt-compatible schema name generation.
+
+    Usage: {{ generate_schema_name('custom') }}
+    """
+
+    @property
+    def name(self) -> str:
+        return "generate_schema_name"
+
+    def __call__(self, *args: object, **kwargs: object) -> object:
+        if not args:
+            raise TypeError("generate_schema_name() requires at least 1 argument")
+        return str(args[0])
+```
+
+```toml filename="pyproject.toml"
+[project.entry-points."rat.jinja_helpers"]
+env_var = "rat_plugin_dbt_compat.helpers:EnvVarHelper"
+var = "rat_plugin_dbt_compat.helpers:VarHelper"
+generate_schema_name = "rat_plugin_dbt_compat.helpers:GenerateSchemaNameHelper"
+```
+
+### How Helpers Appear in SQL
+
+Once installed, helpers are available in any pipeline template:
+
+```sql filename="pipeline.sql"
+SELECT *
+FROM {{ ref('bronze.raw_orders') }}
+WHERE region = '{{ env_var("AWS_REGION", "us-east-1") }}'
+  AND batch = '{{ var("current_batch") }}'
+```
+
+### Built-in Shadowing Protection
+
+Plugin helpers **cannot override** built-in template functions like `ref()`, `is_incremental()`, `this`, etc. If a conflict is detected, the plugin helper is skipped and a warning is logged:
+
+```
+Plugin Jinja helper 'ref' conflicts with built-in, skipping
+```
+
+See the [complete list of protected names](/reference/runner-plugins#built-in-shadowing-protection) in the reference.
+
+---
+
+## Plugin Discovery
+
+### How It Works
+
+RAT uses Python's `importlib.metadata.entry_points()` to discover plugins. This is the same mechanism used by pytest, setuptools, and many other Python tools.
+
+```python
+from importlib.metadata import entry_points
+
+# This is what the registry does internally
+strategies = entry_points(group="rat.strategies")
+for ep in strategies:
+    plugin_cls = ep.load()      # Import the class
+    plugin = plugin_cls()       # Instantiate it
+    # Validate against protocol...
+```
+
+### Per-Run Discovery
+
+Plugins are discovered **at the start of every pipeline run**, not at server startup. This means:
+
+- **No restart needed** — install a plugin and the next run picks it up
+- **Isolation** — each run gets a consistent snapshot of available plugins
+- **Safety** — a broken plugin doesn't crash the server, only the runs that try to use it
+
+<Mermaid chart={`
+sequenceDiagram
+    participant S as Runner Server
+    participant E as Executor Thread
+    participant R as PluginRegistry
+
+    S->>E: Start pipeline run
+    E->>R: PluginRegistry()
+    E->>R: discover()
+    Note over R: Scan all 5 entry point groups
+    R-->>E: Ready (N plugins loaded)
+    E->>E: Execute pipeline phases
+    Note over E: Hooks dispatched,<br/>strategy resolved,<br/>helpers injected
+    E-->>S: Run complete
+`} />
+
+### What Happens on Load Failure
+
+If a plugin fails to load (missing dependency, syntax error, etc.):
+
+1. The error is **logged** with full traceback
+2. The plugin is **skipped**
+3. All other plugins continue loading normally
+4. The pipeline proceeds with available plugins
+
+---
+
+## Packaging & Distribution
+
+### Package Structure
+
+```
+rat-plugin-soft-delete/
+├── src/
+│   └── rat_plugin_soft_delete/
+│       ├── __init__.py
+│       └── strategy.py
+├── tests/
+│   └── test_strategy.py
+├── pyproject.toml
+└── README.md
+```
+
+### pyproject.toml Template
+
+```toml filename="pyproject.toml"
+[project]
+name = "rat-plugin-my-plugin"
+version = "0.1.0"
+description = "Description of what the plugin does"
+requires-python = ">=3.12"
+dependencies = [
+    # Only add deps your plugin actually needs
+    # Don't add rat-runner as a runtime dep — it's already in the runner
+    "pyarrow>=17.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "rat-runner",  # Only needed for dev/testing
+]
+
+[project.entry-points."rat.strategies"]
+my_strategy = "rat_plugin_my_plugin.strategy:MyStrategy"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rat_plugin_my_plugin"]
+```
+
+### Version Constraints
+
+| Dependency | Constraint | Reason |
+|---|---|---|
+| `python` | `>=3.12` | Runner requires Python 3.12+ |
+| `pyarrow` | `>=17.0` | Must match runner's PyArrow version |
+| `duckdb` | `>=1.1` | Only if your plugin uses DuckDB directly |
+| `rat-runner` | dev only | Don't add as runtime dep — already in the runner container |
+
+<Callout type="warning">
+**Never add `rat-runner` as a runtime dependency.** Your plugin runs inside the runner process, so `rat-runner` is already available. Adding it as a runtime dep can cause version conflicts. Use it as a dev dependency only (for type checking and testing).
+</Callout>
+
+### Installing in the Runner
+
+```bash
+# Install from local directory
+docker compose exec runner pip install /path/to/rat-plugin-my-plugin
+
+# Install from PyPI (if published)
+docker compose exec runner pip install rat-plugin-my-plugin
+
+# Install editable for development
+docker compose exec runner pip install -e /path/to/rat-plugin-my-plugin
+```
+
+---
+
+## Testing Plugins
+
+### Unit Tests with Mocks
+
+Most plugin tests should mock the Iceberg and S3 dependencies:
+
+```python filename="tests/test_strategy.py"
+import pyarrow as pa
+from unittest.mock import MagicMock, patch
+from rat_plugin_soft_delete.strategy import SoftDeleteStrategy
+
+
+def test_name():
+    assert SoftDeleteStrategy().name == "soft_delete"
+
+
+def test_first_run_adds_deleted_at_column():
+    """On first run (no existing table), should add _deleted_at = NULL."""
+    strategy = SoftDeleteStrategy()
+    data = pa.table({"id": [1, 2], "name": ["Alice", "Bob"]})
+
+    config = MagicMock()
+    config.unique_key = ("id",)
+
+    with patch("rat_plugin_soft_delete.strategy.get_catalog", side_effect=Exception("no table")):
+        with patch("rat_plugin_soft_delete.strategy.write_iceberg", return_value=2) as mock_write:
+            result = strategy.execute(
+                data=data,
+                table_name="ns.layer.tbl",
+                s3_config=MagicMock(),
+                nessie_config=MagicMock(),
+                location="s3://bucket/ns/layer/tbl/",
+                config=config,
+            )
+
+    assert result == 2
+    # Verify _deleted_at was added
+    written_table = mock_write.call_args[0][0]
+    assert "_deleted_at" in written_table.column_names
+```
+
+### Protocol Compliance Test
+
+Verify that your plugin satisfies the protocol at runtime:
+
+```python filename="tests/test_compliance.py"
+from rat_runner.plugin_protocols import MergeStrategyProtocol
+from rat_plugin_soft_delete.strategy import SoftDeleteStrategy
+
+
+def test_implements_protocol():
+    strategy = SoftDeleteStrategy()
+    assert isinstance(strategy, MergeStrategyProtocol)
+```
+
+### Docker-Based Testing
+
+For integration tests that need a real Iceberg catalog, use the project's test infrastructure:
+
+```bash
+# Run tests inside the runner container (has all dependencies)
+docker compose exec runner pytest /path/to/rat-plugin-my-plugin/tests -v
+```
+
+---
+
+## Example Plugins
+
+RAT ships with 3 example plugins in the `examples/` directory. Use them as starting points:
+
+| Plugin | Type | Description |
+|---|---|---|
+| [`rat-plugin-soft-delete`](https://github.com/squat-collective/rat/tree/main/examples/rat-plugin-soft-delete) | Strategy | Marks deleted rows with `_deleted_at` instead of removing them |
+| [`rat-plugin-row-stats`](https://github.com/squat-collective/rat/tree/main/examples/rat-plugin-row-stats) | Hook | Logs row counts and strategy info after writes |
+| [`rat-plugin-dbt-compat`](https://github.com/squat-collective/rat/tree/main/examples/rat-plugin-dbt-compat) | Jinja Helper | Adds `env_var()`, `var()`, `generate_schema_name()` |
+
+<Callout type="info">
+For the complete protocol reference with all method signatures, parameter types, and return values, see the [Runner Plugin Reference](/reference/runner-plugins).
+</Callout>

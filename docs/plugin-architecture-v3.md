@@ -1,9 +1,13 @@
 # RAT Plugin Architecture — v3 Community Extensibility
 
-> **Status**: Draft — working document for plugin system design
+> **Status**: Superseded — this content is now published in the documentation website
 > **Date**: 2026-02-21
-> **Branch**: `feat/plugin-system-v3` (from `main`)
-> **Remove this file before release**
+>
+> This was the working design document for the v3 plugin system. The content has been
+> incorporated into the published documentation:
+> - **Guide**: [Writing Runner Plugins](../website/pages/guides/runner-plugins.mdx)
+> - **Reference**: [Runner Plugin Reference](../website/pages/reference/runner-plugins.mdx)
+> - **Architecture**: [Plugin System](../website/pages/contributing/architecture/plugin-system.mdx)
 
 ---
 

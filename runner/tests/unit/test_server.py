@@ -8,6 +8,7 @@ import threading
 import time
 from concurrent import futures
 from pathlib import Path
+from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import grpc
@@ -896,13 +897,16 @@ class TestListPluginsRPC:
         nessie_config: NessieConfig,
         state_dir: Path,
     ):
-        """ListPlugins returns metadata from the server-level plugin registry."""
-        registry = PluginRegistry()
-        # Manually inject plugin info (bypass discovery)
-        registry._discovered_plugins = [
+        """ListPlugins does a fresh discovery and returns plugin metadata."""
+        fake_plugins = [
             PluginInfo(name="soft_delete", group="rat.hooks", version="0.3.1", package_name="rat-plugin-soft-delete"),
             PluginInfo(name="env_var", group="rat.jinja_helpers", version="1.0.0", package_name="rat-plugin-env"),
         ]
+
+        def _fake_discover(self_reg):
+            self_reg._discovered_plugins = list(fake_plugins)
+
+        registry = PluginRegistry()
         svc = RunnerServiceImpl(s3_config, nessie_config, max_workers=1, state_dir=state_dir, plugin_registry=registry)
         try:
             server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
@@ -912,7 +916,8 @@ class TestListPluginsRPC:
             channel = grpc.insecure_channel(f"localhost:{port}")
             stub = runner_pb2_grpc.RunnerServiceStub(channel)
 
-            resp = stub.ListPlugins(runner_pb2.ListPluginsRequest())
+            with mock.patch.object(PluginRegistry, "discover", _fake_discover):
+                resp = stub.ListPlugins(runner_pb2.ListPluginsRequest())
 
             assert len(resp.plugins) == 2
             names = {p.name for p in resp.plugins}
@@ -934,8 +939,7 @@ class TestListPluginsRPC:
         nessie_config: NessieConfig,
         state_dir: Path,
     ):
-        """ListPlugins returns empty list when registry has no plugins."""
-        # Inject an empty registry (skip discover) to simulate no entry points.
+        """ListPlugins returns empty list when discovery finds nothing."""
         registry = PluginRegistry()
         svc = RunnerServiceImpl(s3_config, nessie_config, max_workers=1, state_dir=state_dir, plugin_registry=registry)
         try:
@@ -946,7 +950,9 @@ class TestListPluginsRPC:
             channel = grpc.insecure_channel(f"localhost:{port}")
             stub = runner_pb2_grpc.RunnerServiceStub(channel)
 
-            resp = stub.ListPlugins(runner_pb2.ListPluginsRequest())
+            # Mock discover to do nothing (no entry points found)
+            with mock.patch.object(PluginRegistry, "discover"):
+                resp = stub.ListPlugins(runner_pb2.ListPluginsRequest())
             assert len(resp.plugins) == 0
 
             channel.close()

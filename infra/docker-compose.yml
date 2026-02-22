@@ -105,7 +105,7 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs:
       - /tmp
-      - /home/query/.duckdb:exec    # DuckDB extension install dir
+      - /home/query/.duckdb:uid=1000,gid=1000,exec    # DuckDB extension install dir
     # Resource limits
     deploy:
       resources:
@@ -143,13 +143,16 @@ services:
       start_period: 15s
     restart: unless-stopped
     stop_grace_period: 30s
+    volumes:
+      - ../examples:/plugins:ro           # Example runner plugins (read-only mount)
     # Security hardening
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs:
       - /tmp
-      - /home/runner/.duckdb:exec    # DuckDB extension install dir
+      - /home/runner/.duckdb:exec         # DuckDB extension install dir
+      - /home/runner/.local:exec          # pip user installs (for plugins)
     # Resource limits
     deploy:
       resources:
