@@ -313,7 +313,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.42.54",
+    "version": "1.42.59",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "runner",
@@ -321,7 +321,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.42.54",
+    "version": "1.42.59",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "runner",
@@ -337,7 +337,7 @@
   },
   {
     "name": "certifi",
-    "version": "2026.1.4",
+    "version": "2026.2.25",
     "license": "Mozilla Public License 2.0 (MPL 2.0)",
     "url": "https://github.com/certifi/python-certifi",
     "component": "runner",
@@ -377,7 +377,7 @@
   },
   {
     "name": "grpcio",
-    "version": "1.78.1",
+    "version": "1.78.0",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "runner",
@@ -609,7 +609,7 @@
   },
   {
     "name": "grpcio-tools",
-    "version": "1.78.1",
+    "version": "1.78.0",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "runner",
@@ -673,7 +673,7 @@
   },
   {
     "name": "ruff",
-    "version": "0.15.2",
+    "version": "0.15.4",
     "license": "MIT License",
     "url": "https://docs.astral.sh/ruff",
     "component": "runner",
@@ -689,7 +689,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.42.54",
+    "version": "1.42.59",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "query",
@@ -697,7 +697,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.42.54",
+    "version": "1.42.59",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "query",
@@ -713,7 +713,7 @@
   },
   {
     "name": "certifi",
-    "version": "2026.1.4",
+    "version": "2026.2.25",
     "license": "Mozilla Public License 2.0 (MPL 2.0)",
     "url": "https://github.com/certifi/python-certifi",
     "component": "query",
@@ -761,7 +761,7 @@
   },
   {
     "name": "grpcio",
-    "version": "1.78.1",
+    "version": "1.78.0",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "query",
@@ -769,7 +769,7 @@
   },
   {
     "name": "grpcio-tools",
-    "version": "1.78.1",
+    "version": "1.78.0",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "query",
@@ -985,7 +985,7 @@
   },
   {
     "name": "ruff",
-    "version": "0.15.2",
+    "version": "0.15.4",
     "license": "MIT License",
     "url": "https://docs.astral.sh/ruff",
     "component": "query",

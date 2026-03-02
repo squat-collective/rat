@@ -7,17 +7,17 @@
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
 | `annotated-types` | 0.7.0 | MIT License | https://github.com/annotated-types/annotated-types |
-| `boto3` | 1.42.54 | Apache-2.0 | https://github.com/boto/boto3 |
-| `botocore` | 1.42.54 | Apache-2.0 | https://github.com/boto/botocore |
+| `boto3` | 1.42.59 | Apache-2.0 | https://github.com/boto/boto3 |
+| `botocore` | 1.42.59 | Apache-2.0 | https://github.com/boto/botocore |
 | `cachetools` | 6.2.6 | MIT | https://github.com/tkem/cachetools/ |
-| `certifi` | 2026.1.4 | Mozilla Public License 2.0 (MPL 2.0) | https://github.com/certifi/python-certifi |
+| `certifi` | 2026.2.25 | Mozilla Public License 2.0 (MPL 2.0) | https://github.com/certifi/python-certifi |
 | `charset-normalizer` | 3.4.4 | MIT | https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md |
 | `click` | 8.3.1 | BSD-3-Clause | https://github.com/pallets/click/ |
 | `coverage` | 7.13.4 | Apache-2.0 | https://github.com/coveragepy/coveragepy |
 | `duckdb` | 1.4.4 | MIT License | https://github.com/duckdb/duckdb-python |
 | `fsspec` | 2026.2.0 | BSD-3-Clause | https://github.com/fsspec/filesystem_spec |
-| `grpcio` | 1.78.1 | Apache-2.0 | https://grpc.io |
-| `grpcio-tools` | 1.78.1 | Apache-2.0 | https://grpc.io |
+| `grpcio` | 1.78.0 | Apache-2.0 | https://grpc.io |
+| `grpcio-tools` | 1.78.0 | Apache-2.0 | https://grpc.io |
 | `idna` | 3.11 | BSD-3-Clause | https://github.com/kjd/idna |
 | `iniconfig` | 2.3.0 | MIT | https://github.com/pytest-dev/iniconfig |
 | `Jinja2` | 3.1.6 | BSD License | https://github.com/pallets/jinja/ |
@@ -44,7 +44,7 @@
 | `PyYAML` | 6.0.3 | MIT License | https://pyyaml.org/ |
 | `requests` | 2.32.5 | Apache Software License | https://requests.readthedocs.io |
 | `rich` | 14.3.3 | MIT License | https://github.com/Textualize/rich |
-| `ruff` | 0.15.2 | MIT License | https://docs.astral.sh/ruff |
+| `ruff` | 0.15.4 | MIT License | https://docs.astral.sh/ruff |
 | `s3transfer` | 0.16.0 | Apache Software License | https://github.com/boto/s3transfer |
 | `six` | 1.17.0 | MIT License | https://github.com/benjaminp/six |
 | `strictyaml` | 1.7.3 | MIT License | https://hitchdev.com/strictyaml |
