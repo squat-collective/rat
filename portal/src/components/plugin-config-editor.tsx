@@ -249,12 +249,8 @@ function SchemaField({
     );
   }
 
-  // String with a textarea / markdown format → multi-line text box
-  if (
-    schema.type === "string" &&
-    (schema.format === "textarea" || schema.format === "markdown")
-  ) {
-    const isMarkdown = schema.format === "markdown";
+  // String with a textarea format → multi-line plain text box
+  if (schema.type === "string" && schema.format === "textarea") {
     return (
       <div className="space-y-1">
         <Label htmlFor={fieldId} className="text-[10px] tracking-wider">
@@ -267,16 +263,13 @@ function SchemaField({
           id={fieldId}
           value={(value as string) ?? ""}
           onChange={(e) => onChange(e.target.value)}
-          className={`text-xs min-h-[110px] ${isMarkdown ? "font-mono" : ""}`}
+          className="text-xs min-h-[110px]"
         />
-        {isMarkdown && (
-          <p className="text-[10px] text-muted-foreground">Markdown supported.</p>
-        )}
       </div>
     );
   }
 
-  // String with a code-language format → CodeMirror editor
+  // String with a code / markup format ("markdown", "sql", ...) → CodeMirror editor
   if (
     schema.type === "string" &&
     schema.format &&

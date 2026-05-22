@@ -9,6 +9,14 @@ import { indentWithTab } from "@codemirror/commands";
 import { sql } from "@codemirror/lang-sql";
 import { python } from "@codemirror/lang-python";
 import { yaml } from "@codemirror/lang-yaml";
+import { json } from "@codemirror/lang-json";
+import { markdown } from "@codemirror/lang-markdown";
+import { javascript } from "@codemirror/lang-javascript";
+import { html } from "@codemirror/lang-html";
+import { css } from "@codemirror/lang-css";
+import { xml } from "@codemirror/lang-xml";
+import { rust } from "@codemirror/lang-rust";
+import { go } from "@codemirror/lang-go";
 
 // Languages a plugin config field can request via its JSON Schema `format`.
 // Each maps to a CodeMirror language extension — add more by installing the
@@ -17,6 +25,17 @@ const LANGUAGES: Record<string, () => Extension> = {
   sql: () => sql(),
   python: () => python(),
   yaml: () => yaml(),
+  json: () => json(),
+  markdown: () => markdown(),
+  javascript: () => javascript(),
+  jsx: () => javascript({ jsx: true }),
+  typescript: () => javascript({ typescript: true }),
+  tsx: () => javascript({ typescript: true, jsx: true }),
+  html: () => html(),
+  css: () => css(),
+  xml: () => xml(),
+  rust: () => rust(),
+  go: () => go(),
 };
 
 /** `format` values that ConfigCodeField renders as a code editor. */
