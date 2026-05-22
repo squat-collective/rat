@@ -1,0 +1,24 @@
+[project]
+name = "rat-plugin-http-source"
+version = "0.1.0"
+description = "HTTP/REST API source connector for RAT — fetch JSON endpoints into Arrow tables"
+requires-python = ">=3.12"
+dependencies = [
+    "pyarrow>=17.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "rat-runner",
+]
+
+[project.entry-points."rat.sources"]
+http = "rat_plugin_http_source.source:HttpSource"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rat_plugin_http_source"]

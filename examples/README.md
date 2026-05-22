@@ -1,6 +1,6 @@
 # RAT Example Plugins
 
-Example plugins demonstrating all three runner extension points. Each is a standalone, pip-installable Python package — copy one as a starting point for your own plugin.
+Example plugins demonstrating all five runner extension points. Each is a standalone, pip-installable Python package — copy one as a starting point for your own plugin.
 
 ## Extension Points
 
@@ -9,6 +9,8 @@ Example plugins demonstrating all three runner extension points. Each is a stand
 | **Merge Strategies** | `rat.strategies` | `MergeStrategyProtocol` | `rat-plugin-soft-delete` |
 | **Hooks** | `rat.hooks` | `HookProtocol` | `rat-plugin-row-stats` |
 | **Jinja Helpers** | `rat.jinja_helpers` | `JinjaHelperProtocol` | `rat-plugin-dbt-compat` |
+| **Pipeline Types** | `rat.pipeline_types` | `PipelineTypeProtocol` | `rat-plugin-prql` |
+| **Sources** | `rat.sources` | `SourceConnectorProtocol` | `rat-plugin-http-source` |
 
 ## Plugins
 
@@ -34,6 +36,24 @@ Three dbt-compatible Jinja functions for SQL templates:
 | `var` | `{{ var('batch_size') }}` | Placeholder returning key name (future: config vars) |
 | `generate_schema_name` | `{{ generate_schema_name('custom') }}` | Returns argument as-is (RAT doesn't use schemas) |
 
+### `rat-plugin-prql` — PRQL Pipeline Type
+
+Registers the `prql` pipeline type: a `pipeline.prql` file is compiled from [PRQL](https://prql-lang.org) to SQL and executed on DuckDB, exactly like a core `pipeline.sql` file. Demonstrates adding a whole new query language.
+
+PRQL s-strings (`s"..."`) pass raw SQL through — that is how a pipeline reads landing-zone files:
+
+```prql
+from s"read_csv_auto('s3://rat/default/landing/orders/*.csv')"
+filter amount > 100
+derive {amount_eur = amount * 0.92}
+```
+
+### `rat-plugin-http-source` — HTTP/REST API Source
+
+A `http` source connector that fetches JSON from any REST endpoint and returns it as an Arrow table. Stdlib-only. Demonstrates the `rat.sources` extension point.
+
+> **Note:** the runner executor does not yet *invoke* source connectors — there is no pipeline-side mechanism to declare "use source X". This plugin is a protocol-complete example: discoverable and unit-tested, but not yet runnable as part of a pipeline.
+
 ## Quick Start
 
 ### Install a plugin (editable mode)
@@ -48,7 +68,7 @@ pip install -e '.[dev]'
 ```bash
 python -c "
 from importlib.metadata import entry_points
-for group in ['rat.strategies', 'rat.hooks', 'rat.jinja_helpers']:
+for group in ['rat.strategies', 'rat.hooks', 'rat.jinja_helpers', 'rat.pipeline_types', 'rat.sources']:
     eps = entry_points(group=group)
     for ep in eps:
         print(f'{group}: {ep.name} = {ep.value}')
@@ -75,6 +95,20 @@ docker run --rm \
 # soft-delete
 docker run --rm \
   -v $(pwd)/examples/rat-plugin-soft-delete:/plugin \
+  -v $(pwd)/runner:/runner \
+  -w /plugin python:3.12-slim \
+  sh -c "pip install -q uv && uv pip install --system -q -e /runner -e '.[dev]' && pytest -v tests/"
+
+# prql
+docker run --rm \
+  -v $(pwd)/examples/rat-plugin-prql:/plugin \
+  -v $(pwd)/runner:/runner \
+  -w /plugin python:3.12-slim \
+  sh -c "pip install -q uv && uv pip install --system -q -e /runner -e '.[dev]' && pytest -v tests/"
+
+# http-source
+docker run --rm \
+  -v $(pwd)/examples/rat-plugin-http-source:/plugin \
   -v $(pwd)/runner:/runner \
   -w /plugin python:3.12-slim \
   sh -c "pip install -q uv && uv pip install --system -q -e /runner -e '.[dev]' && pytest -v tests/"
@@ -114,4 +148,19 @@ class MyHelper:
     @property
     def name(self) -> str: ...  # function name in templates
     def __call__(self, *args, **kwargs) -> object: ...
+
+# Pipeline Type — rat.pipeline_types
+class MyPipelineType:
+    @property
+    def name(self) -> str: ...
+    @property
+    def file_extension(self) -> str: ...  # e.g. "prql" -> pipeline.prql
+    def execute(self, source, namespace, layer, pipeline_name,
+                s3_config, nessie_config, config) -> pa.Table: ...
+
+# Source Connector — rat.sources
+class MySource:
+    @property
+    def name(self) -> str: ...
+    def fetch(self, config: dict, s3_config) -> pa.Table: ...
 ```
