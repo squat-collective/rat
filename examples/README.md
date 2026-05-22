@@ -1,6 +1,6 @@
 # RAT Example Plugins
 
-Example plugins for the RAT plugin system. The five **runner** plugins below are standalone, pip-installable Python packages covering all five Layer-1 extension points; [`rat-plugin-event-notifier`](./rat-plugin-event-notifier) and [`rat-plugin-interconnect`](./rat-plugin-interconnect) are Go platform plugins covering Layer 2 (platform / gRPC) and Layer 3 (portal UI). Copy any of them as a starting point for your own plugin.
+Example plugins for the RAT plugin system. The five **runner** plugins below are standalone, pip-installable Python packages covering all five Layer-1 extension points; [`rat-plugin-event-notifier`](./rat-plugin-event-notifier), [`rat-plugin-interconnect`](./rat-plugin-interconnect) and [`rat-plugin-ai-provider`](./rat-plugin-ai-provider) are Go platform plugins covering Layer 2 (platform / gRPC) and Layer 3 (portal UI). Copy any of them as a starting point for your own plugin.
 
 ## Extension Points
 
@@ -61,6 +61,10 @@ A Go ConnectRPC **platform plugin**: it phones home to ratd's open registry, imp
 ### `rat-plugin-interconnect` — Plugin Interconnection (L2 + L3)
 
 A *meta-plugin*: it makes plugin-to-plugin wiring first-class. Plugins register named **capabilities** they offer; any plugin then **invokes a capability by name** and the built-in **broker** routes the call to a healthy provider — no hardcoded plugin names or routes. The portal UI draws the live **plugin mesh** — every plugin, its health, and how capabilities wire them together — and lets you register and invoke capabilities interactively. Build-free portal bundle. See its [README](./rat-plugin-interconnect/README.md).
+
+### `rat-plugin-ai-provider` — Configurable AI Provider (L2 + L3)
+
+A reusable, **configurable AI provider** — a backend LLM service other AI extensions reuse (no LLM code or keys of their own). It wraps any OpenAI-compatible API and exposes `POST /complete` and `POST /chat`. It is **the first RAT plugin to use plugin configuration**: it declares a `config_schema_json`, the portal renders a settings form from it, and the plugin **polls ratd for its own config** (RAT stores config but does not push it) — so changes apply live. It also registers `ai.complete` / `ai.chat` capabilities with the interconnect plugin. See its [README](./rat-plugin-ai-provider/README.md).
 
 ## Quick Start
 
