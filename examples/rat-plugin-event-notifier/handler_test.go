@@ -9,7 +9,9 @@ import (
 )
 
 func newTestHandler() *Handler {
-	return newHandler("event-notifier", "http://event-notifier:50090/bundle.js", "")
+	cfg := newConfigStore("http://ratd:8080", "event-notifier",
+		notifierConfig{MaxEvents: defaultMaxEvents})
+	return newHandler("event-notifier", "http://event-notifier:50090/bundle.js", cfg)
 }
 
 func TestHealthCheckServing(t *testing.T) {
@@ -47,6 +49,9 @@ func TestDescribeAdvertisesContract(t *testing.T) {
 	if len(d.Routes) != 1 || d.Routes[0].Path != "/events" {
 		t.Errorf("expected a GET /events route, got %v", d.Routes)
 	}
+	if d.ConfigSchemaJson == "" {
+		t.Error("expected a config_schema_json so the portal can render a settings form")
+	}
 }
 
 func TestHandleEventRecordsEvent(t *testing.T) {
@@ -71,10 +76,10 @@ func TestHandleEventRecordsEvent(t *testing.T) {
 
 func TestRecordCapsAtMaxEvents(t *testing.T) {
 	h := newTestHandler()
-	for i := 0; i < maxEvents+10; i++ {
+	for i := 0; i < defaultMaxEvents+10; i++ {
 		h.record(event{Type: "run_completed", ID: "e"})
 	}
-	if got := len(h.recentEvents()); got != maxEvents {
-		t.Fatalf("event buffer = %d, want capped at %d", got, maxEvents)
+	if got := len(h.recentEvents()); got != defaultMaxEvents {
+		t.Fatalf("event buffer = %d, want capped at %d", got, defaultMaxEvents)
 	}
 }

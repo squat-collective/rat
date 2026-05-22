@@ -12,7 +12,8 @@
 //	PLUGIN_NAME  registered plugin name      (default event-notifier)
 //	PLUGIN_ADDR  address ratd dials back     (default event-notifier:50090)
 //	RATD_URL     ratd base URL for phone-home (default http://ratd:8080)
-//	WEBHOOK_URL  optional webhook for events (default: none — events only logged)
+//	WEBHOOK_URL  initial webhook URL — override it (and the other settings)
+//	             live in the portal's plugin configuration
 package main
 
 import (
@@ -52,7 +53,13 @@ func main() {
 		webhookURL = os.Getenv("WEBHOOK_URL")
 	)
 
-	h := newHandler(name, "http://"+selfAddr+"/bundle.js", webhookURL)
+	// WEBHOOK_URL is only the initial default — the webhook URL, buffer size
+	// and failure filter are all editable live in the portal's plugin settings.
+	cfg := newConfigStore(ratdURL, name, notifierConfig{
+		WebhookURL: webhookURL,
+		MaxEvents:  defaultMaxEvents,
+	})
+	h := newHandler(name, "http://"+selfAddr+"/bundle.js", cfg)
 
 	mux := http.NewServeMux()
 	// ConnectRPC: the PluginService ratd calls — HealthCheck, Describe, HandleEvent.
@@ -71,6 +78,9 @@ func main() {
 
 	// Register with ratd once the server is up (runs concurrently with Serve).
 	go phoneHome(ratdURL, name, selfAddr)
+	// Poll ratd for this plugin's config — RAT stores config but does not
+	// push it, so a configurable plugin pulls its own.
+	go cfg.poll(context.Background(), 15*time.Second)
 
 	// h2c — ratd dials plugins over HTTP/2 cleartext.
 	server := &http.Server{Addr: ":" + port, Handler: h2c.NewHandler(mux, &http2.Server{})}

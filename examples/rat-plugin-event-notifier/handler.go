@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,10 +15,7 @@ import (
 	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
 )
 
-const (
-	pluginVersion = "0.1.0"
-	maxEvents     = 50
-)
+const pluginVersion = "0.1.0"
 
 // event is one platform event the notifier has observed.
 type event struct {
@@ -35,16 +33,16 @@ type event struct {
 type Handler struct {
 	pluginv1connect.UnimplementedPluginServiceHandler
 
-	name       string
-	bundleURL  string
-	webhookURL string
+	name      string
+	bundleURL string
+	cfg       *configStore
 
 	mu     sync.Mutex
-	events []event // most-recent-last, capped at maxEvents
+	events []event // most-recent-last, capped at the configured max
 }
 
-func newHandler(name, bundleURL, webhookURL string) *Handler {
-	return &Handler{name: name, bundleURL: bundleURL, webhookURL: webhookURL}
+func newHandler(name, bundleURL string, cfg *configStore) *Handler {
+	return &Handler{name: name, bundleURL: bundleURL, cfg: cfg}
 }
 
 // HealthCheck reports that the plugin is ready to serve. ratd calls this on
@@ -59,8 +57,9 @@ func (h *Handler) HealthCheck(
 }
 
 // Describe tells ratd what this plugin is: which events to deliver to it, the
-// HTTP routes it exposes (proxied under /api/v1/x/{name}/...), and how it
-// integrates with the portal UI.
+// HTTP routes it exposes (proxied under /api/v1/x/{name}/...), how it
+// integrates with the portal UI, and the JSON Schema for its configuration
+// (which the portal renders as a settings form).
 func (h *Handler) Describe(
 	_ context.Context, _ *connect.Request[pluginv1.DescribeRequest],
 ) (*connect.Response[pluginv1.DescribeResponse], error) {
@@ -72,6 +71,7 @@ func (h *Handler) Describe(
 		Routes: []*pluginv1.RouteDeclaration{
 			{Method: "GET", Path: "/events", Description: "Recent platform events seen by the notifier"},
 		},
+		ConfigSchemaJson: configSchemaJSON,
 		Ui: &pluginv1.PluginUIDescriptor{
 			BundleUrl: h.bundleURL,
 			Slots: []*pluginv1.UISlotDeclaration{
@@ -85,8 +85,8 @@ func (h *Handler) Describe(
 }
 
 // HandleEvent receives a platform event ratd delivers because this plugin
-// subscribed to it in Describe. The event is recorded and, when WEBHOOK_URL
-// is configured, forwarded to that webhook.
+// subscribed to it in Describe. The event is recorded and, when a webhook is
+// configured, forwarded to it — subject to the "forward only failures" setting.
 func (h *Handler) HandleEvent(
 	ctx context.Context, req *connect.Request[pluginv1.HandleEventRequest],
 ) (*connect.Response[pluginv1.HandleEventResponse], error) {
@@ -100,18 +100,24 @@ func (h *Handler) HandleEvent(
 	h.record(ev)
 	slog.Info("event received", "type", ev.Type, "id", ev.ID)
 
-	if h.webhookURL != "" {
-		h.forward(ctx, ev)
+	c := h.cfg.get()
+	if c.WebhookURL != "" && (!c.ForwardOnlyFailures || isFailureEvent(ev)) {
+		h.forward(ctx, ev, c.WebhookURL)
 	}
 	return connect.NewResponse(&pluginv1.HandleEventResponse{}), nil
 }
 
+// record appends an event, capping the buffer at the configured size.
 func (h *Handler) record(ev event) {
+	max := h.cfg.get().MaxEvents
+	if max <= 0 {
+		max = defaultMaxEvents
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.events = append(h.events, ev)
-	if len(h.events) > maxEvents {
-		h.events = h.events[len(h.events)-maxEvents:]
+	if len(h.events) > max {
+		h.events = h.events[len(h.events)-max:]
 	}
 }
 
@@ -123,11 +129,37 @@ func (h *Handler) recentEvents() []event {
 	return out
 }
 
-func (h *Handler) forward(ctx context.Context, ev event) {
+// isFailureEvent reports whether an event represents a failure — a
+// quality_failed event, or a run_completed whose payload carries a failed
+// status. Used by the "forward only failures" setting.
+func isFailureEvent(ev event) bool {
+	if ev.Type == "quality_failed" {
+		return true
+	}
+	if len(ev.Payload) == 0 {
+		return false
+	}
+	var m map[string]any
+	if json.Unmarshal(ev.Payload, &m) != nil {
+		return false
+	}
+	for _, key := range []string{"status", "state", "outcome", "result"} {
+		if s, ok := m[key].(string); ok {
+			ls := strings.ToLower(s)
+			if strings.Contains(ls, "fail") || strings.Contains(ls, "error") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// forward POSTs an event as JSON to the configured webhook.
+func (h *Handler) forward(ctx context.Context, ev event, webhookURL string) {
 	body, _ := json.Marshal(ev)
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, h.webhookURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, webhookURL, bytes.NewReader(body))
 	if err != nil {
 		slog.Warn("webhook request build failed", "error", err)
 		return
