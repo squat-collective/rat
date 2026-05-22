@@ -53,13 +53,22 @@
   };
 
   function renderInline(text) {
-    var parts = String(text).split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
+    // Split on inline code, bold, and [label](url) links.
+    var parts = String(text).split(/(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g);
     return parts.map(function (p, i) {
       if (p.length > 1 && p[0] === "`" && p[p.length - 1] === "`") {
         return h("code", { key: i, style: codeStyle }, p.slice(1, -1));
       }
       if (p.length > 3 && p.slice(0, 2) === "**" && p.slice(-2) === "**") {
         return h("strong", { key: i }, p.slice(2, -2));
+      }
+      var link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(p);
+      if (link) {
+        return h("a", {
+          key: i,
+          href: link[2],
+          style: { color: "var(--primary, #4ade80)", textDecoration: "underline" },
+        }, link[1]);
       }
       return p;
     });
@@ -122,7 +131,15 @@
     return h("div", { className: "brutal-card", style: { padding: "0.75rem", marginTop: "0.5rem" } },
       h("div", { style: { fontWeight: "bold", fontSize: "0.78rem", marginBottom: "0.5rem" } },
         spec.title || "Chart"),
-      spec.type === "line" ? lineChart(labels, values) : barChart(labels, values)
+      spec.type === "line" ? lineChart(labels, values) : barChart(labels, values),
+      // When the charts plugin saved this chart, link to the Dashboards page.
+      spec.chart_id
+        ? h("div", { style: { marginTop: "0.45rem", fontSize: "0.68rem" } },
+            h("a", {
+              href: "/x/charts",
+              style: { color: "var(--primary, #4ade80)", textDecoration: "underline" },
+            }, "↗ saved to Dashboards"))
+        : null
     );
   }
 
@@ -214,6 +231,7 @@
     "What tables do I have?",
     "How many rows are in default.bronze.fr_orders?",
     "Bar chart of amount by name in default.bronze.sd_orders",
+    "Build a dashboard of row counts per table and amount by customer",
   ];
 
   function AIChatPage() {
@@ -282,8 +300,8 @@
           : null
       ),
       h("p", { style: { fontSize: "0.8rem", opacity: 0.6, margin: "0.2rem 0 0.75rem" } },
-        "Ask about your data — the assistant inspects schemas, runs queries, and " +
-          "can draw charts. The conversation is continuable."),
+        "Ask about your data — the assistant inspects schemas, runs queries, " +
+          "draws charts and can build dashboards. The conversation is continuable."),
       h("div", {
           style: {
             flex: 1, overflowY: "auto", display: "flex", flexDirection: "column",

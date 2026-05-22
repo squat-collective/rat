@@ -12,7 +12,10 @@ import (
 )
 
 const (
-	maxToolRounds = 6
+	// maxToolRounds bounds one agent's tool-calling loop. It must be generous
+	// enough for the visualisation agent to explore tables, render several
+	// charts, and still call save_dashboard within a single dashboard request.
+	maxToolRounds = 14
 	turnTimeout   = 8 * time.Minute
 )
 
@@ -30,13 +33,16 @@ charts yourself.
 - For ANY question about the data (tables, schemas, row counts, values,
   comparisons, analysis), call query_data with the user's question in plain
   English.
-- For ANY request to chart, plot, graph or visualise data, call create_chart
-  describing what to chart in plain English.
+- For ANY request to chart, plot, graph, visualise data or build a dashboard,
+  call create_chart describing what to produce in plain English. For a
+  dashboard, make ONE create_chart call that describes the whole dashboard and
+  every chart it should contain.
 - For greetings or general questions, just reply directly.
 
 If the user wants both an answer and a chart, call query_data first, then
-create_chart. Relay the specialists' results to the user clearly and
-concisely. Never put images or base64 data in your reply.`
+create_chart. Relay the specialists' results to the user clearly and concisely,
+and if a specialist returns a link, always include it in your reply. Never put
+images or base64 data in your reply.`
 
 const sqlAgentPrompt = `You are a DuckDB SQL specialist for the RAT data platform. Given one data
 question, use your tools to answer it precisely, then reply with the answer.
@@ -55,18 +61,21 @@ A run_query result is {"columns":[...],"rows":[...]}. The answer to a "how
 many" question is the VALUE inside the first row, not the number of rows.
 Answer concisely with the actual numbers you got back.`
 
-const chartAgentPrompt = `You are a data-visualisation specialist for the RAT data platform. Given one
-request, produce a chart with render_chart, then confirm it in a sentence.
+const chartAgentPrompt = `You are a data-visualisation specialist for the RAT data platform. You draw
+charts and, when asked, arrange them into a saved dashboard.
 
-Work through it:
+Work through the request:
 1. Decide exactly what to plot — which column gives the labels, which gives the
    numeric values. Match the user's intent precisely: "amount by name" means
    select the amount column (or SUM it per name); only COUNT rows when the user
    explicitly asks for counts or frequencies.
 2. Use list_tables and describe_table for the real table and column names —
-   never guess them.
+   never guess them. Inspect only the tables you will actually chart.
 3. If the values need aggregating, use run_query to confirm the SQL works.
-4. Call render_chart once.
+4. Call render_chart for each chart the user wants — it returns a chart_id.
+5. If the user asked for a dashboard, call save_dashboard ONCE with a title and
+   the chart_id values from every render_chart call. It returns a url; give it
+   to the user as a markdown link, e.g. [Open the dashboard](/x/charts/d/...).
 
 render_chart needs a chart type (bar or line), a title, a SQL query, and which
 result columns are the labels and the values. Tables are namespace.layer.name
@@ -76,7 +85,9 @@ To chart row counts across all tables: list_tables first, then UNION ALL — per
 table — a SELECT '<real table name>' AS table_name, count(*) AS rows FROM
 <that table>; use real names, never placeholders.
 
-The chart shows automatically — never put images or base64 in your reply.`
+Charts show automatically — never put images or base64 in your reply. Finish
+with a one or two sentence summary, including the dashboard link when you built
+one.`
 
 var errToolBudget = errors.New("an agent exceeded its tool-call budget — try a more specific question")
 

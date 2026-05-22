@@ -45,9 +45,10 @@ var (
 
 	specRenderChart = toolDef{Type: "function", Function: functionSchema{
 		Name: "render_chart",
-		Description: "Draw a bar or line chart from a SQL query. Provide the chart type, " +
-			"a title, a SELECT query, and which result columns hold the category labels " +
-			"and the numeric values.",
+		Description: "Draw a bar or line chart from a SQL query, show it to the user, and " +
+			"save it to the Dashboards plugin. Provide the chart type, a title, a SELECT " +
+			"query, and which result columns hold the category labels and the numeric " +
+			"values. Returns a chart_id you can pass to save_dashboard.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
 			`"chart_type":{"type":"string","enum":["bar","line"]},` +
 			`"title":{"type":"string"},` +
@@ -55,6 +56,18 @@ var (
 			`"label_column":{"type":"string","description":"result column for the x-axis labels"},` +
 			`"value_column":{"type":"string","description":"result column for the numeric y values"}},` +
 			`"required":["chart_type","title","sql","label_column","value_column"]}`),
+	}}
+
+	specSaveDashboard = toolDef{Type: "function", Function: functionSchema{
+		Name: "save_dashboard",
+		Description: "Arrange one or more already-rendered charts into a saved dashboard in " +
+			"the portal's Dashboards page. Call this after render_chart when the user wants " +
+			"a dashboard. Pass a title and the chart_id values render_chart returned.",
+		Parameters: json.RawMessage(`{"type":"object","properties":{` +
+			`"title":{"type":"string"},` +
+			`"chart_ids":{"type":"array","items":{"type":"string"},` +
+			`"description":"chart_id values returned by earlier render_chart calls"}},` +
+			`"required":["title","chart_ids"]}`),
 	}}
 
 	// Delegation tools — the orchestrator hands a task to a specialist sub-agent.
@@ -70,10 +83,11 @@ var (
 
 	specCreateChart = toolDef{Type: "function", Function: functionSchema{
 		Name: "create_chart",
-		Description: "Ask the chart specialist to draw a chart. Describe what to chart in " +
-			"plain English — what data and which kind of chart (bar or line).",
+		Description: "Ask the visualisation specialist to draw chart(s) — and, when the user " +
+			"asks for a dashboard, arrange them into one. Describe what to visualise in " +
+			"plain English: what data, which charts, and whether to build a dashboard.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
-			`"request":{"type":"string","description":"what to chart, in plain English"}},` +
+			`"request":{"type":"string","description":"what to visualise, in plain English"}},` +
 			`"required":["request"]}`),
 	}}
 )
@@ -82,15 +96,20 @@ var (
 var (
 	orchestratorTools = []toolDef{specQueryData, specCreateChart}
 	sqlAgentTools     = []toolDef{specListTables, specDescribeTable, specRunQuery}
-	chartAgentTools   = []toolDef{specListTables, specDescribeTable, specRunQuery, specRenderChart}
+	chartAgentTools   = []toolDef{
+		specListTables, specDescribeTable, specRunQuery, specRenderChart, specSaveDashboard,
+	}
 )
 
-// chartSpec is a chart the model asked to render — returned to the UI.
+// chartSpec is a chart the model asked to render — returned to the UI. When the
+// charts plugin is reachable the chart is also persisted there and ChartID is
+// set, so the UI can link to it in the Dashboards page.
 type chartSpec struct {
-	Type   string    `json:"type"` // "bar" | "line"
-	Title  string    `json:"title"`
-	Labels []string  `json:"labels"`
-	Values []float64 `json:"values"`
+	Type    string    `json:"type"` // "bar" | "line"
+	Title   string    `json:"title"`
+	Labels  []string  `json:"labels"`
+	Values  []float64 `json:"values"`
+	ChartID string    `json:"chart_id,omitempty"`
 }
 
 // dataTools executes the leaf tool calls by calling back into ratd.
@@ -145,6 +164,9 @@ func (t *dataTools) execute(ctx context.Context, name, argsJSON string) (string,
 	case "render_chart":
 		return t.renderChart(ctx, argsJSON)
 
+	case "save_dashboard":
+		return t.saveDashboard(ctx, argsJSON), nil
+
 	default:
 		return fmt.Sprintf(`{"error":"unknown tool %q"}`, name), nil
 	}
@@ -198,14 +220,93 @@ func (t *dataTools) renderChart(ctx context.Context, argsJSON string) (string, *
 		return `{"error":"the chart query returned no rows"}`, nil
 	}
 
+	// Persist the chart in the charts ("Dashboards") plugin so it survives the
+	// chat and can be put on a dashboard. If that plugin is not installed the
+	// chart still renders inline in the chat — ChartID is simply left empty.
+	note := "shown in the chat only — the Dashboards plugin is not available"
+	if id, err := t.registerChart(ctx, a.Title, spec.Type, a.SQL, a.LabelColumn, a.ValueColumn); err == nil {
+		spec.ChartID = id
+		note = "saved to the Dashboards plugin — pass this chart_id to save_dashboard to put it on a dashboard"
+	}
+
 	summary, _ := json.Marshal(map[string]any{
-		"status": "chart rendered for the user",
-		"type":   spec.Type,
-		"title":  spec.Title,
-		"labels": spec.Labels,
-		"values": spec.Values,
+		"status":   "chart rendered for the user",
+		"chart_id": spec.ChartID,
+		"type":     spec.Type,
+		"title":    spec.Title,
+		"labels":   spec.Labels,
+		"values":   spec.Values,
+		"note":     note,
 	})
 	return string(summary), spec
+}
+
+// registerChart saves a chart in the charts plugin (proxied by ratd at
+// /api/v1/x/charts) so it persists in the portal's Dashboards page. It returns
+// the new chart's ID, or an error if the charts plugin is not reachable.
+func (t *dataTools) registerChart(ctx context.Context, title, ctype, sql, labelCol, valueCol string) (string, error) {
+	raw := t.post(ctx, "/api/v1/x/charts/charts", map[string]any{
+		"title":     title,
+		"type":      ctype,
+		"sql":       sql,
+		"x_column":  labelCol,
+		"y_columns": []string{valueCol},
+	})
+	var resp struct {
+		ID    string `json:"id"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		return "", fmt.Errorf("charts plugin unavailable")
+	}
+	if resp.Error != "" {
+		return "", fmt.Errorf("charts plugin: %s", resp.Error)
+	}
+	if resp.ID == "" {
+		return "", fmt.Errorf("charts plugin returned no chart id")
+	}
+	return resp.ID, nil
+}
+
+// saveDashboard arranges already-rendered charts into a dashboard in the charts
+// plugin and returns its portal URL for the model to relay to the user.
+func (t *dataTools) saveDashboard(ctx context.Context, argsJSON string) string {
+	var a struct {
+		Title    string   `json:"title"`
+		ChartIDs []string `json:"chart_ids"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &a); err != nil {
+		return toolError(err)
+	}
+	if strings.TrimSpace(a.Title) == "" || len(a.ChartIDs) == 0 {
+		return `{"error":"save_dashboard requires a title and at least one chart_id"}`
+	}
+	widgets := make([]map[string]any, 0, len(a.ChartIDs))
+	for _, id := range a.ChartIDs {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		widgets = append(widgets, map[string]any{"chart_id": id, "width": 2, "height": 1})
+	}
+	if len(widgets) == 0 {
+		return `{"error":"no valid chart_ids — call render_chart first and use the ids it returns"}`
+	}
+
+	raw := t.post(ctx, "/api/v1/x/charts/dashboards",
+		map[string]any{"title": a.Title, "widgets": widgets})
+	var resp struct {
+		ID    string `json:"id"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil || resp.ID == "" {
+		return `{"error":"could not create the dashboard — the Dashboards plugin may be unavailable"}`
+	}
+	out, _ := json.Marshal(map[string]string{
+		"status": "dashboard created",
+		"title":  a.Title,
+		"url":    "/x/charts/d/" + resp.ID,
+	})
+	return string(out)
 }
 
 func (t *dataTools) get(ctx context.Context, path string) string {

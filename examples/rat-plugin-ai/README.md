@@ -18,7 +18,8 @@ results back, and repeats until the model has an answer.
 | `list_tables` | discover every table (`namespace.layer.name`) |
 | `describe_table` | inspect a table's column schema |
 | `run_query` | run a read-only DuckDB SQL query |
-| `render_chart` | draw a bar or line chart from a query |
+| `render_chart` | draw a bar/line chart from a query, and save it to the charts plugin |
+| `save_dashboard` | arrange saved charts into a dashboard in the charts plugin |
 
 So "navigate and analyse my data" becomes real — ask a question, the assistant
 explores schemas, runs queries, draws charts, and answers from the actual
@@ -31,8 +32,17 @@ results.
   Chat sessions are kept in memory and are continuable.
 - **Layer 3** — a portal UI bundle adds an **`/x/ai`** chat page and an
   "AI Assistant" sidebar item. It renders the assistant's markdown (code blocks,
-  lists), draws the charts it produces (build-free SVG/bar rendering), and shows
-  the tool calls each turn made — so the conversation is transparent.
+  lists, links), draws the charts it produces (build-free SVG/bar rendering),
+  and shows the tool calls each turn made — so the conversation is transparent.
+
+## Plugin interconnection
+
+When the [`rat-plugin-charts`](../rat-plugin-charts) plugin is installed, the AI
+**uses it as a service**: `render_chart` saves each chart there and
+`save_dashboard` assembles them into a dashboard, so *"build me a sales
+dashboard"* produces a real, saved dashboard and a link to it. The assistant
+discovers the charts plugin through `ratd` — no extra configuration. If it is
+not installed, charts still render inline in the chat.
 
 ## Environment
 
