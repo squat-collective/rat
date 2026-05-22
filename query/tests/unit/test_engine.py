@@ -69,12 +69,16 @@ class TestQueryEngine:
             mock_conn = MagicMock()
             mock_connect.return_value = mock_conn
             engine = QueryEngine(s3_config)
-            engine.register_view("silver", "orders", "s3://bucket/ns/data/silver/orders")
+            engine.register_view(
+                "silver",
+                "orders",
+                "s3://bucket/ns/silver/orders_abc/metadata/00000.metadata.json",
+            )
 
         calls = [str(c) for c in mock_conn.execute.call_args_list]
         assert any('CREATE SCHEMA IF NOT EXISTS "silver"' in c for c in calls)
         assert any('"silver"."orders"' in c for c in calls)
-        assert any("read_parquet" in c for c in calls)
+        assert any("iceberg_scan" in c for c in calls)
 
     def test_register_view_with_namespace(self, s3_config: S3Config):
         with patch("rat_query.engine.duckdb.connect") as mock_connect:
@@ -84,7 +88,7 @@ class TestQueryEngine:
             engine.register_view(
                 "silver",
                 "orders",
-                "s3://bucket/ns/data/silver/orders",
+                "s3://bucket/ns/silver/orders_abc/metadata/00000.metadata.json",
                 namespace="default",
             )
 

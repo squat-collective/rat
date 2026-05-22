@@ -24,18 +24,20 @@ class TableEntry:
     layer: str
     name: str
     s3_base_path: str = ""  # table root in S3 (derived from metadataLocation)
+    metadata_location: str = ""  # full Iceberg metadata.json path, for iceberg_scan()
 
 
 class NessieCatalog:
     """Discovers Iceberg tables from Nessie and registers them as DuckDB views.
 
     Uses Nessie v2 REST API (GET /api/v2/trees/main/entries) to list all
-    Iceberg tables, then creates DuckDB views via read_parquet() glob patterns.
+    Iceberg tables, then creates DuckDB views via iceberg_scan() — snapshot-aware
+    reads pointed at each table's current metadata.json.
 
     Optimization: tracks the Nessie commit hash from the last refresh and the
-    per-table s3_base_path. If the commit hash hasn't changed, skips
+    per-table metadata_location. If the commit hash hasn't changed, skips
     re-registration entirely. If only some tables changed, only re-registers
-    those whose s3_base_path differs (indicating a new Iceberg snapshot).
+    those whose metadata_location differs (indicating a new Iceberg snapshot).
     """
 
     def __init__(
@@ -51,7 +53,7 @@ class NessieCatalog:
         self._lock = threading.Lock()
         # Track Nessie commit hash + per-table paths to skip redundant re-registration.
         self._last_commit_hash: str = ""
-        self._table_paths: dict[tuple[str, str], str] = {}  # (layer, name) -> s3_base_path
+        self._table_paths: dict[tuple[str, str], str] = {}  # (layer, name) -> metadata_location
 
     def _get_nessie_commit_hash(self) -> str:
         """Fetch the current commit hash of the Nessie main branch.
@@ -93,7 +95,8 @@ class NessieCatalog:
             if layer not in ("bronze", "silver", "gold"):
                 continue
 
-            # Derive S3 base path from metadataLocation (strip /metadata/*.json)
+            # Keep the full metadataLocation (for iceberg_scan) and also derive
+            # the S3 base path (strip /metadata/*.json) for change detection.
             s3_base = ""
             content = entry.get("content", {})
             meta_loc = content.get("metadataLocation", "")
@@ -106,6 +109,7 @@ class NessieCatalog:
                     layer=layer,
                     name=table_name,
                     s3_base_path=s3_base,
+                    metadata_location=meta_loc,
                 )
             )
 
@@ -133,7 +137,6 @@ class NessieCatalog:
             return
 
         tables = self.discover_tables(namespace)
-        bucket = self._s3_config.bucket
 
         # Build set of current (layer, name) for stale detection.
         new_keys = {(t.layer, t.name) for t in tables}
@@ -145,17 +148,28 @@ class NessieCatalog:
         registered = 0
         skipped = 0
         for t in tables:
-            s3_path = t.s3_base_path or f"s3://{bucket}/{t.namespace}/{t.layer}/{t.name}"
             key = (t.layer, t.name)
-            new_paths[key] = s3_path
+            # iceberg_scan needs the table's current metadata.json. Nessie should
+            # always return one for an ICEBERG_TABLE — skip defensively if not.
+            if not t.metadata_location:
+                logger.warning(
+                    "Table %s.%s.%s has no metadataLocation — skipping registration",
+                    t.namespace,
+                    t.layer,
+                    t.name,
+                )
+                continue
+            new_paths[key] = t.metadata_location
 
-            # Only re-register if the s3_base_path changed (new snapshot) or
+            # Re-register only when the metadata.json changed (new snapshot) or
             # the table is new (not in the old path map).
-            if self._table_paths.get(key) == s3_path:
+            if self._table_paths.get(key) == t.metadata_location:
                 skipped += 1
                 continue
 
-            self._engine.register_view(t.layer, t.name, s3_path, namespace=namespace)
+            self._engine.register_view(
+                t.layer, t.name, t.metadata_location, namespace=namespace
+            )
             registered += 1
 
         # Drop only stale views (removed from Nessie since last refresh).

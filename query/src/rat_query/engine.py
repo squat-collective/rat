@@ -146,10 +146,15 @@ class QueryEngine:
         self,
         schema: str,
         name: str,
-        s3_path: str,
+        metadata_location: str,
         namespace: str | None = None,
     ) -> None:
-        """Register a DuckDB view backed by parquet files at s3_path.
+        """Register a DuckDB view backed by an Iceberg table.
+
+        Reads the table via iceberg_scan() pointed at its current metadata.json.
+        This is snapshot-aware: data files superseded by overwrites/deletes are
+        correctly excluded, unlike a blind read_parquet() glob over the table
+        directory (which would also read stale, physically-retained files).
 
         Creates the view in two locations for query flexibility:
         1. "layer"."table" — allows `SELECT * FROM bronze.orders`
@@ -161,10 +166,9 @@ class QueryEngine:
         _validate_schema(schema)
         _validate_identifier(name, "table name")
         # DuckDB does not support prepared parameters in DDL (CREATE VIEW).
-        # The s3_path is built from validated schema/name components, so
-        # we safely inline it with single-quote escaping.
-        glob = f"{s3_path}/**/*.parquet".replace("'", "''")
-        view_sql = f"SELECT * FROM read_parquet('{glob}', hive_partitioning=true)"
+        # metadata_location is an S3 URI from Nessie — single-quote escape it.
+        safe_loc = metadata_location.replace("'", "''")
+        view_sql = f"SELECT * FROM iceberg_scan('{safe_loc}')"
         with self._ddl_lock:
             # 1. Register under layer.table (default catalog)
             self._conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')

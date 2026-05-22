@@ -151,12 +151,14 @@ class TestNessieCatalog:
                     layer="silver",
                     name="orders",
                     s3_base_path="s3://test-bucket/default/silver/orders_abc",
+                    metadata_location="s3://test-bucket/default/silver/orders_abc/metadata/00000.metadata.json",
                 ),
                 TableEntry(
                     namespace="default",
                     layer="gold",
                     name="revenue",
                     s3_base_path="s3://test-bucket/default/gold/revenue_def",
+                    metadata_location="s3://test-bucket/default/gold/revenue_def/metadata/00000.metadata.json",
                 ),
             ]
             catalog.register_tables("default")
@@ -167,13 +169,13 @@ class TestNessieCatalog:
         engine.register_view.assert_any_call(
             "silver",
             "orders",
-            "s3://test-bucket/default/silver/orders_abc",
+            "s3://test-bucket/default/silver/orders_abc/metadata/00000.metadata.json",
             namespace="default",
         )
         engine.register_view.assert_any_call(
             "gold",
             "revenue",
-            "s3://test-bucket/default/gold/revenue_def",
+            "s3://test-bucket/default/gold/revenue_def/metadata/00000.metadata.json",
             namespace="default",
         )
 
@@ -191,12 +193,14 @@ class TestNessieCatalog:
                     layer="silver",
                     name="orders",
                     s3_base_path="s3://test-bucket/default/silver/orders_abc",
+                    metadata_location="s3://test-bucket/default/silver/orders_abc/metadata/00000.metadata.json",
                 ),
                 TableEntry(
                     namespace="default",
                     layer="gold",
                     name="revenue",
                     s3_base_path="s3://test-bucket/default/gold/revenue_def",
+                    metadata_location="s3://test-bucket/default/gold/revenue_def/metadata/00000.metadata.json",
                 ),
             ]
             catalog.register_tables("default")
@@ -211,6 +215,7 @@ class TestNessieCatalog:
                     layer="silver",
                     name="orders",
                     s3_base_path="s3://test-bucket/default/silver/orders_abc",
+                    metadata_location="s3://test-bucket/default/silver/orders_abc/metadata/00000.metadata.json",
                 ),
             ]
             catalog.register_tables("default")
@@ -235,6 +240,27 @@ class TestNessieCatalog:
             catalog.register_tables("empty")
 
         engine.drop_all_views.assert_not_called()
+        engine.register_view.assert_not_called()
+
+    def test_register_tables_skips_entry_without_metadata(
+        self, s3_config: S3Config, nessie_config: NessieConfig
+    ):
+        """A table with no metadata_location cannot be read via iceberg_scan — skip it."""
+        engine = MagicMock()
+        catalog = NessieCatalog(nessie_config, s3_config, engine)
+
+        with patch.object(catalog, "discover_tables") as mock_discover:
+            mock_discover.return_value = [
+                TableEntry(
+                    namespace="default",
+                    layer="silver",
+                    name="orders",
+                    s3_base_path="",
+                    metadata_location="",
+                ),
+            ]
+            catalog.register_tables("default")
+
         engine.register_view.assert_not_called()
 
     def test_get_tables_returns_cached(self, s3_config: S3Config, nessie_config: NessieConfig):
