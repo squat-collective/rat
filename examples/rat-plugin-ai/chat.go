@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	// maxToolRounds bounds one agent's tool-calling loop. It must be generous
-	// enough for the visualisation agent to explore tables, render several
-	// charts, and still call save_dashboard within a single dashboard request.
+	// maxToolRounds bounds one agent's tool-calling loop.
 	maxToolRounds = 14
-	turnTimeout   = 8 * time.Minute
+	// turnTimeout must stay under ratd's 120s HTTP WriteTimeout so the plugin
+	// always finishes and sends a response before the proxy cuts the
+	// connection — otherwise the answer never reaches the chat.
+	turnTimeout = 100 * time.Second
 )
 
 // ── Agent prompts ─────────────────────────────────────────────────
@@ -157,8 +158,13 @@ func (s *chatService) HandleChat(w http.ResponseWriter, r *http.Request) {
 	reply, steps, charts, err := s.runAgent(ctx, orchestratorPrompt, orchestratorTools, &sess.messages)
 	if err != nil {
 		slog.Warn("chat turn failed", "session", id, "error", err)
+		msg := err.Error()
+		if ctx.Err() == context.DeadlineExceeded {
+			msg = "That took too long to answer — try a more specific question, " +
+				"or break it into smaller steps."
+		}
 		writeJSON(w, http.StatusOK, chatResponseBody{
-			SessionID: id, Steps: steps, Charts: charts, Error: err.Error(),
+			SessionID: id, Steps: steps, Charts: charts, Error: msg,
 		})
 		return
 	}

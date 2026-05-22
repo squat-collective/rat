@@ -203,7 +203,10 @@ func (t *dataTools) renderChart(ctx context.Context, argsJSON string) (string, *
 		a.Options = ensureDonut(a.Options)
 	}
 	if !aiChartTypes[ctype] {
-		ctype = "bar"
+		// Reject an unsupported type outright — silently substituting "bar"
+		// makes the model retry the same bad type repeatedly.
+		return fmt.Sprintf(`{"error":"chart_type %q is not supported — use one of: `+
+			`bar, line, area, pie, donut, radar"}`, a.ChartType), nil
 	}
 
 	raw := t.post(ctx, "/api/v1/query", map[string]any{"sql": a.SQL, "limit": 80})

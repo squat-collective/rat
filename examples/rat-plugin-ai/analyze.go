@@ -44,7 +44,8 @@ func (s *chatService) HandleAnalyze(w http.ResponseWriter, r *http.Request) {
 		user += "\n\nDataset (JSON rows):\n" + truncateStr(body.Data, 6000)
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	// Stay under ratd's 120s HTTP WriteTimeout so the response always lands.
+	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
 	defer cancel()
 
 	msg, err := s.ai.complete(ctx, []chatMessage{
@@ -52,7 +53,11 @@ func (s *chatService) HandleAnalyze(w http.ResponseWriter, r *http.Request) {
 		{Role: "user", Content: user},
 	}, nil)
 	if err != nil {
-		writeJSON(w, http.StatusOK, analyzeResponse{Error: err.Error()})
+		errMsg := err.Error()
+		if ctx.Err() == context.DeadlineExceeded {
+			errMsg = "the analysis took too long — try again or simplify the prompt"
+		}
+		writeJSON(w, http.StatusOK, analyzeResponse{Error: errMsg})
 		return
 	}
 	writeJSON(w, http.StatusOK, analyzeResponse{Analysis: msg.Content})
