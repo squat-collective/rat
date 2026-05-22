@@ -13,54 +13,82 @@ import (
 
 const (
 	maxToolRounds = 6
-	turnTimeout   = 5 * time.Minute
-
-	systemPrompt = `You are the RAT Data Navigator, an AI assistant embedded in the RAT data platform.
-You help users explore and analyse their data through conversation.
-
-You have tools to list tables, inspect table schemas, and run read-only SQL
-(DuckDB) queries. When a question is about the data, USE THE TOOLS — inspect
-schemas and run queries rather than guessing. Tables are referenced as
-namespace.layer.name (for example default.bronze.orders); the layers are
-bronze, silver and gold.
-
-For any question about row counts, sums, averages, or specific data values,
-you MUST use run_query with a SQL query (e.g. SELECT count(*) FROM
-default.bronze.orders). list_tables only lists table names — it does not
-contain row counts or data.
-
-A run_query result has the form {"columns": [...], "rows": [...]}. The answer
-to a "how many" or aggregate question is the numeric VALUE inside the first
-row — NOT how many rows the result has. Example: a result of
-{"rows": [{"count_star()": 42}]} means the count is 42 (not 1).
-
-To count rows in a table, query that table directly: SELECT count(*) FROM
-namespace.layer.name. Do NOT use information_schema for row counts — it only
-lists table names, it has no row-count data. To get row counts across several
-tables, call list_tables first, then run ONE query that UNION ALLs a per-table
-SELECT — using each table's REAL name as the label literal, e.g.
-SELECT 'default.bronze.fr_orders' AS table_name, count(*) AS rows FROM
-default.bronze.fr_orders. Never use placeholder labels like 'Table1'.
-
-You can also draw charts: render_chart takes a chart type (bar or line), a
-title, a SQL query, and the result columns to use for the labels and the
-values. Use it whenever the user asks to chart, plot, graph or visualise data.
-The chart is shown to the user automatically — NEVER put images, base64 data,
-or image markdown in your reply; just describe the chart in a sentence.
-
-Keep answers concise and grounded in the results you actually get back.`
+	turnTimeout   = 8 * time.Minute
 )
 
-var errToolBudget = errors.New("the assistant exceeded its tool-call budget — try a more specific question")
+// ── Agent prompts ─────────────────────────────────────────────────
+//
+// The AI is a small team of agents. Each has a narrow job and a small tool
+// set — focused agents are far more reliable on a small model than one agent
+// juggling everything. The orchestrator only routes; the specialists do the
+// work.
 
-// session is one continuable conversation. Its mutex serialises turns so a
-// session is never mutated by two requests at once.
+const orchestratorPrompt = `You are the RAT Data Navigator, an AI assistant in the RAT data platform.
+You COORDINATE a small team of specialists — you do not query data or draw
+charts yourself.
+
+- For ANY question about the data (tables, schemas, row counts, values,
+  comparisons, analysis), call query_data with the user's question in plain
+  English.
+- For ANY request to chart, plot, graph or visualise data, call create_chart
+  describing what to chart in plain English.
+- For greetings or general questions, just reply directly.
+
+If the user wants both an answer and a chart, call query_data first, then
+create_chart. Relay the specialists' results to the user clearly and
+concisely. Never put images or base64 data in your reply.`
+
+const sqlAgentPrompt = `You are a DuckDB SQL specialist for the RAT data platform. Given one data
+question, use your tools to answer it precisely, then reply with the answer.
+
+Tables are namespace.layer.name (e.g. default.bronze.orders); the layers are
+bronze, silver and gold. Use list_tables to discover tables and describe_table
+for schemas — never guess table or column names. Use run_query for all data.
+
+To count rows in a table: SELECT count(*) FROM namespace.layer.name. For counts
+across several tables, call list_tables first, then run ONE query that
+UNION ALLs a per-table SELECT — using each table's REAL name as the label
+literal, e.g. SELECT 'default.bronze.fr_orders' AS table_name, count(*) AS rows
+FROM default.bronze.fr_orders. Never use placeholders like 'Table1'.
+
+A run_query result is {"columns":[...],"rows":[...]}. The answer to a "how
+many" question is the VALUE inside the first row, not the number of rows.
+Answer concisely with the actual numbers you got back.`
+
+const chartAgentPrompt = `You are a data-visualisation specialist for the RAT data platform. Given one
+request, produce a chart with render_chart, then confirm it in a sentence.
+
+Work through it:
+1. Decide exactly what to plot — which column gives the labels, which gives the
+   numeric values. Match the user's intent precisely: "amount by name" means
+   select the amount column (or SUM it per name); only COUNT rows when the user
+   explicitly asks for counts or frequencies.
+2. Use list_tables and describe_table for the real table and column names —
+   never guess them.
+3. If the values need aggregating, use run_query to confirm the SQL works.
+4. Call render_chart once.
+
+render_chart needs a chart type (bar or line), a title, a SQL query, and which
+result columns are the labels and the values. Tables are namespace.layer.name
+(layers: bronze, silver, gold).
+
+To chart row counts across all tables: list_tables first, then UNION ALL — per
+table — a SELECT '<real table name>' AS table_name, count(*) AS rows FROM
+<that table>; use real names, never placeholders.
+
+The chart shows automatically — never put images or base64 in your reply.`
+
+var errToolBudget = errors.New("an agent exceeded its tool-call budget — try a more specific question")
+
+// session is one continuable conversation — the orchestrator's message
+// history. Its mutex serialises turns so it is never mutated by two requests
+// at once.
 type session struct {
 	mu       sync.Mutex
 	messages []chatMessage
 }
 
-// chatService holds all sessions and drives the chat + tool-calling loop.
+// chatService runs the orchestrator and its specialist sub-agents.
 type chatService struct {
 	ai    *aiClient
 	tools *dataTools
@@ -78,8 +106,8 @@ type chatRequestBody struct {
 	Message   string `json:"message"`
 }
 
-// chatStep records one tool call the assistant made — surfaced to the UI so the
-// conversation is transparent rather than a black box.
+// chatStep records one delegation the orchestrator made — shown in the UI so
+// the conversation is transparent.
 type chatStep struct {
 	Tool string `json:"tool"`
 	Args string `json:"args"`
@@ -106,8 +134,6 @@ func (s *chatService) HandleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sess, id := s.session(body.SessionID)
-
-	// Serialise turns within a session.
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 
@@ -116,7 +142,8 @@ func (s *chatService) HandleChat(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
 	defer cancel()
 
-	reply, steps, charts, err := s.runTurn(ctx, sess)
+	// The orchestrator agent runs on the session history.
+	reply, steps, charts, err := s.runAgent(ctx, orchestratorPrompt, orchestratorTools, &sess.messages)
 	if err != nil {
 		slog.Warn("chat turn failed", "session", id, "error", err)
 		writeJSON(w, http.StatusOK, chatResponseBody{
@@ -129,20 +156,26 @@ func (s *chatService) HandleChat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// runTurn drives the tool-calling loop: ask the model, run any tools it
-// requests, feed the results back, and repeat until it returns a text answer.
-// Charts produced by render_chart calls are collected for the UI.
-func (s *chatService) runTurn(
-	ctx context.Context, sess *session,
+// runAgent drives one agent's tool-calling loop. It appends the agent's
+// assistant + tool messages to conv — so the orchestrator's conv is the
+// persistent session, while a sub-agent's conv is a throwaway slice. Returns
+// the agent's final text, the tool calls it made, and any charts produced.
+func (s *chatService) runAgent(
+	ctx context.Context, systemPrompt string, tools []toolDef, conv *[]chatMessage,
 ) (string, []chatStep, []chartSpec, error) {
 	var steps []chatStep
 	var charts []chartSpec
+
 	for round := 0; round < maxToolRounds; round++ {
-		msg, err := s.ai.complete(ctx, s.withSystem(sess.messages), toolSpecs)
+		req := make([]chatMessage, 0, len(*conv)+1)
+		req = append(req, chatMessage{Role: "system", Content: systemPrompt})
+		req = append(req, (*conv)...)
+
+		msg, err := s.ai.complete(ctx, req, tools)
 		if err != nil {
 			return "", steps, charts, err
 		}
-		sess.messages = append(sess.messages, msg)
+		*conv = append(*conv, msg)
 
 		if len(msg.ToolCalls) == 0 {
 			return msg.Content, steps, charts, nil
@@ -151,11 +184,9 @@ func (s *chatService) runTurn(
 		for _, tc := range msg.ToolCalls {
 			slog.Info("tool call", "tool", tc.Function.Name, "args", tc.Function.Arguments)
 			steps = append(steps, chatStep{Tool: tc.Function.Name, Args: tc.Function.Arguments})
-			result, chart := s.tools.execute(ctx, tc.Function.Name, tc.Function.Arguments)
-			if chart != nil {
-				charts = append(charts, *chart)
-			}
-			sess.messages = append(sess.messages, chatMessage{
+			result, tcCharts := s.execTool(ctx, tc.Function.Name, tc.Function.Arguments)
+			charts = append(charts, tcCharts...)
+			*conv = append(*conv, chatMessage{
 				Role:       "tool",
 				ToolCallID: tc.ID,
 				Name:       tc.Function.Name,
@@ -166,11 +197,46 @@ func (s *chatService) runTurn(
 	return "", steps, charts, errToolBudget
 }
 
-// withSystem prepends the system prompt to the conversation for each request.
-func (s *chatService) withSystem(msgs []chatMessage) []chatMessage {
-	out := make([]chatMessage, 0, len(msgs)+1)
-	out = append(out, chatMessage{Role: "system", Content: systemPrompt})
-	return append(out, msgs...)
+// execTool runs one tool call. Delegation tools (query_data, create_chart)
+// spawn a focused specialist sub-agent; leaf tools run directly against ratd.
+func (s *chatService) execTool(ctx context.Context, name, args string) (string, []chartSpec) {
+	switch name {
+	case "query_data":
+		var a struct {
+			Question string `json:"question"`
+		}
+		if err := json.Unmarshal([]byte(args), &a); err != nil || a.Question == "" {
+			return `{"error":"query_data requires a question"}`, nil
+		}
+		conv := []chatMessage{{Role: "user", Content: a.Question}}
+		reply, _, _, err := s.runAgent(ctx, sqlAgentPrompt, sqlAgentTools, &conv)
+		if err != nil {
+			return toolError(err), nil
+		}
+		return reply, nil
+
+	case "create_chart":
+		var a struct {
+			Request string `json:"request"`
+		}
+		if err := json.Unmarshal([]byte(args), &a); err != nil || a.Request == "" {
+			return `{"error":"create_chart requires a request"}`, nil
+		}
+		conv := []chatMessage{{Role: "user", Content: a.Request}}
+		reply, _, charts, err := s.runAgent(ctx, chartAgentPrompt, chartAgentTools, &conv)
+		if err != nil {
+			return toolError(err), charts
+		}
+		return reply, charts
+
+	default:
+		// Leaf tool — run it directly against ratd.
+		result, chart := s.tools.execute(ctx, name, args)
+		if chart != nil {
+			return result, []chartSpec{*chart}
+		}
+		return result, nil
+	}
 }
 
 // session returns the session for id, creating it (and an id) when needed.

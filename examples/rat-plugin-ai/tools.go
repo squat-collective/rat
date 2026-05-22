@@ -12,36 +12,42 @@ import (
 	"time"
 )
 
-// toolSpecs is the tool catalog advertised to the model. The model decides
-// when to call them; the plugin executes them against ratd.
-var toolSpecs = []toolDef{
-	{Type: "function", Function: functionSchema{
+// ── Tool catalog ──────────────────────────────────────────────────
+//
+// Leaf tools do real work against ratd and are given to the specialist
+// sub-agents. Delegation tools are given to the orchestrator, which uses them
+// to hand a focused task to a sub-agent.
+
+var (
+	specListTables = toolDef{Type: "function", Function: functionSchema{
 		Name: "list_tables",
 		Description: "List every data table in the platform (namespace, layer, name). " +
-			"This does NOT include row counts or data — use run_query for counts and values.",
+			"This does NOT include row counts or data — use run_query for those.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{}}`),
-	}},
-	{Type: "function", Function: functionSchema{
+	}}
+
+	specDescribeTable = toolDef{Type: "function", Function: functionSchema{
 		Name:        "describe_table",
 		Description: "Return the column schema of one table.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
 			`"namespace":{"type":"string"},"layer":{"type":"string"},"name":{"type":"string"}},` +
 			`"required":["namespace","layer","name"]}`),
-	}},
-	{Type: "function", Function: functionSchema{
+	}}
+
+	specRunQuery = toolDef{Type: "function", Function: functionSchema{
 		Name: "run_query",
 		Description: "Run a read-only DuckDB SQL query and return the rows. " +
 			"Reference tables as namespace.layer.name, e.g. default.bronze.orders.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
 			`"sql":{"type":"string","description":"a single read-only SELECT query"}},` +
 			`"required":["sql"]}`),
-	}},
-	{Type: "function", Function: functionSchema{
+	}}
+
+	specRenderChart = toolDef{Type: "function", Function: functionSchema{
 		Name: "render_chart",
-		Description: "Draw a bar or line chart for the user from a SQL query. Provide the " +
-			"chart type, a title, a SELECT query, and which result columns hold the " +
-			"category labels and the numeric values. Use this whenever the user asks to " +
-			"chart, plot, graph or visualise data.",
+		Description: "Draw a bar or line chart from a SQL query. Provide the chart type, " +
+			"a title, a SELECT query, and which result columns hold the category labels " +
+			"and the numeric values.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
 			`"chart_type":{"type":"string","enum":["bar","line"]},` +
 			`"title":{"type":"string"},` +
@@ -49,8 +55,35 @@ var toolSpecs = []toolDef{
 			`"label_column":{"type":"string","description":"result column for the x-axis labels"},` +
 			`"value_column":{"type":"string","description":"result column for the numeric y values"}},` +
 			`"required":["chart_type","title","sql","label_column","value_column"]}`),
-	}},
-}
+	}}
+
+	// Delegation tools — the orchestrator hands a task to a specialist sub-agent.
+	specQueryData = toolDef{Type: "function", Function: functionSchema{
+		Name: "query_data",
+		Description: "Ask the data specialist a question about the data — tables, schemas, " +
+			"row counts, values, comparisons, any analysis. Pass the full question in " +
+			"plain English; the specialist inspects schemas and runs the queries.",
+		Parameters: json.RawMessage(`{"type":"object","properties":{` +
+			`"question":{"type":"string","description":"the full data question in plain English"}},` +
+			`"required":["question"]}`),
+	}}
+
+	specCreateChart = toolDef{Type: "function", Function: functionSchema{
+		Name: "create_chart",
+		Description: "Ask the chart specialist to draw a chart. Describe what to chart in " +
+			"plain English — what data and which kind of chart (bar or line).",
+		Parameters: json.RawMessage(`{"type":"object","properties":{` +
+			`"request":{"type":"string","description":"what to chart, in plain English"}},` +
+			`"required":["request"]}`),
+	}}
+)
+
+// Tool sets per agent.
+var (
+	orchestratorTools = []toolDef{specQueryData, specCreateChart}
+	sqlAgentTools     = []toolDef{specListTables, specDescribeTable, specRunQuery}
+	chartAgentTools   = []toolDef{specListTables, specDescribeTable, specRunQuery, specRenderChart}
+)
 
 // chartSpec is a chart the model asked to render — returned to the UI.
 type chartSpec struct {
@@ -60,7 +93,7 @@ type chartSpec struct {
 	Values []float64 `json:"values"`
 }
 
-// dataTools executes the model's tool calls by calling back into ratd.
+// dataTools executes the leaf tool calls by calling back into ratd.
 type dataTools struct {
 	ratdURL string
 	http    *http.Client
@@ -73,7 +106,7 @@ func newDataTools(ratdURL string) *dataTools {
 	}
 }
 
-// execute runs a named tool. It returns a string result for the model and,
+// execute runs a leaf tool. It returns a string result for the model and,
 // for render_chart, a chart spec for the UI (nil otherwise). Errors are
 // returned as JSON strings so the model can see and recover from them.
 func (t *dataTools) execute(ctx context.Context, name, argsJSON string) (string, *chartSpec) {
