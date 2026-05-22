@@ -30,7 +30,13 @@ func TestDescribeAdvertisesChatRouteAndUI(t *testing.T) {
 	if d.Name != "ai" {
 		t.Errorf("name = %q, want ai", d.Name)
 	}
-	if len(d.Routes) != 1 || d.Routes[0].Path != "/chat" {
+	hasChat := false
+	for _, rt := range d.Routes {
+		if rt.Path == "/chat" {
+			hasChat = true
+		}
+	}
+	if !hasChat {
 		t.Errorf("expected a /chat route, got %v", d.Routes)
 	}
 	if d.Ui == nil || d.Ui.BundleUrl == "" {

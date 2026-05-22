@@ -66,9 +66,10 @@ func main() {
 	// ConnectRPC: the PluginService ratd calls.
 	pluginPath, pluginHTTP := pluginv1connect.NewPluginServiceHandler(h)
 	mux.Handle(pluginPath, pluginHTTP)
-	// Plain HTTP: the chat route (ratd proxies it at /api/v1/x/ai/chat) and
-	// the portal UI bundle.
+	// Plain HTTP: the chat route (ratd proxies it at /api/v1/x/ai/chat), the
+	// one-shot analyze route, and the portal UI bundle.
 	mux.HandleFunc("/chat", chat.HandleChat)
+	mux.HandleFunc("/analyze", chat.HandleAnalyze)
 	mux.HandleFunc("/bundle.js", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
 		_, _ = w.Write(bundleJS)

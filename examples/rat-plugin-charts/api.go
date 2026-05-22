@@ -8,9 +8,8 @@ import (
 	"time"
 )
 
-// api serves the charts / dashboards / reports REST API. ratd proxies it at
-// /api/v1/x/charts/* — the proxy forwards the whole path suffix as a wildcard,
-// so every route registered here is reachable.
+// api serves the dashboards REST API. ratd proxies it at /api/v1/x/charts/* —
+// the proxy forwards the whole path suffix, so every route below is reachable.
 type api struct {
 	store *store
 	ratd  *ratdClient
@@ -20,38 +19,26 @@ func newAPI(s *store, rc *ratdClient) *api {
 	return &api{store: s, ratd: rc}
 }
 
-var chartTypes = map[string]bool{
-	"bar": true, "line": true, "area": true, "pie": true, "radar": true,
+// componentTypes are the component kinds a dashboard accepts. Their Props
+// shapes live in the portal UI — the Go side only checks the type name.
+var componentTypes = map[string]bool{
+	"chart": true, "heading": true, "markdown": true, "metric": true, "ai": true,
 }
 
-// mux wires every REST route. Go 1.22+ ServeMux supports method + {id}
-// patterns, which keeps the routing table flat and readable.
+// mux wires every REST route. Go 1.22+ ServeMux gives method + {id} patterns.
 func (a *api) mux() *http.ServeMux {
 	m := http.NewServeMux()
 
-	// Charts — live chart definitions.
-	m.HandleFunc("POST /charts", a.createChart)
-	m.HandleFunc("GET /charts", a.listCharts)
-	m.HandleFunc("GET /charts/{id}", a.getChart)
-	m.HandleFunc("GET /charts/{id}/data", a.getChartData)
-	m.HandleFunc("DELETE /charts/{id}", a.deleteChart)
-
-	// Dashboards — modular grids of chart widgets.
 	m.HandleFunc("POST /dashboards", a.createDashboard)
 	m.HandleFunc("GET /dashboards", a.listDashboards)
 	m.HandleFunc("GET /dashboards/{id}", a.getDashboard)
 	m.HandleFunc("PATCH /dashboards/{id}", a.updateDashboard)
-	m.HandleFunc("POST /dashboards/{id}/widgets", a.addWidget)
 	m.HandleFunc("DELETE /dashboards/{id}", a.deleteDashboard)
+	m.HandleFunc("POST /dashboards/{id}/components", a.addComponent)
 
-	// Reports — narrative documents interleaving text and charts.
-	m.HandleFunc("POST /reports", a.createReport)
-	m.HandleFunc("GET /reports", a.listReports)
-	m.HandleFunc("GET /reports/{id}", a.getReport)
-	m.HandleFunc("DELETE /reports/{id}", a.deleteReport)
-
-	// preview runs ad-hoc SQL without saving — used by the chart editor.
-	m.HandleFunc("POST /preview", a.preview)
+	// query runs ad-hoc read-only SQL — chart/metric components fetch their
+	// data with it, and the chart editor previews with it.
+	m.HandleFunc("POST /query", a.query)
 
 	m.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -59,99 +46,12 @@ func (a *api) mux() *http.ServeMux {
 	return m
 }
 
-// ── Charts ────────────────────────────────────────────────────────
-
-type chartInput struct {
-	Title    string       `json:"title"`
-	Type     string       `json:"type"`
-	SQL      string       `json:"sql"`
-	XColumn  string       `json:"x_column"`
-	YColumns []string     `json:"y_columns"`
-	Options  ChartOptions `json:"options"`
-}
-
-func (a *api) createChart(w http.ResponseWriter, r *http.Request) {
-	var in chartInput
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	in.Title = strings.TrimSpace(in.Title)
-	in.SQL = strings.TrimSpace(in.SQL)
-	in.XColumn = strings.TrimSpace(in.XColumn)
-	in.Type = strings.ToLower(strings.TrimSpace(in.Type))
-	if in.Type == "" {
-		in.Type = "bar"
-	}
-	if !chartTypes[in.Type] {
-		writeErr(w, http.StatusBadRequest, "type must be one of: bar, line, area, pie")
-		return
-	}
-	ys := cleanStrings(in.YColumns)
-	if in.Title == "" || in.SQL == "" || in.XColumn == "" || len(ys) == 0 {
-		writeErr(w, http.StatusBadRequest, "title, sql, x_column and y_columns are required")
-		return
-	}
-	c := a.store.createChart(&Chart{
-		Title: in.Title, Type: in.Type, SQL: in.SQL,
-		XColumn: in.XColumn, YColumns: ys,
-		Options: normalizeOptions(in.Options),
-	})
-	writeJSON(w, http.StatusCreated, c)
-}
-
-func (a *api) listCharts(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, a.store.listCharts())
-}
-
-func (a *api) getChart(w http.ResponseWriter, r *http.Request) {
-	c, ok := a.store.getChart(r.PathValue("id"))
-	if !ok {
-		writeErr(w, http.StatusNotFound, "chart not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, c)
-}
-
-// chartData is a chart plus the rows from a fresh run of its SQL.
-type chartData struct {
-	Chart *Chart           `json:"chart"`
-	Rows  []map[string]any `json:"rows"`
-	Error string           `json:"error,omitempty"`
-}
-
-// getChartData re-runs the chart's query and returns its current rows. A query
-// failure is reported in the body with HTTP 200 so one broken chart never
-// breaks the dashboard or report it sits in.
-func (a *api) getChartData(w http.ResponseWriter, r *http.Request) {
-	c, ok := a.store.getChart(r.PathValue("id"))
-	if !ok {
-		writeErr(w, http.StatusNotFound, "chart not found")
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
-	defer cancel()
-	res := a.ratd.run(ctx, c.SQL)
-	writeJSON(w, http.StatusOK, chartData{Chart: c, Rows: res.Rows, Error: res.Error})
-}
-
-func (a *api) deleteChart(w http.ResponseWriter, r *http.Request) {
-	if !a.store.deleteChart(r.PathValue("id")) {
-		writeErr(w, http.StatusNotFound, "chart not found")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // ── Dashboards ────────────────────────────────────────────────────
 
-type dashboardInput struct {
-	Title   string   `json:"title"`
-	Widgets []Widget `json:"widgets"`
-}
-
 func (a *api) createDashboard(w http.ResponseWriter, r *http.Request) {
-	var in dashboardInput
+	var in struct {
+		Title string `json:"title"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
@@ -161,19 +61,15 @@ func (a *api) createDashboard(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "title is required")
 		return
 	}
-	d := a.store.createDashboard(&Dashboard{
-		Title:   in.Title,
-		Widgets: normalizeWidgets(in.Widgets),
-	})
-	writeJSON(w, http.StatusCreated, d)
+	writeJSON(w, http.StatusCreated, a.store.create(&Dashboard{Title: in.Title}))
 }
 
 func (a *api) listDashboards(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, a.store.listDashboards())
+	writeJSON(w, http.StatusOK, a.store.list())
 }
 
 func (a *api) getDashboard(w http.ResponseWriter, r *http.Request) {
-	d, ok := a.store.getDashboard(r.PathValue("id"))
+	d, ok := a.store.get(r.PathValue("id"))
 	if !ok {
 		writeErr(w, http.StatusNotFound, "dashboard not found")
 		return
@@ -181,28 +77,33 @@ func (a *api) getDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
-// dashboardPatch updates a dashboard. Absent fields (nil) are left unchanged,
-// so a client can rename without resending the whole widget list.
-type dashboardPatch struct {
-	Title   *string   `json:"title"`
-	Widgets *[]Widget `json:"widgets"`
-}
-
+// updateDashboard replaces a dashboard's title and/or its whole component list
+// — the editor sends the full grid back after any change.
 func (a *api) updateDashboard(w http.ResponseWriter, r *http.Request) {
-	var in dashboardPatch
+	var in struct {
+		Title      *string      `json:"title"`
+		Components *[]Component `json:"components"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
-	}
-	if in.Widgets != nil {
-		norm := normalizeWidgets(*in.Widgets)
-		in.Widgets = &norm
 	}
 	if in.Title != nil {
 		t := strings.TrimSpace(*in.Title)
 		in.Title = &t
 	}
-	d, ok := a.store.updateDashboard(r.PathValue("id"), in.Title, in.Widgets)
+	if in.Components != nil {
+		norm := make([]Component, 0, len(*in.Components))
+		for _, c := range *in.Components {
+			if !componentTypes[c.Type] {
+				writeErr(w, http.StatusBadRequest, "unknown component type: "+c.Type)
+				return
+			}
+			norm = append(norm, a.normalizeComponent(c, 0))
+		}
+		in.Components = &norm
+	}
+	d, ok := a.store.update(r.PathValue("id"), in.Title, in.Components)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "dashboard not found")
 		return
@@ -210,100 +111,45 @@ func (a *api) updateDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
-// addWidget appends one chart widget to a dashboard — the common case when
-// the AI assistant assembles a dashboard one chart at a time.
-func (a *api) addWidget(w http.ResponseWriter, r *http.Request) {
-	var in Widget
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+func (a *api) deleteDashboard(w http.ResponseWriter, r *http.Request) {
+	if !a.store.delete(r.PathValue("id")) {
+		writeErr(w, http.StatusNotFound, "dashboard not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// addComponent appends one component to a dashboard, placed on a fresh row at
+// the bottom of the grid. Used by the chat's "pin to dashboard" action.
+func (a *api) addComponent(w http.ResponseWriter, r *http.Request) {
+	var c Component
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if strings.TrimSpace(in.ChartID) == "" {
-		writeErr(w, http.StatusBadRequest, "chart_id is required")
+	if !componentTypes[c.Type] {
+		writeErr(w, http.StatusBadRequest, "unknown component type: "+c.Type)
 		return
 	}
-	d, ok := a.store.getDashboard(r.PathValue("id"))
+	d, ok := a.store.get(r.PathValue("id"))
 	if !ok {
 		writeErr(w, http.StatusNotFound, "dashboard not found")
 		return
 	}
-	widgets := append(append([]Widget{}, d.Widgets...), normalizeWidget(in))
-	updated, _ := a.store.updateDashboard(d.ID, nil, &widgets)
+	bottom := 0
+	for _, ex := range d.Components {
+		if y := ex.Layout.Y + ex.Layout.H; y > bottom {
+			bottom = y
+		}
+	}
+	next := append(append([]Component{}, d.Components...), a.normalizeComponent(c, bottom))
+	updated, _ := a.store.update(d.ID, nil, &next)
 	writeJSON(w, http.StatusOK, updated)
 }
 
-func (a *api) deleteDashboard(w http.ResponseWriter, r *http.Request) {
-	if !a.store.deleteDashboard(r.PathValue("id")) {
-		writeErr(w, http.StatusNotFound, "dashboard not found")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
+// ── Query ─────────────────────────────────────────────────────────
 
-// ── Reports ───────────────────────────────────────────────────────
-
-type reportInput struct {
-	Title  string        `json:"title"`
-	Blocks []ReportBlock `json:"blocks"`
-}
-
-func (a *api) createReport(w http.ResponseWriter, r *http.Request) {
-	var in reportInput
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	in.Title = strings.TrimSpace(in.Title)
-	if in.Title == "" {
-		writeErr(w, http.StatusBadRequest, "title is required")
-		return
-	}
-	blocks := make([]ReportBlock, 0, len(in.Blocks))
-	for _, b := range in.Blocks {
-		switch b.Kind {
-		case "text":
-			blocks = append(blocks, ReportBlock{Kind: "text", Text: b.Text})
-		case "chart":
-			if strings.TrimSpace(b.ChartID) == "" {
-				writeErr(w, http.StatusBadRequest, "a chart block requires a chart_id")
-				return
-			}
-			blocks = append(blocks, ReportBlock{Kind: "chart", ChartID: b.ChartID})
-		default:
-			writeErr(w, http.StatusBadRequest, "block kind must be 'text' or 'chart'")
-			return
-		}
-	}
-	rep := a.store.createReport(&Report{Title: in.Title, Blocks: blocks})
-	writeJSON(w, http.StatusCreated, rep)
-}
-
-func (a *api) listReports(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, a.store.listReports())
-}
-
-func (a *api) getReport(w http.ResponseWriter, r *http.Request) {
-	rep, ok := a.store.getReport(r.PathValue("id"))
-	if !ok {
-		writeErr(w, http.StatusNotFound, "report not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, rep)
-}
-
-func (a *api) deleteReport(w http.ResponseWriter, r *http.Request) {
-	if !a.store.deleteReport(r.PathValue("id")) {
-		writeErr(w, http.StatusNotFound, "report not found")
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// ── Preview ───────────────────────────────────────────────────────
-
-// preview runs ad-hoc SQL without saving anything. The chart editor uses it
-// to show sample rows and offer the result columns as x / y axis choices.
-func (a *api) preview(w http.ResponseWriter, r *http.Request) {
+func (a *api) query(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		SQL string `json:"sql"`
 	}
@@ -317,35 +163,50 @@ func (a *api) preview(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
 	defer cancel()
-	res := a.ratd.run(ctx, in.SQL)
-	writeJSON(w, http.StatusOK, res)
+	writeJSON(w, http.StatusOK, a.ratd.run(ctx, in.SQL))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
 
-// normalizeWidget clamps a widget's span to the grid (width 1–4, height 1–3)
-// and applies sensible defaults for a zero value.
-func normalizeWidget(wgt Widget) Widget {
-	if wgt.Width == 0 {
-		wgt.Width = 2
+// normalizeComponent assigns a missing id, clamps the layout to the 12-column
+// grid, and applies a sensible default layout for a zero value. fallbackY
+// places a freshly-added component below the existing grid.
+func (a *api) normalizeComponent(c Component, fallbackY int) Component {
+	if strings.TrimSpace(c.ID) == "" {
+		c.ID = a.store.id("cmp")
 	}
-	if wgt.Height == 0 {
-		wgt.Height = 1
+	def := defaultLayout(c.Type)
+	if c.Layout.W == 0 {
+		c.Layout.W = def.W
 	}
-	wgt.Width = clamp(wgt.Width, 1, 4)
-	wgt.Height = clamp(wgt.Height, 1, 3)
-	return wgt
+	if c.Layout.H == 0 {
+		c.Layout.H = def.H
+		c.Layout.Y = fallbackY
+	}
+	c.Layout.W = clamp(c.Layout.W, 1, 12)
+	c.Layout.H = clamp(c.Layout.H, 1, 40)
+	c.Layout.X = clamp(c.Layout.X, 0, 12-c.Layout.W)
+	if c.Layout.Y < 0 {
+		c.Layout.Y = 0
+	}
+	if len(c.Props) == 0 {
+		c.Props = json.RawMessage("{}")
+	}
+	return c
 }
 
-func normalizeWidgets(in []Widget) []Widget {
-	out := make([]Widget, 0, len(in))
-	for _, wgt := range in {
-		if strings.TrimSpace(wgt.ChartID) == "" {
-			continue
-		}
-		out = append(out, normalizeWidget(wgt))
+// defaultLayout is the starting size for a freshly-added component of a type.
+func defaultLayout(t string) Layout {
+	switch t {
+	case "heading":
+		return Layout{W: 12, H: 2}
+	case "markdown":
+		return Layout{W: 6, H: 6}
+	case "metric":
+		return Layout{W: 3, H: 5}
+	default: // chart, ai
+		return Layout{W: 6, H: 9}
 	}
-	return out
 }
 
 func clamp(v, lo, hi int) int {
@@ -356,23 +217,4 @@ func clamp(v, lo, hi int) int {
 		return hi
 	}
 	return v
-}
-
-// normalizeOptions clamps the numeric appearance options to sane ranges. The
-// renderer tolerates any palette/curve string, so those need no validation.
-func normalizeOptions(o ChartOptions) ChartOptions {
-	o.BarRadius = clamp(o.BarRadius, 0, 16)
-	o.InnerRadius = clamp(o.InnerRadius, 0, 80)
-	return o
-}
-
-// cleanStrings trims and drops empty entries from a string slice.
-func cleanStrings(in []string) []string {
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if s = strings.TrimSpace(s); s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
 }

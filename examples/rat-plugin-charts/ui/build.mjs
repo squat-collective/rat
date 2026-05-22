@@ -41,6 +41,9 @@ await esbuild.build({
   jsxFactory: "React.createElement",
   jsxFragment: "React.Fragment",
   legalComments: "none",
+  // CSS imports (react-grid-layout / react-resizable) load as text so the
+  // plugin can inject them into a <style> tag at runtime.
+  loader: { ".css": "text" },
   plugins: [reactGlobals],
   outfile: path.join(dir, "dist/bundle.js"),
   logLevel: "info",

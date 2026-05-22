@@ -60,11 +60,11 @@ A Go ConnectRPC **platform plugin**: it phones home to ratd's open registry, imp
 
 ### `rat-plugin-ai` — AI Data Navigator (L2 + L3)
 
-A Go platform plugin that turns any **OpenAI-compatible LLM** (Ollama, OpenAI, vLLM…) into a data assistant. It gives the model **tools** — `list_tables`, `describe_table`, `run_query`, `render_chart` — and runs a multi-agent loop, so the model genuinely explores schemas, runs queries and draws charts. The portal UI bundle adds an `/x/ai` chat page with continuable conversations. When `rat-plugin-charts` is installed it also saves charts and builds dashboards there. See its [README](./rat-plugin-ai/README.md).
+A Go platform plugin that turns any **OpenAI-compatible LLM** (Ollama, OpenAI, vLLM…) into a data assistant. It gives the model **tools** — `list_tables`, `describe_table`, `run_query`, `render_chart` — and runs a multi-agent loop, so the model genuinely explores schemas, runs queries and draws charts. The portal UI bundle adds an `/x/ai` chat page with continuable conversations. Graphs it draws are rendered with the `rat-plugin-charts` engine and can be pinned to a dashboard. See its [README](./rat-plugin-ai/README.md).
 
-### `rat-plugin-charts` — Charts, Dashboards & Reports (L2 + L3)
+### `rat-plugin-charts` — Living Dashboards (L2 + L3)
 
-A Go platform plugin that adds a **Dashboards** page to the portal: charts (bar / line / area / pie) backed by **live SQL queries**, modular grid **dashboards**, and narrative **reports**. It is the first example plugin with a real front-end build — [esbuild](https://esbuild.github.io) bundles [Recharts](https://recharts.org), with `react` rewritten to the portal's `window.React`. It is also a **plugin-interconnection** example: `rat-plugin-ai` calls its REST API to turn a chat into saved charts and dashboards. See its [README](./rat-plugin-charts/README.md).
+A Go platform plugin that adds a **Dashboards** page to the portal. A dashboard is a drag-and-drop grid ([react-grid-layout](https://github.com/react-grid-layout/react-grid-layout)) of components — charts, metrics, headings, markdown and **AI-written analysis** — that scrolls vertically. Charts (bar/line/area/pie/radar) are backed by **live SQL queries**. The front-end is a real [esbuild](https://esbuild.github.io) build bundling [Recharts](https://recharts.org). It interconnects with `rat-plugin-ai` both ways: the chat draws graphs with this plugin's renderer, and the AI-analysis component calls the AI. See its [README](./rat-plugin-charts/README.md).
 
 ## Quick Start
 

@@ -1,87 +1,60 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
-func TestChartCRUD(t *testing.T) {
+func TestDashboardCRUD(t *testing.T) {
 	s := newStore()
-	c := s.createChart(&Chart{Title: "Sales", Type: "bar", SQL: "SELECT 1", XColumn: "x", YColumns: []string{"y"}})
-	if c.ID == "" {
-		t.Fatal("created chart should have an ID")
+	d := s.create(&Dashboard{Title: "Ops"})
+	if d.ID == "" || d.CreatedAt.IsZero() {
+		t.Fatal("created dashboard should have an ID and a timestamp")
 	}
-	if c.CreatedAt.IsZero() {
-		t.Error("created chart should have a CreatedAt timestamp")
+	if d.Components == nil {
+		t.Error("a new dashboard should have a non-nil components slice")
 	}
-	got, ok := s.getChart(c.ID)
-	if !ok || got.Title != "Sales" {
-		t.Fatalf("getChart returned %v, %v", got, ok)
+	got, ok := s.get(d.ID)
+	if !ok || got.Title != "Ops" {
+		t.Fatalf("get returned %v, %v", got, ok)
 	}
-	if len(s.listCharts()) != 1 {
-		t.Errorf("expected 1 chart, got %d", len(s.listCharts()))
+	if len(s.list()) != 1 {
+		t.Errorf("expected 1 dashboard, got %d", len(s.list()))
 	}
-	if !s.deleteChart(c.ID) {
-		t.Error("deleteChart should report success")
+	if !s.delete(d.ID) {
+		t.Error("delete should report success")
 	}
-	if _, ok := s.getChart(c.ID); ok {
-		t.Error("chart should be gone after delete")
+	if _, ok := s.get(d.ID); ok {
+		t.Error("dashboard should be gone after delete")
 	}
-	if s.deleteChart("missing") {
-		t.Error("deleting a missing chart should report failure")
+	if s.delete("missing") {
+		t.Error("deleting a missing dashboard should report failure")
 	}
 }
 
-func TestDashboardUpdateAndAddWidget(t *testing.T) {
+func TestDashboardUpdate(t *testing.T) {
 	s := newStore()
-	d := s.createDashboard(&Dashboard{Title: "Ops"})
-	if d.Widgets == nil {
-		t.Error("a new dashboard should have a non-nil widget slice")
-	}
+	d := s.create(&Dashboard{Title: "Ops"})
 
-	// Rename only — widgets must be left untouched.
+	// Rename only — components must be left untouched.
 	title := "Ops v2"
-	upd, ok := s.updateDashboard(d.ID, &title, nil)
+	upd, ok := s.update(d.ID, &title, nil)
 	if !ok || upd.Title != "Ops v2" {
 		t.Fatalf("rename failed: %v, %v", upd, ok)
 	}
-	if !upd.UpdatedAt.After(d.CreatedAt) && !upd.UpdatedAt.Equal(d.CreatedAt) {
-		t.Error("UpdatedAt should advance on update")
-	}
 
-	// Replace widgets.
-	widgets := []Widget{{ChartID: "chart-1", Width: 2, Height: 1}}
-	upd, ok = s.updateDashboard(d.ID, nil, &widgets)
-	if !ok || len(upd.Widgets) != 1 {
-		t.Fatalf("widget replace failed: %v", upd)
+	// Replace components.
+	comps := []Component{{ID: "cmp-1", Type: "heading", Props: json.RawMessage(`{"text":"Hi"}`)}}
+	upd, ok = s.update(d.ID, nil, &comps)
+	if !ok || len(upd.Components) != 1 {
+		t.Fatalf("component replace failed: %v", upd)
 	}
 	if upd.Title != "Ops v2" {
-		t.Error("title should be preserved when only widgets are updated")
+		t.Error("title should be preserved when only components are updated")
 	}
 
-	if _, ok := s.updateDashboard("missing", &title, nil); ok {
+	if _, ok := s.update("missing", &title, nil); ok {
 		t.Error("updating a missing dashboard should report failure")
-	}
-}
-
-func TestReportCRUD(t *testing.T) {
-	s := newStore()
-	rep := s.createReport(&Report{
-		Title: "Quarterly",
-		Blocks: []ReportBlock{
-			{Kind: "text", Text: "# Summary"},
-			{Kind: "chart", ChartID: "chart-1"},
-		},
-	})
-	if rep.ID == "" || len(rep.Blocks) != 2 {
-		t.Fatalf("unexpected report: %v", rep)
-	}
-	got, ok := s.getReport(rep.ID)
-	if !ok || got.Title != "Quarterly" {
-		t.Fatalf("getReport returned %v, %v", got, ok)
-	}
-	if len(s.listReports()) != 1 {
-		t.Errorf("expected 1 report, got %d", len(s.listReports()))
-	}
-	if !s.deleteReport(rep.ID) {
-		t.Error("deleteReport should report success")
 	}
 }
 
@@ -89,7 +62,7 @@ func TestIDsAreUnique(t *testing.T) {
 	s := newStore()
 	seen := map[string]bool{}
 	for i := 0; i < 1000; i++ {
-		id := s.id("chart")
+		id := s.id("cmp")
 		if seen[id] {
 			t.Fatalf("duplicate id generated: %s", id)
 		}

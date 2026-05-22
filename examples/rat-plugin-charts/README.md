@@ -1,56 +1,52 @@
 # rat-plugin-charts
 
-An example RAT **platform + portal plugin**: a charts, **modular dashboards**
-and **reports** service. Build a chart from a SQL query, arrange charts into a
-grid dashboard, or compose a narrative report — all from the portal.
+An example RAT **platform + portal plugin**: **living dashboards**. A dashboard
+is a drag-and-drop grid of components — charts, headings, markdown, metrics and
+AI-written insights — that scrolls vertically, so it doubles as a report.
 
-Charts are **live**: only the SQL is stored, and it is re-run against `ratd`
-every time a chart is viewed, so dashboards and reports always reflect current
-data.
+It is also a **plugin-interconnection** example, in both directions:
 
-It is also a **plugin-interconnection** example — the
-[`rat-plugin-ai`](../rat-plugin-ai) assistant calls this plugin's REST API to
-turn a conversation into saved charts and dashboards.
+- the [`rat-plugin-ai`](../rat-plugin-ai) chat draws its graphs with **this
+  plugin's chart renderer**, and chat graphs can be **pinned onto a dashboard**;
+- the **AI-analysis component** calls the AI plugin to write an insight about a
+  chart on the dashboard.
 
-## What it does
+## Component types
 
-| Capability | Detail |
+| Component | What it is |
 |---|---|
-| **Charts** | bar / line / area / pie — each backed by a live SQL query |
-| **Dashboards** | a modular grid of chart widgets; resize, reorder, add, remove |
-| **Reports** | narrative documents interleaving markdown text and live charts |
-| **Live data** | `GET /charts/{id}/data` re-runs the query against `ratd` |
+| **Chart** | a graph — bar / line / area / pie / radar, a live SQL query, full styling |
+| **Metric** | a single big KPI number from a query |
+| **AI analysis** | an AI-written insight about another component; refreshable |
+| **Heading** | a section title |
+| **Markdown** | a rich text block |
+
+Chart and metric components are **live** — their SQL re-runs against `ratd`
+every time the dashboard is viewed (or you hit Refresh). There is no global
+chart catalogue: a chart's full config lives inside its component.
 
 ## How it works
 
 - **Layer 2** — a Go ConnectRPC plugin implementing `PluginService`. It phones
   home to `ratd` and exposes a REST API (proxied at `/api/v1/x/charts/*`):
-  charts, dashboards, reports CRUD, plus `/charts/{id}/data` (live query) and
-  `/preview` (ad-hoc SQL for the editor). State is kept in memory.
-- **Layer 3** — a portal UI bundle adds a **`/x/charts`** page ("Dashboards"
-  sidebar item) with Dashboards / Charts / Reports tabs.
+  dashboards CRUD, `POST /dashboards/{id}/components` (used by the chat's
+  "pin to dashboard"), and `POST /query` (live data + editor previews). State
+  is kept in memory.
+- **Layer 3** — a portal UI bundle adds the **`/x/charts`** page. The dashboard
+  grid is [react-grid-layout](https://github.com/react-grid-layout/react-grid-layout)
+  (drag, drop, resize); charts are drawn with [Recharts](https://recharts.org).
+  The bundle is built by [esbuild](https://esbuild.github.io) — `react` /
+  `react-dom` are rewritten to the portal's `window` globals (see
+  `ui/build.mjs`).
 
-This is the **first example plugin with a real front-end build**: the bundle is
-produced by [esbuild](https://esbuild.github.io) bundling
-[Recharts](https://recharts.org). React itself is not bundled — plugin
-components must share the portal's React instance, so `react` / `react-dom`
-imports are rewritten to the portal's `window.React` / `window.ReactDOM`
-globals (see `ui/build.mjs`).
-
-## Plugin interconnection
-
-The AI assistant uses this plugin as a service. When `rat-plugin-charts` is
-installed, the AI's `render_chart` tool saves each chart here, and a
-`save_dashboard` tool assembles them into a dashboard — so *"build me a sales
-dashboard"* in the chat produces a real, saved dashboard with a link to it.
-If this plugin is not installed the AI still renders charts inline in the chat;
-the interconnection is best-effort.
+The bundle publishes its chart renderer on `window.__RAT_CHARTS` so other
+plugins (the AI chat) can draw charts with the very same engine.
 
 ## Environment
 
 | Var | Default | Purpose |
 |---|---|---|
-| `RATD_URL` | `http://ratd:8080` | ratd base URL (phone-home + running chart SQL) |
+| `RATD_URL` | `http://ratd:8080` | ratd base URL (phone-home + running component SQL) |
 | `GRPC_PORT` | `50092` | port to serve on |
 | `PLUGIN_NAME` | `charts` | registered plugin name |
 | `PLUGIN_ADDR` | `charts:50092` | address `ratd` dials back |
@@ -70,11 +66,11 @@ Then open the **Dashboards** page in the portal. Verify the API:
 ```bash
 curl -s localhost:8080/api/v1/plugins | jq '.[] | select(.name=="charts")'
 
-curl -s -X POST localhost:8080/api/v1/x/charts/charts \
+DASH=$(curl -s -X POST localhost:8080/api/v1/x/charts/dashboards \
+  -H 'Content-Type: application/json' -d '{"title":"Sales"}' | jq -r .id)
+curl -s -X POST localhost:8080/api/v1/x/charts/dashboards/$DASH/components \
   -H 'Content-Type: application/json' \
-  -d '{"title":"Orders by customer","type":"bar",
-       "sql":"SELECT name, sum(amount) AS total FROM default.bronze.sd_orders GROUP BY name",
-       "x_column":"name","y_columns":["total"]}' | jq
+  -d '{"type":"heading","props":{"text":"Overview","level":1}}' | jq
 ```
 
 ### Working on the UI
@@ -95,6 +91,6 @@ make test
 
 ## Roadmap
 
-In-memory storage (state is lost on restart) and a fixed grid layout. Natural
-next steps: Postgres-backed persistence, drag-and-drop dashboard layout, and
-report export (PDF).
+In-memory storage (state is lost on restart) — a production build would back it
+with Postgres. Possible next steps: per-dashboard sharing, scheduled snapshots,
+and PDF export of a dashboard.

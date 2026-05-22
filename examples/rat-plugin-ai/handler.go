@@ -43,6 +43,7 @@ func (h *Handler) Describe(
 		Description: "AI data navigator — explore and analyse your data through chat",
 		Routes: []*pluginv1.RouteDeclaration{
 			{Method: "POST", Path: "/chat", Description: "Send a message to the data navigator"},
+			{Method: "POST", Path: "/analyze", Description: "One-shot data analysis: prompt + data in, markdown out"},
 		},
 		Ui: &pluginv1.PluginUIDescriptor{
 			BundleUrl: h.bundleURL,

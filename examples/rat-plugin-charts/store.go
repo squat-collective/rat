@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"sort"
 	"strconv"
 	"sync"
@@ -10,164 +11,82 @@ import (
 
 // ── Domain types ──────────────────────────────────────────────────
 //
-// A Chart is a *live* definition: only its SQL is stored, never its data.
-// The query is re-run against ratd every time the chart is viewed, so every
-// dashboard and report built from charts always reflects current data.
+// A dashboard is a scrollable grid of typed components. There is no global
+// chart catalogue: a chart lives inside a dashboard as a "chart" component, or
+// is drawn on the fly in the AI chat. A component's Props is type-specific JSON
+// the portal UI owns — so new component types need no changes here.
 
-// ChartOptions controls how a chart is drawn. Every field is optional — the
-// renderer applies sensible defaults for the zero value — so the same struct is
-// convenient for both the chart builder UI and the AI assistant.
-type ChartOptions struct {
-	Palette     string   `json:"palette,omitempty"`      // named palette: rat|vivid|ocean|sunset|mono
-	Colors      []string `json:"colors,omitempty"`       // explicit per-series colours; overrides palette
-	Stacked     bool     `json:"stacked,omitempty"`      // stack series (bar, area)
-	Curve       string   `json:"curve,omitempty"`        // smooth|linear|step (line, area)
-	Dots        bool     `json:"dots,omitempty"`         // show point markers (line)
-	HideGrid    bool     `json:"hide_grid,omitempty"`    // hide the background grid
-	HideLegend  bool     `json:"hide_legend,omitempty"`  // hide the series legend
-	ShowLabels  bool     `json:"show_labels,omitempty"`  // draw value labels on the chart
-	Horizontal  bool     `json:"horizontal,omitempty"`   // horizontal bars
-	BarRadius   int      `json:"bar_radius,omitempty"`   // bar corner radius, 0–16
-	InnerRadius int      `json:"inner_radius,omitempty"` // pie donut hole %, 0–80
+// Layout places a component on the 12-column dashboard grid.
+type Layout struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+	W int `json:"w"`
+	H int `json:"h"`
 }
 
-// Chart is a saved, live chart definition.
-type Chart struct {
-	ID        string       `json:"id"`
-	Title     string       `json:"title"`
-	Type      string       `json:"type"` // bar | line | area | pie | radar
-	SQL       string       `json:"sql"`
-	XColumn   string       `json:"x_column"`  // category / x-axis result column
-	YColumns  []string     `json:"y_columns"` // numeric series result column(s)
-	Options   ChartOptions `json:"options"`   // appearance options
-	CreatedAt time.Time    `json:"created_at"`
+// Component is one item on a dashboard.
+type Component struct {
+	ID     string          `json:"id"`
+	Type   string          `json:"type"` // chart | heading | markdown | metric | ai
+	Layout Layout          `json:"layout"`
+	Props  json.RawMessage `json:"props"`
 }
 
-// Widget places a chart on a dashboard's modular grid.
-type Widget struct {
-	ChartID string `json:"chart_id"`
-	Width   int    `json:"width"`  // grid columns spanned (1–4)
-	Height  int    `json:"height"` // row height units (1–3)
-}
-
-// Dashboard is an ordered, modular collection of chart widgets.
+// Dashboard is a scrollable grid of components.
 type Dashboard struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	Widgets   []Widget  `json:"widgets"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// ReportBlock is one section of a report: narrative markdown or a chart.
-type ReportBlock struct {
-	Kind    string `json:"kind"`               // "text" | "chart"
-	Text    string `json:"text,omitempty"`     // markdown, when kind == "text"
-	ChartID string `json:"chart_id,omitempty"` // when kind == "chart"
-}
-
-// Report is a narrative document interleaving text and live charts.
-type Report struct {
-	ID        string        `json:"id"`
-	Title     string        `json:"title"`
-	Blocks    []ReportBlock `json:"blocks"`
-	CreatedAt time.Time     `json:"created_at"`
+	ID         string      `json:"id"`
+	Title      string      `json:"title"`
+	Components []Component `json:"components"`
+	CreatedAt  time.Time   `json:"created_at"`
+	UpdatedAt  time.Time   `json:"updated_at"`
 }
 
 // ── In-memory store ───────────────────────────────────────────────
 
-// store is the in-memory catalogue of charts, dashboards and reports. It is
-// safe for concurrent use. State is lost on restart — fine for an example
-// plugin; a production build would back this with Postgres.
+// store is the in-memory catalogue of dashboards. It is safe for concurrent
+// use. State is lost on restart — fine for an example plugin; a production
+// build would back this with Postgres.
 //
-// Stored structs are treated as immutable once created: updates replace the
+// Stored dashboards are treated as immutable once created: update replaces the
 // whole struct, so a pointer handed to a reader is a stable snapshot.
 type store struct {
 	mu         sync.RWMutex
-	charts     map[string]*Chart
 	dashboards map[string]*Dashboard
-	reports    map[string]*Report
 	seq        atomic.Uint64
 }
 
 func newStore() *store {
-	return &store{
-		charts:     map[string]*Chart{},
-		dashboards: map[string]*Dashboard{},
-		reports:    map[string]*Report{},
-	}
+	return &store{dashboards: map[string]*Dashboard{}}
 }
 
-// id returns a short, unique identifier with the given prefix. The atomic
-// counter guarantees uniqueness even within the same nanosecond.
+// id returns a short, unique identifier with the given prefix.
 func (s *store) id(prefix string) string {
 	n := s.seq.Add(1)
 	return prefix + "-" + strconv.FormatInt(time.Now().UnixNano(), 36) +
 		"-" + strconv.FormatUint(n, 36)
 }
 
-// ── Charts ────────────────────────────────────────────────────────
-
-func (s *store) createChart(c *Chart) *Chart {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	c.ID = s.id("chart")
-	c.CreatedAt = time.Now().UTC()
-	s.charts[c.ID] = c
-	return c
-}
-
-func (s *store) getChart(id string) (*Chart, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	c, ok := s.charts[id]
-	return c, ok
-}
-
-func (s *store) listCharts() []*Chart {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]*Chart, 0, len(s.charts))
-	for _, c := range s.charts {
-		out = append(out, c)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
-	return out
-}
-
-func (s *store) deleteChart(id string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.charts[id]; !ok {
-		return false
-	}
-	delete(s.charts, id)
-	return true
-}
-
-// ── Dashboards ────────────────────────────────────────────────────
-
-func (s *store) createDashboard(d *Dashboard) *Dashboard {
+func (s *store) create(d *Dashboard) *Dashboard {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d.ID = s.id("dash")
 	now := time.Now().UTC()
 	d.CreatedAt, d.UpdatedAt = now, now
-	if d.Widgets == nil {
-		d.Widgets = []Widget{}
+	if d.Components == nil {
+		d.Components = []Component{}
 	}
 	s.dashboards[d.ID] = d
 	return d
 }
 
-func (s *store) getDashboard(id string) (*Dashboard, bool) {
+func (s *store) get(id string) (*Dashboard, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	d, ok := s.dashboards[id]
 	return d, ok
 }
 
-func (s *store) listDashboards() []*Dashboard {
+func (s *store) list() []*Dashboard {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*Dashboard, 0, len(s.dashboards))
@@ -178,9 +97,9 @@ func (s *store) listDashboards() []*Dashboard {
 	return out
 }
 
-// updateDashboard replaces a dashboard's title and/or widgets, returning a
-// fresh snapshot. A nil field is left unchanged.
-func (s *store) updateDashboard(id string, title *string, widgets *[]Widget) (*Dashboard, bool) {
+// update replaces a dashboard's title and/or components, returning a fresh
+// snapshot. A nil field is left unchanged.
+func (s *store) update(id string, title *string, components *[]Component) (*Dashboard, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur, ok := s.dashboards[id]
@@ -191,62 +110,20 @@ func (s *store) updateDashboard(id string, title *string, widgets *[]Widget) (*D
 	if title != nil {
 		next.Title = *title
 	}
-	if widgets != nil {
-		next.Widgets = *widgets
+	if components != nil {
+		next.Components = *components
 	}
 	next.UpdatedAt = time.Now().UTC()
 	s.dashboards[id] = &next
 	return &next, true
 }
 
-func (s *store) deleteDashboard(id string) bool {
+func (s *store) delete(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.dashboards[id]; !ok {
 		return false
 	}
 	delete(s.dashboards, id)
-	return true
-}
-
-// ── Reports ───────────────────────────────────────────────────────
-
-func (s *store) createReport(rep *Report) *Report {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rep.ID = s.id("report")
-	rep.CreatedAt = time.Now().UTC()
-	if rep.Blocks == nil {
-		rep.Blocks = []ReportBlock{}
-	}
-	s.reports[rep.ID] = rep
-	return rep
-}
-
-func (s *store) getReport(id string) (*Report, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	rep, ok := s.reports[id]
-	return rep, ok
-}
-
-func (s *store) listReports() []*Report {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]*Report, 0, len(s.reports))
-	for _, rep := range s.reports {
-		out = append(out, rep)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
-	return out
-}
-
-func (s *store) deleteReport(id string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.reports[id]; !ok {
-		return false
-	}
-	delete(s.reports, id)
 	return true
 }

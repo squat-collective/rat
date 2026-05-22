@@ -1,7 +1,7 @@
 // The chart renderer — real Recharts, themed to the RAT portal and driven by a
-// rich ChartOptions object so the chart builder and the AI assistant can both
-// produce richly-styled charts. ChartView draws from explicit rows; LiveChart
-// fetches the rows by re-running the chart's saved query.
+// rich options object. ChartView draws a chart from a { chart, rows } pair; it
+// is used by dashboard chart components, the chart editor preview, and (via the
+// window bridge in index.jsx) the AI chat.
 
 import React from "react";
 import {
@@ -27,7 +27,6 @@ import {
   Legend,
   LabelList,
 } from "recharts";
-import { api } from "./api.js";
 import { C, ErrorText } from "./components.jsx";
 
 // Named colour palettes. seriesColors() resolves a chart's series colours:
@@ -91,9 +90,8 @@ function centered(height, text) {
   );
 }
 
-// ChartView draws one chart from an explicit { chart, rows } pair. The chart's
-// `options` (a ChartOptions object) controls colours, type-specific styling,
-// grid/legend/labels, etc.
+// ChartView draws one chart from an explicit { chart, rows } pair. height may
+// be a number (px) or "100%" to fill a flex parent.
 export function ChartView(props) {
   const chart = props.chart || {};
   const opts = chart.options || {};
@@ -127,15 +125,13 @@ export function ChartView(props) {
   const grid = showGrid ? (
     <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#2c2c2c" />
   ) : null;
-  const multiLegend = showLegend && ys.length > 1
-    ? <Legend wrapperStyle={{ fontSize: "0.72rem" }} />
-    : null;
+  const multiLegend =
+    showLegend && ys.length > 1 ? <Legend wrapperStyle={{ fontSize: "0.72rem" }} /> : null;
 
   let inner;
 
   if (type === "pie") {
-    const outer = Math.max(54, height * 0.36);
-    const innerR = opts.inner_radius ? (opts.inner_radius / 100) * outer : 0;
+    const innerR = opts.inner_radius ? Math.min(78, opts.inner_radius) + "%" : 0;
     inner = (
       <PieChart>
         <Tooltip {...tooltipProps} />
@@ -147,7 +143,7 @@ export function ChartView(props) {
           cx="50%"
           cy="50%"
           innerRadius={innerR}
-          outerRadius={outer}
+          outerRadius="80%"
           stroke={C.bg}
           isAnimationActive={false}
           label={(e) => (opts.show_labels ? e.name + ": " + e.value : e.name)}
@@ -297,32 +293,4 @@ export function ChartView(props) {
       </ResponsiveContainer>
     </div>
   );
-}
-
-// LiveChart fetches a saved chart's current data and renders it. Pass a
-// changing refreshKey to force a re-fetch.
-export function LiveChart(props) {
-  const height = props.height || 260;
-  const [st, setSt] = React.useState({ loading: true });
-
-  React.useEffect(() => {
-    let alive = true;
-    setSt({ loading: true });
-    api
-      .chartData(props.chartId)
-      .then((d) => {
-        if (alive) setSt({ loading: false, data: d });
-      })
-      .catch((e) => {
-        if (alive) setSt({ loading: false, error: String((e && e.message) || e) });
-      });
-    return () => {
-      alive = false;
-    };
-  }, [props.chartId, props.refreshKey]);
-
-  if (st.loading) return centered(height, "Loading chart…");
-  if (st.error) return <ErrorText>{st.error}</ErrorText>;
-  if (st.data && st.data.error) return <ErrorText>Query failed: {st.data.error}</ErrorText>;
-  return <ChartView chart={st.data.chart} rows={st.data.rows} height={height} />;
 }

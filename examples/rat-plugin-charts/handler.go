@@ -8,7 +8,7 @@ import (
 	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
 )
 
-const pluginVersion = "0.1.0"
+const pluginVersion = "0.2.0"
 
 // Handler implements RAT's PluginService for the charts plugin. It embeds
 // UnimplementedPluginServiceHandler so RPCs it does not provide (HandleEvent,
@@ -33,26 +33,23 @@ func (h *Handler) HealthCheck(
 	}), nil
 }
 
-// Describe advertises the charts REST API and the portal UI (the Dashboards
-// page). The route list is informational — ratd proxies /api/v1/x/charts/* as
-// a wildcard, so every sub-path is reachable regardless.
+// Describe advertises the dashboards REST API and the portal UI. The route
+// list is informational — ratd proxies /api/v1/x/charts/* as a wildcard, so
+// every sub-path is reachable regardless.
 func (h *Handler) Describe(
 	_ context.Context, _ *connect.Request[pluginv1.DescribeRequest],
 ) (*connect.Response[pluginv1.DescribeResponse], error) {
 	return connect.NewResponse(&pluginv1.DescribeResponse{
 		Name:        h.name,
 		Version:     pluginVersion,
-		Description: "Charts, modular dashboards and reports — visualise your data",
+		Description: "Living dashboards — a grid of charts, text, metrics and AI insights",
 		Routes: []*pluginv1.RouteDeclaration{
-			{Method: "POST", Path: "/charts", Description: "Create a live chart"},
-			{Method: "GET", Path: "/charts", Description: "List charts"},
-			{Method: "GET", Path: "/charts/{id}/data", Description: "Run a chart's query and return its data"},
 			{Method: "POST", Path: "/dashboards", Description: "Create a dashboard"},
 			{Method: "GET", Path: "/dashboards", Description: "List dashboards"},
-			{Method: "POST", Path: "/dashboards/{id}/widgets", Description: "Add a chart widget to a dashboard"},
-			{Method: "POST", Path: "/reports", Description: "Create a report"},
-			{Method: "GET", Path: "/reports", Description: "List reports"},
-			{Method: "POST", Path: "/preview", Description: "Run ad-hoc SQL for the chart editor"},
+			{Method: "GET", Path: "/dashboards/{id}", Description: "Get a dashboard and its components"},
+			{Method: "PATCH", Path: "/dashboards/{id}", Description: "Update a dashboard's title or components"},
+			{Method: "POST", Path: "/dashboards/{id}/components", Description: "Add a component to a dashboard"},
+			{Method: "POST", Path: "/query", Description: "Run a read-only SQL query for a component"},
 		},
 		Ui: &pluginv1.PluginUIDescriptor{
 			BundleUrl: h.bundleURL,

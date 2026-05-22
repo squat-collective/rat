@@ -1,5 +1,6 @@
 // REST client for the charts plugin. ratd proxies the plugin's API under
-// /api/v1/x/charts, so the UI talks to the same origin it was served from.
+// /api/v1/x/charts; the AI-analysis component also calls the AI plugin under
+// /api/v1/x/ai.
 
 function apiBase() {
   // The bundle is served at {origin}/api/v1/plugins/charts/ui/bundle.js —
@@ -11,15 +12,17 @@ function apiBase() {
   return window.location.origin;
 }
 
-export const API_ROOT = apiBase() + "/api/v1/x/charts";
+const ORIGIN = apiBase();
+export const API_ROOT = ORIGIN + "/api/v1/x/charts";
+const AI_ROOT = ORIGIN + "/api/v1/x/ai";
 
-async function req(method, path, body) {
+async function req(method, url, body) {
   const opts = { method, headers: {} };
   if (body !== undefined) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
-  const res = await fetch(API_ROOT + path, opts);
+  const res = await fetch(url, opts);
   if (res.status === 204) return null;
 
   const text = await res.text();
@@ -36,23 +39,18 @@ async function req(method, path, body) {
 }
 
 export const api = {
-  // Charts
-  listCharts: () => req("GET", "/charts"),
-  createChart: (c) => req("POST", "/charts", c),
-  chartData: (id) => req("GET", "/charts/" + id + "/data"),
-  deleteChart: (id) => req("DELETE", "/charts/" + id),
-  preview: (sql) => req("POST", "/preview", { sql: sql }),
-
   // Dashboards
-  listDashboards: () => req("GET", "/dashboards"),
-  createDashboard: (d) => req("POST", "/dashboards", d),
-  getDashboard: (id) => req("GET", "/dashboards/" + id),
-  updateDashboard: (id, patch) => req("PATCH", "/dashboards/" + id, patch),
-  deleteDashboard: (id) => req("DELETE", "/dashboards/" + id),
+  listDashboards: () => req("GET", API_ROOT + "/dashboards"),
+  createDashboard: (title) => req("POST", API_ROOT + "/dashboards", { title: title }),
+  getDashboard: (id) => req("GET", API_ROOT + "/dashboards/" + id),
+  updateDashboard: (id, patch) => req("PATCH", API_ROOT + "/dashboards/" + id, patch),
+  deleteDashboard: (id) => req("DELETE", API_ROOT + "/dashboards/" + id),
+  addComponent: (id, component) =>
+    req("POST", API_ROOT + "/dashboards/" + id + "/components", component),
 
-  // Reports
-  listReports: () => req("GET", "/reports"),
-  createReport: (r) => req("POST", "/reports", r),
-  getReport: (id) => req("GET", "/reports/" + id),
-  deleteReport: (id) => req("DELETE", "/reports/" + id),
+  // Run a component's SQL (live data).
+  query: (sql) => req("POST", API_ROOT + "/query", { sql: sql }),
+
+  // AI plugin — the AI-analysis component asks it for an insight.
+  analyze: (prompt, data) => req("POST", AI_ROOT + "/analyze", { prompt: prompt, data: data }),
 };

@@ -4,8 +4,9 @@
  * Build-free: the portal exposes React on window.React and a registration hook
  * on window.__RAT_REGISTER_PLUGIN. Registers an /x/ai chat page + a nav item.
  *
- * Includes a small markdown renderer (code blocks, lists, inline code/bold) and
- * a chart renderer (bar + line) for charts the assistant produces.
+ * Markdown renderer + chart rendering: graphs are drawn with the charts
+ * plugin's own renderer (window.__RAT_CHARTS) when available, with a build-free
+ * fallback, and can be pinned onto a dashboard.
  */
 (function () {
   "use strict";
@@ -20,6 +21,10 @@
   // (hsl(var(--primary))), and SVG fill/stroke attributes don't resolve CSS
   // vars anyway — so a hex literal is the only thing that works everywhere.
   var ACCENT = "#4ade80";
+  // Portal theme colours wrapped in hsl() — the portal's CSS vars are bare HSL
+  // triplets, so they must be wrapped or they render as nothing.
+  var BORDER = "hsl(var(--border, 0 0% 16%))";
+  var CARD = "hsl(var(--card, 0 0% 7%))";
 
   function apiBase() {
     var s = document.querySelector('script[src*="/plugins/ai/ui/bundle.js"]');
@@ -29,6 +34,7 @@
     return window.location.origin;
   }
   var CHAT_URL = apiBase() + "/api/v1/x/ai/chat";
+  var CHARTS_API = apiBase() + "/api/v1/x/charts";
 
   function newSessionId() {
     if (window.crypto && crypto.randomUUID) return "sess-" + crypto.randomUUID();
@@ -128,34 +134,206 @@
   }
 
   // ── Charts ───────────────────────────────────────────────────────
-  // The in-chat preview draws the first series build-free. The full,
-  // multi-series, fully-styled chart lives in the charts plugin.
+  // Graphs are drawn with the charts ("Dashboards") plugin's own Recharts
+  // renderer, exposed on window.__RAT_CHARTS. If that plugin is not installed a
+  // simple build-free fallback (first series only) is used instead.
   var SLICE_COLORS = ["#4ade80", "#22d3ee", "#a78bfa", "#fbbf24", "#f472b6", "#60a5fa"];
+  var PALETTE_LEAD = {
+    rat: "#4ade80", vivid: "#6366f1", ocean: "#38bdf8", sunset: "#fb7185", mono: "#e5e5e5",
+  };
 
+  function toNumber(v) {
+    if (typeof v === "number") return v;
+    var n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function optionColor(opts) {
+    opts = opts || {};
+    if (opts.colors && opts.colors[0]) return opts.colors[0];
+    return PALETTE_LEAD[opts.palette] || ACCENT;
+  }
+
+  // Chart renders one graph the assistant produced — through the charts
+  // plugin's renderer when available — with a button to pin it onto a board.
   function Chart(props) {
     var spec = props.spec;
-    var values = spec.values || [];
-    var labels = spec.labels || [];
-    var color = spec.color || ACCENT;
+    var pinState = React.useState(false);
+    var pinning = pinState[0], setPinning = pinState[1];
+    var bridge = window.__RAT_CHARTS;
     var body;
-    if (spec.type === "pie") body = pieChart(labels, values);
-    else if (spec.type === "line") body = lineChart(labels, values, color);
-    else if (spec.type === "area") body = areaChart(labels, values, color);
-    else if (spec.type === "bar") body = barChart(labels, values, color);
-    else body = h("div", { style: { fontSize: "0.72rem", opacity: 0.6, padding: "0.4rem 0" } },
-      "open in Dashboards to view this " + (spec.type || "chart") + " chart");
+    if (bridge && bridge.ChartView && spec.rows) {
+      body = h(bridge.ChartView, {
+        chart: {
+          type: spec.type, x_column: spec.x_column,
+          y_columns: spec.y_columns, options: spec.options,
+        },
+        rows: spec.rows,
+        height: 260,
+      });
+    } else {
+      body = buildFreeChart(spec);
+    }
     return h("div", { className: "brutal-card", style: { padding: "0.75rem", marginTop: "0.5rem" } },
-      h("div", { style: { fontWeight: "bold", fontSize: "0.78rem", marginBottom: "0.5rem" } },
-        spec.title || "Chart"),
+      h("div", {
+          style: {
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            gap: "0.5rem", marginBottom: "0.5rem",
+          },
+        },
+        h("div", { style: { fontWeight: "bold", fontSize: "0.78rem" } }, spec.title || "Chart"),
+        h("button", {
+          onClick: function () { setPinning(true); },
+          style: {
+            fontSize: "0.66rem", fontWeight: 600, padding: "0.15rem 0.45rem",
+            border: "1px solid " + BORDER, background: "transparent", color: "inherit",
+            cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap",
+          },
+        }, "📌 Pin")
+      ),
       body,
-      // When the charts plugin saved this chart, link to the Dashboards page.
-      spec.chart_id
-        ? h("div", { style: { marginTop: "0.45rem", fontSize: "0.68rem" } },
-            h("a", {
-              href: "/x/charts",
-              style: { color: ACCENT, textDecoration: "underline" },
-            }, "↗ saved to Dashboards"))
-        : null
+      pinning ? h(PinModal, { spec: spec, onClose: function () { setPinning(false); } }) : null
+    );
+  }
+
+  // buildFreeChart is the fallback used when the charts plugin is absent — it
+  // derives the first series from the rows and draws it build-free.
+  function buildFreeChart(spec) {
+    var rows = spec.rows || [];
+    var x = spec.x_column;
+    var y = (spec.y_columns || [])[0];
+    if (!x || !y || !rows.length) {
+      return h("div", { style: { fontSize: "0.72rem", opacity: 0.6, padding: "0.4rem 0" } },
+        "no data to chart");
+    }
+    var labels = rows.map(function (r) { return r[x]; });
+    var values = rows.map(function (r) { return toNumber(r[y]); });
+    var color = optionColor(spec.options);
+    if (spec.type === "pie") return pieChart(labels, values);
+    if (spec.type === "line") return lineChart(labels, values, color);
+    if (spec.type === "area") return areaChart(labels, values, color);
+    if (spec.type === "radar") {
+      return h("div", { style: { fontSize: "0.72rem", opacity: 0.6, padding: "0.4rem 0" } },
+        "radar charts need the Dashboards plugin");
+    }
+    return barChart(labels, values, color);
+  }
+
+  // PinModal attaches a chat-generated chart onto a dashboard as a live chart
+  // component (its SQL re-runs on the dashboard).
+  function PinModal(props) {
+    var spec = props.spec;
+    var st = React.useState({ loading: true });
+    var state = st[0], setState = st[1];
+    var nameState = React.useState("");
+    var name = nameState[0], setName = nameState[1];
+    var msgState = React.useState("");
+    var msg = msgState[0], setMsg = msgState[1];
+
+    React.useEffect(function () {
+      fetch(CHARTS_API + "/dashboards")
+        .then(function (r) { return r.json(); })
+        .then(function (d) { setState({ loading: false, list: Array.isArray(d) ? d : [] }); })
+        .catch(function (e) { setState({ loading: false, error: String(e) }); });
+    }, []);
+
+    function chartComponent() {
+      return {
+        type: "chart",
+        props: {
+          title: spec.title, chart_type: spec.type, sql: spec.sql,
+          x_column: spec.x_column, y_columns: spec.y_columns, options: spec.options,
+        },
+      };
+    }
+    function pinTo(dashId) {
+      setMsg("Pinning…");
+      fetch(CHARTS_API + "/dashboards/" + dashId + "/components", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(chartComponent()),
+      })
+        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(function () { setMsg("✓ Pinned to the dashboard."); })
+        .catch(function (e) { setMsg("Could not pin: " + e); });
+    }
+    function createAndPin() {
+      if (!name.trim()) return;
+      setMsg("Creating…");
+      fetch(CHARTS_API + "/dashboards", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: name.trim() }),
+      })
+        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(function (d) { pinTo(d.id); })
+        .catch(function (e) { setMsg("Could not create: " + e); });
+    }
+
+    var rowBtn = {
+      textAlign: "left", padding: "0.45rem 0.6rem", border: "1px solid " + BORDER,
+      background: "transparent", color: "inherit", cursor: "pointer",
+      fontFamily: "inherit", fontSize: "0.82rem",
+    };
+    return h("div", {
+        onClick: props.onClose,
+        style: {
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 70,
+          display: "flex", alignItems: "flex-start", justifyContent: "center",
+          padding: "4rem 1rem", overflowY: "auto",
+        },
+      },
+      h("div", {
+          onClick: function (e) { e.stopPropagation(); },
+          style: {
+            background: CARD, border: "2px solid " + BORDER,
+            padding: "1.1rem", width: "100%", maxWidth: "26rem",
+          },
+        },
+        h("div", { style: { fontWeight: "bold", marginBottom: "0.75rem" } },
+          "📌 Pin chart to a dashboard"),
+        state.loading ? h("div", { style: { opacity: 0.6, fontSize: "0.8rem" } }, "Loading…") : null,
+        state.error
+          ? h("div", { style: { color: "#f87171", fontSize: "0.78rem" } }, state.error)
+          : null,
+        state.list && state.list.length
+          ? h("div", {
+                style: { display: "flex", flexDirection: "column", gap: "0.3rem", marginBottom: "0.75rem" },
+              },
+              state.list.map(function (d) {
+                return h("button", { key: d.id, onClick: function () { pinTo(d.id); }, style: rowBtn },
+                  d.title);
+              }))
+          : state.list
+            ? h("div", { style: { opacity: 0.6, fontSize: "0.78rem", marginBottom: "0.75rem" } },
+                "No dashboards yet — create one below.")
+            : null,
+        h("div", { style: { display: "flex", gap: "0.4rem" } },
+          h("input", {
+            value: name,
+            onChange: function (e) { setName(e.target.value); },
+            placeholder: "New dashboard name…",
+            style: {
+              flex: 1, padding: "0.4rem", background: "transparent", color: "inherit",
+              border: "1px solid " + BORDER, fontFamily: "inherit", fontSize: "0.82rem",
+            },
+          }),
+          h("button", {
+            onClick: createAndPin,
+            style: {
+              padding: "0 0.7rem", fontWeight: "bold", cursor: "pointer", border: "1px solid " + ACCENT,
+              background: ACCENT, color: "#0a0a0a", fontFamily: "inherit", fontSize: "0.78rem",
+            },
+          }, "Create & pin")
+        ),
+        msg ? h("div", { style: { marginTop: "0.7rem", fontSize: "0.8rem" } }, msg) : null,
+        h("div", { style: { marginTop: "0.85rem", textAlign: "right" } },
+          h("button", {
+            onClick: props.onClose,
+            style: {
+              fontSize: "0.75rem", padding: "0.25rem 0.7rem", border: "1px solid " + BORDER,
+              background: "transparent", color: "inherit", cursor: "pointer", fontFamily: "inherit",
+            },
+          }, "Close"))
+      )
     );
   }
 
@@ -317,7 +495,7 @@
     "What tables do I have?",
     "How many rows are in default.bronze.fr_orders?",
     "Donut chart of amount by customer in default.bronze.sd_orders",
-    "Build a dashboard of row counts per table and amount by customer",
+    "Radar chart comparing amount by customer",
   ];
 
   function AIChatPage() {
@@ -386,8 +564,8 @@
           : null
       ),
       h("p", { style: { fontSize: "0.8rem", opacity: 0.6, margin: "0.2rem 0 0.75rem" } },
-        "Ask about your data — the assistant inspects schemas, runs queries, " +
-          "draws charts and can build dashboards. The conversation is continuable."),
+        "Ask about your data — the assistant inspects schemas, runs queries " +
+          "and draws charts you can pin to a dashboard. The conversation is continuable."),
       h("div", {
           style: {
             flex: 1, overflowY: "auto", display: "flex", flexDirection: "column",
