@@ -1,6 +1,6 @@
 # RAT Example Plugins
 
-Example plugins demonstrating all five runner extension points. Each is a standalone, pip-installable Python package — copy one as a starting point for your own plugin.
+Example plugins for the RAT plugin system. The five **runner** plugins below are standalone, pip-installable Python packages covering all five Layer-1 extension points; [`rat-plugin-event-notifier`](./rat-plugin-event-notifier) is a Go platform plugin covering Layer 2 (platform / gRPC) and Layer 3 (portal UI). Copy any of them as a starting point for your own plugin.
 
 ## Extension Points
 
@@ -53,6 +53,10 @@ derive {amount_eur = amount * 0.92}
 A `http` source connector that fetches JSON from any REST endpoint and returns it as an Arrow table. Stdlib-only. Demonstrates the `rat.sources` extension point.
 
 > **Note:** the runner executor does not yet *invoke* source connectors — there is no pipeline-side mechanism to declare "use source X". This plugin is a protocol-complete example: discoverable and unit-tested, but not yet runnable as part of a pipeline.
+
+### `rat-plugin-event-notifier` — Platform + Portal Plugin (L2 + L3)
+
+A Go ConnectRPC **platform plugin**: it phones home to ratd's open registry, implements `HealthCheck` / `Describe` / `HandleEvent`, subscribes to platform events (`run_completed`, `quality_failed`), and exposes a proxied `/events` route. It also ships a **portal UI bundle** (dashboard widget + sidebar nav item), so it covers Layer 2 *and* Layer 3 in one container. See its [README](./rat-plugin-event-notifier/README.md) — note it is built and run differently from the runner plugins (Docker image, not a pip package).
 
 ## Quick Start
 
