@@ -45,8 +45,9 @@ const configSchemaJSON = `{
     },
     "system_prompt": {
       "type": "string",
+      "format": "markdown",
       "title": "Default system prompt",
-      "description": "Used by /complete when the caller passes no system prompt."
+      "description": "Used by /complete when the caller passes no system prompt. Markdown supported."
     }
   }
 }`

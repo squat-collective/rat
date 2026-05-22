@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Save, Loader2, ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
+import { ConfigCodeField, CODE_FORMATS } from "@/components/config-code-field";
 
 interface JSONSchema {
   type?: string;
@@ -25,6 +26,12 @@ interface JSONSchema {
   description?: string;
   title?: string;
   required?: string[];
+  /**
+   * Editor hint for string fields: "textarea" / "markdown" render a
+   * multi-line text box; a code language ("sql", "python", "yaml") renders
+   * a CodeMirror editor. Omitted → a single-line input.
+   */
+  format?: string;
 }
 
 interface PluginConfigEditorProps {
@@ -238,6 +245,59 @@ function SchemaField({
             ))}
           </SelectContent>
         </Select>
+      </div>
+    );
+  }
+
+  // String with a textarea / markdown format → multi-line text box
+  if (
+    schema.type === "string" &&
+    (schema.format === "textarea" || schema.format === "markdown")
+  ) {
+    const isMarkdown = schema.format === "markdown";
+    return (
+      <div className="space-y-1">
+        <Label htmlFor={fieldId} className="text-[10px] tracking-wider">
+          {label}
+        </Label>
+        {schema.description && (
+          <p className="text-[10px] text-muted-foreground">{schema.description}</p>
+        )}
+        <Textarea
+          id={fieldId}
+          value={(value as string) ?? ""}
+          onChange={(e) => onChange(e.target.value)}
+          className={`text-xs min-h-[110px] ${isMarkdown ? "font-mono" : ""}`}
+        />
+        {isMarkdown && (
+          <p className="text-[10px] text-muted-foreground">Markdown supported.</p>
+        )}
+      </div>
+    );
+  }
+
+  // String with a code-language format → CodeMirror editor
+  if (
+    schema.type === "string" &&
+    schema.format &&
+    CODE_FORMATS.includes(schema.format)
+  ) {
+    return (
+      <div className="space-y-1">
+        <Label className="text-[10px] tracking-wider">
+          {label}{" "}
+          <span className="text-muted-foreground font-normal">
+            ({schema.format})
+          </span>
+        </Label>
+        {schema.description && (
+          <p className="text-[10px] text-muted-foreground">{schema.description}</p>
+        )}
+        <ConfigCodeField
+          value={(value as string) ?? ""}
+          language={schema.format}
+          onChange={onChange}
+        />
       </div>
     );
   }
