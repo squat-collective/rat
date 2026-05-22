@@ -1,6 +1,6 @@
 # RAT Example Plugins
 
-Example plugins for the RAT plugin system. The five **runner** plugins below are standalone, pip-installable Python packages covering all five Layer-1 extension points; [`rat-plugin-event-notifier`](./rat-plugin-event-notifier) is a Go platform plugin covering Layer 2 (platform / gRPC) and Layer 3 (portal UI). Copy any of them as a starting point for your own plugin.
+Example plugins for the RAT plugin system. The five **runner** plugins below are standalone, pip-installable Python packages covering all five Layer-1 extension points; [`rat-plugin-event-notifier`](./rat-plugin-event-notifier) and [`rat-plugin-interconnect`](./rat-plugin-interconnect) are Go platform plugins covering Layer 2 (platform / gRPC) and Layer 3 (portal UI). Copy any of them as a starting point for your own plugin.
 
 ## Extension Points
 
@@ -57,6 +57,10 @@ A `http` source connector that fetches JSON from any REST endpoint and returns i
 ### `rat-plugin-event-notifier` — Platform + Portal Plugin (L2 + L3)
 
 A Go ConnectRPC **platform plugin**: it phones home to ratd's open registry, implements `HealthCheck` / `Describe` / `HandleEvent`, subscribes to platform events (`run_completed`, `quality_failed`), and exposes a proxied `/events` route. It also ships a **portal UI bundle** (dashboard widget + sidebar nav item), so it covers Layer 2 *and* Layer 3 in one container. See its [README](./rat-plugin-event-notifier/README.md) — note it is built and run differently from the runner plugins (Docker image, not a pip package).
+
+### `rat-plugin-interconnect` — Plugin Interconnection (L2 + L3)
+
+A *meta-plugin*: it makes plugin-to-plugin wiring first-class. Plugins register named **capabilities** they offer; any plugin then **invokes a capability by name** and the built-in **broker** routes the call to a healthy provider — no hardcoded plugin names or routes. The portal UI draws the live **plugin mesh** — every plugin, its health, and how capabilities wire them together — and lets you register and invoke capabilities interactively. Build-free portal bundle. See its [README](./rat-plugin-interconnect/README.md).
 
 ## Quick Start
 
