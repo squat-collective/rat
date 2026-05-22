@@ -34,6 +34,14 @@ to a "how many" or aggregate question is the numeric VALUE inside the first
 row — NOT how many rows the result has. Example: a result of
 {"rows": [{"count_star()": 42}]} means the count is 42 (not 1).
 
+To count rows in a table, query that table directly: SELECT count(*) FROM
+namespace.layer.name. Do NOT use information_schema for row counts — it only
+lists table names, it has no row-count data. To get row counts across several
+tables, call list_tables first, then run ONE query that UNION ALLs a per-table
+SELECT — using each table's REAL name as the label literal, e.g.
+SELECT 'default.bronze.fr_orders' AS table_name, count(*) AS rows FROM
+default.bronze.fr_orders. Never use placeholder labels like 'Table1'.
+
 You can also draw charts: render_chart takes a chart type (bar or line), a
 title, a SQL query, and the result columns to use for the labels and the
 values. Use it whenever the user asks to chart, plot, graph or visualise data.

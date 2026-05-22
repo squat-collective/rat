@@ -213,7 +213,7 @@
   var EXAMPLES = [
     "What tables do I have?",
     "How many rows are in default.bronze.fr_orders?",
-    "Show me a bar chart of row counts per table",
+    "Bar chart of amount by name in default.bronze.sd_orders",
   ];
 
   function AIChatPage() {
