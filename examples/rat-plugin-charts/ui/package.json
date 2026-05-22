@@ -1,0 +1,13 @@
+{
+  "name": "rat-plugin-charts-ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portal UI bundle for the RAT charts plugin (Recharts, esbuild)",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.23.0",
+    "recharts": "^2.12.0"
+  }
+}
