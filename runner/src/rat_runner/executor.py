@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -87,8 +87,9 @@ class _PipelineContext:
     branch_created: bool = False
 
     # Set during Phase 1
-    pipeline_type: Literal["python", "sql"] = "sql"
-    source: str = ""  # raw pipeline source code (.py or .sql)
+    # "python", "sql", or the name of a plugin-provided pipeline type.
+    pipeline_type: str = "sql"
+    source: str = ""  # raw pipeline source code (.py, .sql, or plugin type)
     raw_py: str | None = None
     raw_sql: str | None = None
     config: PipelineConfig | None = None
@@ -201,14 +202,35 @@ def _phase1_detect_and_load(ctx: _PipelineContext) -> None:
     ctx.raw_py = _read_versioned(ctx.s3_config, py_key, pv)
     ctx.raw_sql = _read_versioned(ctx.s3_config, sql_key, pv) if ctx.raw_py is None else None
 
-    if ctx.raw_py is None and ctx.raw_sql is None:
-        raise FileNotFoundError(f"Pipeline not found: neither {py_key} nor {sql_key} exist")
+    if ctx.raw_py is not None:
+        ctx.pipeline_type = "python"
+        source: str | None = ctx.raw_py
+    elif ctx.raw_sql is not None:
+        ctx.pipeline_type = "sql"
+        source = ctx.raw_sql
+    else:
+        # No core pipeline file — try plugin-provided pipeline types.
+        # Each plugin type owns a file extension (e.g. pipeline.prql).
+        source = None
+        for type_name in ctx.registry.pipeline_type_names():
+            plugin_type = ctx.registry.get_pipeline_type(type_name)
+            if plugin_type is None:
+                continue
+            ext_key = f"{base_prefix}/pipeline.{plugin_type.file_extension}"
+            plugin_src = _read_versioned(ctx.s3_config, ext_key, pv)
+            if plugin_src is not None:
+                ctx.pipeline_type = type_name
+                source = plugin_src
+                break
+        if source is None:
+            raise FileNotFoundError(
+                f"Pipeline not found: no pipeline.py/.sql and no registered "
+                f"plugin pipeline-type file under {base_prefix}/"
+            )
 
-    ctx.pipeline_type = "python" if ctx.raw_py is not None else "sql"
     ctx.log.info(f"Detected {ctx.pipeline_type} pipeline")
 
     # Load config: merge config.yaml base with annotation overrides
-    source = ctx.raw_py if ctx.raw_py is not None else ctx.raw_sql
     assert source is not None
     ctx.source = source
 
@@ -259,11 +281,33 @@ def _phase2_build_result(ctx: _PipelineContext) -> None:
             ctx.nessie_config,
             ctx.config,
         )
-    else:
+    elif ctx.pipeline_type == "sql":
         ctx.result = _execute_sql_path(ctx)
+    else:
+        ctx.result = _execute_plugin_type_path(ctx)
 
     ctx.row_count = len(ctx.result)
     ctx.log.info(f"Query returned {ctx.row_count} rows")
+
+
+def _execute_plugin_type_path(ctx: _PipelineContext) -> pa.Table:
+    """Execute a pipeline whose type is provided by a runner plugin."""
+    plugin_type = ctx.registry.get_pipeline_type(ctx.pipeline_type)
+    if plugin_type is None:
+        raise RuntimeError(
+            f"No plugin registered for pipeline type '{ctx.pipeline_type}'"
+        )
+    ns, layer, name = ctx.run.namespace, ctx.run.layer, ctx.run.pipeline_name
+    ctx.log.info(f"Executing '{ctx.pipeline_type}' pipeline via plugin")
+    return plugin_type.execute(
+        ctx.source,
+        ns,
+        layer,
+        name,
+        ctx.s3_config,
+        ctx.nessie_config,
+        ctx.config,
+    )
 
 
 def _execute_sql_path(ctx: _PipelineContext) -> pa.Table:

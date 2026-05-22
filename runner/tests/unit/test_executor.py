@@ -1209,3 +1209,59 @@ class TestExecutePipelineConfigMerge:
 
         # Maintenance failure should not prevent SUCCESS
         assert run.status == RunStatus.SUCCESS
+
+
+class TestExecutePipelinePluginType:
+    """Tests for plugin-provided pipeline types (rat.pipeline_types)."""
+
+    @patch(f"{_EXEC_PREFIX}.has_error_failures", return_value=False)
+    @patch(f"{_EXEC_PREFIX}.run_quality_tests", return_value=[])
+    @patch(f"{_EXEC_PREFIX}.delete_branch")
+    @patch(f"{_EXEC_PREFIX}.merge_branch")
+    @patch(f"{_EXEC_PREFIX}.create_branch", return_value="hash123")
+    @patch(f"{_EXEC_PREFIX}.write_iceberg")
+    @patch(f"{_EXEC_PREFIX}.DuckDBEngine")
+    @patch(f"{_EXEC_PREFIX}.read_s3_text")
+    def test_plugin_pipeline_type_detected_and_executed(
+        self,
+        mock_read: MagicMock,
+        mock_engine_cls: MagicMock,
+        mock_write: MagicMock,
+        mock_create: MagicMock,
+        mock_merge: MagicMock,
+        mock_delete: MagicMock,
+        mock_quality: MagicMock,
+        mock_has_fail: MagicMock,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+    ) -> None:
+        """A pipeline.<ext> file is detected and dispatched to the plugin type."""
+        # Only a pipeline.prql file exists — no pipeline.py / pipeline.sql.
+        mock_read.side_effect = lambda cfg, key: (
+            "from data" if key.endswith("pipeline.prql") else None
+        )
+        mock_write.return_value = 1
+
+        # A fake plugin pipeline type that owns the .prql extension.
+        fake_type = MagicMock()
+        fake_type.name = "prql"
+        fake_type.file_extension = "prql"
+        fake_type.execute.return_value = pa.table({"value": [7]})
+
+        registry = MagicMock()
+        registry.get_strategy.return_value = None
+        registry.get_helpers.return_value = {}
+        registry.dispatch_hooks.return_value = None
+        registry.pipeline_type_names.return_value = ["prql"]
+        registry.get_pipeline_type.return_value = fake_type
+
+        run = _make_run()
+        with patch(f"{_EXEC_PREFIX}.PluginRegistry", return_value=registry):
+            execute_pipeline(run, s3_config, nessie_config)
+
+        # The executor looked for the plugin type's file...
+        mock_read.assert_any_call(s3_config, "myns/pipelines/silver/orders/pipeline.prql")
+        # ...and dispatched execution to the plugin, passing the file's contents.
+        fake_type.execute.assert_called_once()
+        assert fake_type.execute.call_args[0][0] == "from data"
+        assert run.status == RunStatus.SUCCESS
