@@ -1,6 +1,7 @@
-// The chart renderer — real Recharts, themed to the RAT portal. ChartView
-// draws a chart spec from a set of rows; LiveChart additionally fetches the
-// rows by re-running the chart's saved query (the "live" behaviour).
+// The chart renderer — real Recharts, themed to the RAT portal and driven by a
+// rich ChartOptions object so the chart builder and the AI assistant can both
+// produce richly-styled charts. ChartView draws from explicit rows; LiveChart
+// fetches the rows by re-running the chart's saved query.
 
 import React from "react";
 import {
@@ -14,28 +15,42 @@ import {
   PieChart,
   Pie,
   Cell,
+  RadarChart,
+  Radar,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   Legend,
+  LabelList,
 } from "recharts";
 import { api } from "./api.js";
 import { C, ErrorText } from "./components.jsx";
 
-// Series palette — plain hex (SVG fill attributes don't resolve CSS vars).
-export const PALETTE = [
-  "#4ade80",
-  "#60a5fa",
-  "#f472b6",
-  "#fbbf24",
-  "#a78bfa",
-  "#22d3ee",
-  "#fb923c",
-  "#34d399",
-];
+// Named colour palettes. seriesColors() resolves a chart's series colours:
+// explicit options.colors win, else the chosen palette (default "rat").
+export const PALETTES = {
+  rat: ["#4ade80", "#22d3ee", "#a78bfa", "#fbbf24", "#f472b6", "#60a5fa"],
+  vivid: ["#6366f1", "#ec4899", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6"],
+  ocean: ["#38bdf8", "#22d3ee", "#2dd4bf", "#60a5fa", "#818cf8", "#0ea5e9"],
+  sunset: ["#fb7185", "#fb923c", "#fbbf24", "#f472b6", "#f87171", "#facc15"],
+  mono: ["#e5e5e5", "#a3a3a3", "#737373", "#525252", "#404040"],
+};
+export const PALETTE_NAMES = Object.keys(PALETTES);
 
-const chartMargin = { top: 8, right: 14, bottom: 4, left: 0 };
+export function seriesColors(options, n) {
+  const opts = options || {};
+  const explicit = opts.colors || [];
+  const pal = PALETTES[opts.palette] || PALETTES.rat;
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(explicit[i] || pal[i % pal.length]);
+  return out;
+}
+
+const chartMargin = { top: 14, right: 16, bottom: 4, left: 0 };
 const axisProps = { tick: { fontSize: 11, fill: "#9a9a9a" }, tickLine: false };
 const tooltipProps = {
   contentStyle: {
@@ -49,6 +64,8 @@ const tooltipProps = {
   itemStyle: { color: C.fg },
   cursor: { fill: "rgba(255,255,255,0.06)" },
 };
+const curveTypes = { smooth: "monotone", linear: "linear", step: "step" };
+const labelProps = { fill: "#aaa", fontSize: 10 };
 
 function toNum(v) {
   if (typeof v === "number") return v;
@@ -74,13 +91,17 @@ function centered(height, text) {
   );
 }
 
-// ChartView draws one chart from an explicit { chart, rows } pair.
+// ChartView draws one chart from an explicit { chart, rows } pair. The chart's
+// `options` (a ChartOptions object) controls colours, type-specific styling,
+// grid/legend/labels, etc.
 export function ChartView(props) {
   const chart = props.chart || {};
+  const opts = chart.options || {};
   const height = props.height || 260;
   const rows = props.rows || [];
   const x = chart.x_column;
   const ys = chart.y_columns && chart.y_columns.length ? chart.y_columns : [];
+  const type = chart.type || "bar";
 
   if (!x || !ys.length) {
     return <ErrorText>chart is missing its x / y columns</ErrorText>;
@@ -98,60 +119,91 @@ export function ChartView(props) {
     return o;
   });
 
-  const type = chart.type || "bar";
-  const grid = <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#2c2c2c" />;
-  const xAxis = (
-    <XAxis
-      dataKey={x}
-      {...axisProps}
-      axisLine={{ stroke: "#333" }}
-      interval="preserveStartEnd"
-      minTickGap={14}
-    />
-  );
-  const yAxis = <YAxis {...axisProps} axisLine={false} width={46} />;
-  const legend = ys.length > 1 ? <Legend wrapperStyle={{ fontSize: "0.72rem" }} /> : null;
+  const colors = seriesColors(opts, Math.max(ys.length, type === "pie" ? data.length : 0));
+  const curve = curveTypes[opts.curve] || "monotone";
+  const showGrid = !opts.hide_grid;
+  const showLegend = !opts.hide_legend;
+  const stackId = opts.stacked ? "stack" : undefined;
+  const grid = showGrid ? (
+    <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#2c2c2c" />
+  ) : null;
+  const multiLegend = showLegend && ys.length > 1
+    ? <Legend wrapperStyle={{ fontSize: "0.72rem" }} />
+    : null;
 
   let inner;
+
   if (type === "pie") {
+    const outer = Math.max(54, height * 0.36);
+    const innerR = opts.inner_radius ? (opts.inner_radius / 100) * outer : 0;
     inner = (
       <PieChart>
         <Tooltip {...tooltipProps} />
-        <Legend wrapperStyle={{ fontSize: "0.72rem" }} />
+        {showLegend ? <Legend wrapperStyle={{ fontSize: "0.72rem" }} /> : null}
         <Pie
           data={data}
           dataKey={ys[0]}
           nameKey={x}
           cx="50%"
           cy="50%"
-          outerRadius={Math.max(54, height * 0.34)}
+          innerRadius={innerR}
+          outerRadius={outer}
+          stroke={C.bg}
           isAnimationActive={false}
-          label={(e) => e.name}
+          label={(e) => (opts.show_labels ? e.name + ": " + e.value : e.name)}
         >
           {data.map((_, i) => (
-            <Cell key={i} fill={PALETTE[i % PALETTE.length]} />
+            <Cell key={i} fill={colors[i % colors.length]} />
           ))}
         </Pie>
       </PieChart>
+    );
+  } else if (type === "radar") {
+    inner = (
+      <RadarChart data={data}>
+        {showGrid ? <PolarGrid stroke="#2c2c2c" /> : null}
+        <PolarAngleAxis dataKey={x} tick={{ fontSize: 11, fill: "#9a9a9a" }} />
+        <PolarRadiusAxis tick={{ fontSize: 10, fill: "#6a6a6a" }} />
+        <Tooltip {...tooltipProps} />
+        {multiLegend}
+        {ys.map((y, i) => (
+          <Radar
+            key={y}
+            dataKey={y}
+            stroke={colors[i]}
+            fill={colors[i]}
+            fillOpacity={0.45}
+            isAnimationActive={false}
+          />
+        ))}
+      </RadarChart>
     );
   } else if (type === "line") {
     inner = (
       <LineChart data={data} margin={chartMargin}>
         {grid}
-        {xAxis}
-        {yAxis}
+        <XAxis
+          dataKey={x}
+          {...axisProps}
+          axisLine={{ stroke: "#333" }}
+          interval="preserveStartEnd"
+          minTickGap={14}
+        />
+        <YAxis {...axisProps} axisLine={false} width={46} />
         <Tooltip {...tooltipProps} />
-        {legend}
+        {multiLegend}
         {ys.map((y, i) => (
           <Line
             key={y}
-            type="monotone"
+            type={curve}
             dataKey={y}
-            stroke={PALETTE[i % PALETTE.length]}
+            stroke={colors[i]}
             strokeWidth={2}
-            dot={false}
+            dot={!!opts.dots}
             isAnimationActive={false}
-          />
+          >
+            {opts.show_labels ? <LabelList dataKey={y} position="top" {...labelProps} /> : null}
+          </Line>
         ))}
       </LineChart>
     );
@@ -159,40 +211,80 @@ export function ChartView(props) {
     inner = (
       <AreaChart data={data} margin={chartMargin}>
         {grid}
-        {xAxis}
-        {yAxis}
+        <XAxis
+          dataKey={x}
+          {...axisProps}
+          axisLine={{ stroke: "#333" }}
+          interval="preserveStartEnd"
+          minTickGap={14}
+        />
+        <YAxis {...axisProps} axisLine={false} width={46} />
         <Tooltip {...tooltipProps} />
-        {legend}
+        {multiLegend}
         {ys.map((y, i) => (
           <Area
             key={y}
-            type="monotone"
+            type={curve}
             dataKey={y}
-            stroke={PALETTE[i % PALETTE.length]}
-            fill={PALETTE[i % PALETTE.length]}
-            fillOpacity={0.18}
+            stroke={colors[i]}
+            fill={colors[i]}
+            fillOpacity={0.22}
             strokeWidth={2}
+            stackId={stackId}
             isAnimationActive={false}
-          />
+          >
+            {opts.show_labels ? <LabelList dataKey={y} position="top" {...labelProps} /> : null}
+          </Area>
         ))}
       </AreaChart>
     );
   } else {
+    // bar (default)
+    const horiz = !!opts.horizontal;
+    const r = opts.bar_radius || 0;
+    const radius = horiz ? [0, r, r, 0] : [r, r, 0, 0];
     inner = (
-      <BarChart data={data} margin={chartMargin}>
-        {grid}
-        {xAxis}
-        {yAxis}
+      <BarChart data={data} margin={chartMargin} layout={horiz ? "vertical" : "horizontal"}>
+        {showGrid ? (
+          <CartesianGrid
+            vertical={horiz}
+            horizontal={!horiz}
+            strokeDasharray="3 3"
+            stroke="#2c2c2c"
+          />
+        ) : null}
+        {horiz ? (
+          <XAxis type="number" {...axisProps} axisLine={{ stroke: "#333" }} />
+        ) : (
+          <XAxis
+            type="category"
+            dataKey={x}
+            {...axisProps}
+            axisLine={{ stroke: "#333" }}
+            interval="preserveStartEnd"
+            minTickGap={10}
+          />
+        )}
+        {horiz ? (
+          <YAxis type="category" dataKey={x} {...axisProps} axisLine={false} width={104} />
+        ) : (
+          <YAxis type="number" {...axisProps} axisLine={false} width={46} />
+        )}
         <Tooltip {...tooltipProps} />
-        {legend}
+        {multiLegend}
         {ys.map((y, i) => (
           <Bar
             key={y}
             dataKey={y}
-            fill={PALETTE[i % PALETTE.length]}
-            radius={[2, 2, 0, 0]}
+            fill={colors[i]}
+            radius={radius}
+            stackId={stackId}
             isAnimationActive={false}
-          />
+          >
+            {opts.show_labels ? (
+              <LabelList dataKey={y} position={horiz ? "right" : "top"} {...labelProps} />
+            ) : null}
+          </Bar>
         ))}
       </BarChart>
     );

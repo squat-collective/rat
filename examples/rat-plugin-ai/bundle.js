@@ -128,14 +128,26 @@
   }
 
   // ── Charts ───────────────────────────────────────────────────────
+  // The in-chat preview draws the first series build-free. The full,
+  // multi-series, fully-styled chart lives in the charts plugin.
+  var SLICE_COLORS = ["#4ade80", "#22d3ee", "#a78bfa", "#fbbf24", "#f472b6", "#60a5fa"];
+
   function Chart(props) {
     var spec = props.spec;
     var values = spec.values || [];
     var labels = spec.labels || [];
+    var color = spec.color || ACCENT;
+    var body;
+    if (spec.type === "pie") body = pieChart(labels, values);
+    else if (spec.type === "line") body = lineChart(labels, values, color);
+    else if (spec.type === "area") body = areaChart(labels, values, color);
+    else if (spec.type === "bar") body = barChart(labels, values, color);
+    else body = h("div", { style: { fontSize: "0.72rem", opacity: 0.6, padding: "0.4rem 0" } },
+      "open in Dashboards to view this " + (spec.type || "chart") + " chart");
     return h("div", { className: "brutal-card", style: { padding: "0.75rem", marginTop: "0.5rem" } },
       h("div", { style: { fontWeight: "bold", fontSize: "0.78rem", marginBottom: "0.5rem" } },
         spec.title || "Chart"),
-      spec.type === "line" ? lineChart(labels, values) : barChart(labels, values),
+      body,
       // When the charts plugin saved this chart, link to the Dashboards page.
       spec.chart_id
         ? h("div", { style: { marginTop: "0.45rem", fontSize: "0.68rem" } },
@@ -147,7 +159,7 @@
     );
   }
 
-  function barChart(labels, values) {
+  function barChart(labels, values, color) {
     var max = Math.max.apply(null, values.concat([0]));
     return h("div", { style: { display: "flex", flexDirection: "column", gap: "0.25rem" } },
       values.map(function (v, i) {
@@ -164,10 +176,7 @@
           }, String(labels[i])),
           h("div", { style: { flex: 1, background: "rgba(255,255,255,0.06)" } },
             h("div", {
-              style: {
-                width: pct + "%", minWidth: "2px", height: "1.05rem",
-                background: ACCENT,
-              },
+              style: { width: pct + "%", minWidth: "2px", height: "1.05rem", background: color },
             })),
           h("div", { style: { width: "3.6rem", fontFamily: "monospace" } }, fmtNum(v))
         );
@@ -175,26 +184,99 @@
     );
   }
 
-  function lineChart(labels, values) {
-    var W = 480, H = 150, pad = 26;
+  // linePoints computes the SVG geometry shared by the line and area previews.
+  function linePoints(values, W, H, pad) {
     var n = values.length;
     var max = Math.max.apply(null, values.concat([0]));
     var min = Math.min.apply(null, values.concat([0]));
     var span = (max - min) || 1;
     function px(i) { return pad + (n <= 1 ? (W - 2 * pad) / 2 : (i / (n - 1)) * (W - 2 * pad)); }
     function py(v) { return H - pad - ((v - min) / span) * (H - 2 * pad); }
-    var pts = values.map(function (v, i) { return px(i) + "," + py(v); }).join(" ");
-    return h("svg", { viewBox: "0 0 " + W + " " + H, style: { width: "100%", height: "auto" } },
-      h("polyline", { points: pts, fill: "none", stroke: ACCENT, strokeWidth: 2 }),
-      values.map(function (v, i) {
-        return h("circle", { key: i, cx: px(i), cy: py(v), r: 3, fill: ACCENT });
-      }),
-      h("text", { x: 2, y: pad - 4, fontSize: 9, fill: "currentColor", opacity: 0.55 }, fmtNum(max)),
-      h("text", { x: pad, y: H - 8, fontSize: 9, fill: "currentColor", opacity: 0.55 },
+    return { px: px, py: py, max: max };
+  }
+
+  function axisText(max, labels, n, W, H, pad) {
+    return [
+      h("text", { key: "m", x: 2, y: pad - 4, fontSize: 9, fill: "currentColor", opacity: 0.55 },
+        fmtNum(max)),
+      h("text", { key: "l0", x: pad, y: H - 8, fontSize: 9, fill: "currentColor", opacity: 0.55 },
         truncate(String(labels[0] || ""), 16)),
       n > 1 ? h("text", {
-        x: W - pad, y: H - 8, fontSize: 9, fill: "currentColor", opacity: 0.55, textAnchor: "end",
-      }, truncate(String(labels[n - 1] || ""), 16)) : null
+        key: "l1", x: W - pad, y: H - 8, fontSize: 9,
+        fill: "currentColor", opacity: 0.55, textAnchor: "end",
+      }, truncate(String(labels[n - 1] || ""), 16)) : null,
+    ];
+  }
+
+  function lineChart(labels, values, color) {
+    var W = 480, H = 150, pad = 26, n = values.length;
+    var g = linePoints(values, W, H, pad);
+    var pts = values.map(function (v, i) { return g.px(i) + "," + g.py(v); }).join(" ");
+    return h("svg", { viewBox: "0 0 " + W + " " + H, style: { width: "100%", height: "auto" } },
+      h("polyline", { points: pts, fill: "none", stroke: color, strokeWidth: 2 }),
+      values.map(function (v, i) {
+        return h("circle", { key: i, cx: g.px(i), cy: g.py(v), r: 3, fill: color });
+      }),
+      axisText(g.max, labels, n, W, H, pad)
+    );
+  }
+
+  function areaChart(labels, values, color) {
+    var W = 480, H = 150, pad = 26, n = values.length;
+    var g = linePoints(values, W, H, pad);
+    var line = values.map(function (v, i) { return g.px(i) + "," + g.py(v); }).join(" ");
+    var poly = g.px(0) + "," + (H - pad) + " " + line + " " + g.px(n - 1) + "," + (H - pad);
+    return h("svg", { viewBox: "0 0 " + W + " " + H, style: { width: "100%", height: "auto" } },
+      h("polygon", { points: poly, fill: color, fillOpacity: 0.22, stroke: "none" }),
+      h("polyline", { points: line, fill: "none", stroke: color, strokeWidth: 2 }),
+      axisText(g.max, labels, n, W, H, pad)
+    );
+  }
+
+  function pieChart(labels, values) {
+    var total = 0;
+    values.forEach(function (v) { if (v > 0) total += v; });
+    if (total <= 0) {
+      return h("div", { style: { fontSize: "0.72rem", opacity: 0.6 } },
+        "no positive values to chart");
+    }
+    var R = 70, CX = 80, CY = 80, angle = -Math.PI / 2;
+    var slices = values.map(function (v, i) {
+      var frac = (v > 0 ? v : 0) / total;
+      var a0 = angle, a1 = angle + frac * 2 * Math.PI;
+      angle = a1;
+      var large = a1 - a0 > Math.PI ? 1 : 0;
+      var d = "M " + CX + " " + CY +
+        " L " + (CX + R * Math.cos(a0)) + " " + (CY + R * Math.sin(a0)) +
+        " A " + R + " " + R + " 0 " + large + " 1 " +
+        (CX + R * Math.cos(a1)) + " " + (CY + R * Math.sin(a1)) + " Z";
+      return h("path", {
+        key: i, d: d, fill: SLICE_COLORS[i % SLICE_COLORS.length],
+        stroke: "#0a0a0a", strokeWidth: 1,
+      });
+    });
+    var legend = h("div", {
+        style: { display: "flex", flexWrap: "wrap", gap: "0.15rem 0.7rem", marginTop: "0.35rem" },
+      },
+      values.map(function (v, i) {
+        return h("div", {
+            key: i,
+            style: { display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.68rem" },
+          },
+          h("span", { style: {
+            width: "0.6rem", height: "0.6rem", display: "inline-block",
+            background: SLICE_COLORS[i % SLICE_COLORS.length],
+          } }),
+          truncate(String(labels[i]), 18) + " (" + fmtNum(v) + ")"
+        );
+      })
+    );
+    return h("div", null,
+      h("svg", {
+        viewBox: "0 0 160 160",
+        style: { width: "160px", height: "160px", display: "block" },
+      }, slices),
+      legend
     );
   }
 
@@ -234,7 +316,7 @@
   var EXAMPLES = [
     "What tables do I have?",
     "How many rows are in default.bronze.fr_orders?",
-    "Bar chart of amount by name in default.bronze.sd_orders",
+    "Donut chart of amount by customer in default.bronze.sd_orders",
     "Build a dashboard of row counts per table and amount by customer",
   ];
 

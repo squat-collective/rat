@@ -14,15 +14,33 @@ import (
 // The query is re-run against ratd every time the chart is viewed, so every
 // dashboard and report built from charts always reflects current data.
 
+// ChartOptions controls how a chart is drawn. Every field is optional — the
+// renderer applies sensible defaults for the zero value — so the same struct is
+// convenient for both the chart builder UI and the AI assistant.
+type ChartOptions struct {
+	Palette     string   `json:"palette,omitempty"`      // named palette: rat|vivid|ocean|sunset|mono
+	Colors      []string `json:"colors,omitempty"`       // explicit per-series colours; overrides palette
+	Stacked     bool     `json:"stacked,omitempty"`      // stack series (bar, area)
+	Curve       string   `json:"curve,omitempty"`        // smooth|linear|step (line, area)
+	Dots        bool     `json:"dots,omitempty"`         // show point markers (line)
+	HideGrid    bool     `json:"hide_grid,omitempty"`    // hide the background grid
+	HideLegend  bool     `json:"hide_legend,omitempty"`  // hide the series legend
+	ShowLabels  bool     `json:"show_labels,omitempty"`  // draw value labels on the chart
+	Horizontal  bool     `json:"horizontal,omitempty"`   // horizontal bars
+	BarRadius   int      `json:"bar_radius,omitempty"`   // bar corner radius, 0–16
+	InnerRadius int      `json:"inner_radius,omitempty"` // pie donut hole %, 0–80
+}
+
 // Chart is a saved, live chart definition.
 type Chart struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	Type      string    `json:"type"` // bar | line | area | pie
-	SQL       string    `json:"sql"`
-	XColumn   string    `json:"x_column"`  // category / x-axis result column
-	YColumns  []string  `json:"y_columns"` // numeric series result column(s)
-	CreatedAt time.Time `json:"created_at"`
+	ID        string       `json:"id"`
+	Title     string       `json:"title"`
+	Type      string       `json:"type"` // bar | line | area | pie | radar
+	SQL       string       `json:"sql"`
+	XColumn   string       `json:"x_column"`  // category / x-axis result column
+	YColumns  []string     `json:"y_columns"` // numeric series result column(s)
+	Options   ChartOptions `json:"options"`   // appearance options
+	CreatedAt time.Time    `json:"created_at"`
 }
 
 // Widget places a chart on a dashboard's modular grid.

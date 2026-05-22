@@ -45,17 +45,29 @@ var (
 
 	specRenderChart = toolDef{Type: "function", Function: functionSchema{
 		Name: "render_chart",
-		Description: "Draw a bar or line chart from a SQL query, show it to the user, and " +
-			"save it to the Dashboards plugin. Provide the chart type, a title, a SELECT " +
-			"query, and which result columns hold the category labels and the numeric " +
-			"values. Returns a chart_id you can pass to save_dashboard.",
+		Description: "Draw a chart from a SQL query, show it to the user, and save it to the " +
+			"Dashboards plugin. Choose the chart type and styling. value_columns may list " +
+			"several numeric columns to plot multiple series. Returns a chart_id you can " +
+			"pass to save_dashboard.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
-			`"chart_type":{"type":"string","enum":["bar","line"]},` +
+			`"chart_type":{"type":"string","enum":["bar","line","area","pie","donut","radar"],` +
+			`"description":"donut is a pie with a hole"},` +
 			`"title":{"type":"string"},` +
-			`"sql":{"type":"string","description":"a SELECT returning a label column and a numeric value column"},` +
-			`"label_column":{"type":"string","description":"result column for the x-axis labels"},` +
-			`"value_column":{"type":"string","description":"result column for the numeric y values"}},` +
-			`"required":["chart_type","title","sql","label_column","value_column"]}`),
+			`"sql":{"type":"string","description":"a SELECT returning a label column and one or more numeric value columns"},` +
+			`"label_column":{"type":"string","description":"result column for the category / x-axis labels"},` +
+			`"value_columns":{"type":"array","items":{"type":"string"},"description":"one or more numeric result columns to plot as series"},` +
+			`"options":{"type":"object","description":"optional chart styling","properties":{` +
+			`"palette":{"type":"string","enum":["rat","vivid","ocean","sunset","mono"]},` +
+			`"colors":{"type":"array","items":{"type":"string"},"description":"explicit hex colour per series, e.g. #4ade80"},` +
+			`"stacked":{"type":"boolean","description":"stack series (bar, area)"},` +
+			`"curve":{"type":"string","enum":["smooth","linear","step"],"description":"line/area curve style"},` +
+			`"dots":{"type":"boolean","description":"show point markers on a line"},` +
+			`"horizontal":{"type":"boolean","description":"horizontal bars"},` +
+			`"bar_radius":{"type":"integer","description":"bar corner radius, 0-16"},` +
+			`"inner_radius":{"type":"integer","description":"pie donut hole percent, 0-80"},` +
+			`"show_labels":{"type":"boolean","description":"draw value labels on the chart"},` +
+			`"hide_grid":{"type":"boolean"},"hide_legend":{"type":"boolean"}}}},` +
+			`"required":["chart_type","title","sql","label_column","value_columns"]}`),
 	}}
 
 	specSaveDashboard = toolDef{Type: "function", Function: functionSchema{
@@ -101,15 +113,23 @@ var (
 	}
 )
 
-// chartSpec is a chart the model asked to render — returned to the UI. When the
-// charts plugin is reachable the chart is also persisted there and ChartID is
-// set, so the UI can link to it in the Dashboards page.
+// chartSpec is a chart the model asked to render — returned to the UI for the
+// in-chat preview. It carries the first series only; the full multi-series,
+// fully-styled chart lives in the charts plugin (ChartID). When that plugin is
+// reachable ChartID is set so the UI can link to the Dashboards page.
 type chartSpec struct {
-	Type    string    `json:"type"` // "bar" | "line"
+	Type    string    `json:"type"` // bar | line | area | pie | radar
 	Title   string    `json:"title"`
 	Labels  []string  `json:"labels"`
 	Values  []float64 `json:"values"`
+	Color   string    `json:"color,omitempty"` // resolved primary colour for the preview
 	ChartID string    `json:"chart_id,omitempty"`
+}
+
+// aiChartTypes are the chart types render_chart accepts (mirrors the charts
+// plugin). An unknown type falls back to "bar".
+var aiChartTypes = map[string]bool{
+	"bar": true, "line": true, "area": true, "pie": true, "radar": true,
 }
 
 // dataTools executes the leaf tool calls by calling back into ratd.
@@ -172,24 +192,41 @@ func (t *dataTools) execute(ctx context.Context, name, argsJSON string) (string,
 	}
 }
 
-// renderChart runs the chart's SQL, shapes the result into a chartSpec for the
-// UI, and returns the data to the model so it can describe the chart.
+// renderChart runs the chart's SQL, builds a chartSpec for the in-chat preview,
+// and registers the full chart with the charts plugin. The options object is
+// forwarded verbatim so the model can fully style the chart.
 func (t *dataTools) renderChart(ctx context.Context, argsJSON string) (string, *chartSpec) {
 	var a struct {
-		ChartType   string `json:"chart_type"`
-		Title       string `json:"title"`
-		SQL         string `json:"sql"`
-		LabelColumn string `json:"label_column"`
-		ValueColumn string `json:"value_column"`
+		ChartType    string          `json:"chart_type"`
+		Title        string          `json:"title"`
+		SQL          string          `json:"sql"`
+		LabelColumn  string          `json:"label_column"`
+		ValueColumns []string        `json:"value_columns"`
+		ValueColumn  string          `json:"value_column"` // tolerated singular form
+		Options      json.RawMessage `json:"options"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &a); err != nil {
 		return toolError(err), nil
 	}
-	if strings.TrimSpace(a.SQL) == "" || a.LabelColumn == "" || a.ValueColumn == "" {
-		return `{"error":"render_chart requires sql, label_column and value_column"}`, nil
+	yCols := cleanCols(a.ValueColumns)
+	if len(yCols) == 0 && strings.TrimSpace(a.ValueColumn) != "" {
+		yCols = []string{strings.TrimSpace(a.ValueColumn)}
+	}
+	if strings.TrimSpace(a.SQL) == "" || strings.TrimSpace(a.LabelColumn) == "" || len(yCols) == 0 {
+		return `{"error":"render_chart requires sql, label_column and value_columns"}`, nil
+	}
+	ctype := strings.ToLower(strings.TrimSpace(a.ChartType))
+	if ctype == "donut" {
+		// "donut" is just a pie with a hole — a term users and models reach
+		// for. Map it to pie and ensure there is a donut hole.
+		ctype = "pie"
+		a.Options = ensureDonut(a.Options)
+	}
+	if !aiChartTypes[ctype] {
+		ctype = "bar"
 	}
 
-	raw := t.post(ctx, "/api/v1/query", map[string]any{"sql": a.SQL, "limit": 50})
+	raw := t.post(ctx, "/api/v1/query", map[string]any{"sql": a.SQL, "limit": 100})
 	var resp struct {
 		Rows  []map[string]any `json:"rows"`
 		Error string           `json:"error"`
@@ -200,31 +237,31 @@ func (t *dataTools) renderChart(ctx context.Context, argsJSON string) (string, *
 	if resp.Error != "" {
 		return raw, nil
 	}
-
-	spec := &chartSpec{Type: "bar", Title: a.Title}
-	if a.ChartType == "line" {
-		spec.Type = "line"
+	if len(resp.Rows) == 0 {
+		return `{"error":"the chart query returned no rows"}`, nil
 	}
+
+	// The chartSpec carries the first series only — enough for the in-chat
+	// preview. The full multi-series, styled chart is registered with the
+	// charts plugin below.
+	spec := &chartSpec{Type: ctype, Title: a.Title, Color: optionColor(a.Options)}
 	for _, row := range resp.Rows {
 		lv, hasL := row[a.LabelColumn]
-		vv, hasV := row[a.ValueColumn]
+		vv, hasV := row[yCols[0]]
 		if !hasL || !hasV {
 			return fmt.Sprintf(`{"error":"columns %q / %q are not both in the query result"}`,
-				a.LabelColumn, a.ValueColumn), nil
+				a.LabelColumn, yCols[0]), nil
 		}
 		spec.Labels = append(spec.Labels, fmt.Sprint(lv))
 		f, _ := vv.(float64) // JSON numbers decode to float64
 		spec.Values = append(spec.Values, f)
-	}
-	if len(spec.Values) == 0 {
-		return `{"error":"the chart query returned no rows"}`, nil
 	}
 
 	// Persist the chart in the charts ("Dashboards") plugin so it survives the
 	// chat and can be put on a dashboard. If that plugin is not installed the
 	// chart still renders inline in the chat — ChartID is simply left empty.
 	note := "shown in the chat only — the Dashboards plugin is not available"
-	if id, err := t.registerChart(ctx, a.Title, spec.Type, a.SQL, a.LabelColumn, a.ValueColumn); err == nil {
+	if id, err := t.registerChart(ctx, a.Title, ctype, a.SQL, a.LabelColumn, yCols, a.Options); err == nil {
 		spec.ChartID = id
 		note = "saved to the Dashboards plugin — pass this chart_id to save_dashboard to put it on a dashboard"
 	}
@@ -232,26 +269,89 @@ func (t *dataTools) renderChart(ctx context.Context, argsJSON string) (string, *
 	summary, _ := json.Marshal(map[string]any{
 		"status":   "chart rendered for the user",
 		"chart_id": spec.ChartID,
-		"type":     spec.Type,
-		"title":    spec.Title,
-		"labels":   spec.Labels,
-		"values":   spec.Values,
+		"type":     ctype,
+		"title":    a.Title,
+		"series":   yCols,
+		"rows":     len(resp.Rows),
 		"note":     note,
 	})
 	return string(summary), spec
 }
 
+// cleanCols trims and drops empty entries from a column-name slice.
+func cleanCols(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// optionColor pulls a representative colour from a raw render_chart options
+// object — used for the in-chat preview, which draws a single series.
+func optionColor(raw json.RawMessage) string {
+	const fallback = "#4ade80"
+	if len(raw) == 0 {
+		return fallback
+	}
+	var o struct {
+		Palette string   `json:"palette"`
+		Colors  []string `json:"colors"`
+	}
+	if err := json.Unmarshal(raw, &o); err != nil {
+		return fallback
+	}
+	if len(o.Colors) > 0 && strings.TrimSpace(o.Colors[0]) != "" {
+		return strings.TrimSpace(o.Colors[0])
+	}
+	switch o.Palette {
+	case "vivid":
+		return "#6366f1"
+	case "ocean":
+		return "#38bdf8"
+	case "sunset":
+		return "#fb7185"
+	case "mono":
+		return "#e5e5e5"
+	default:
+		return fallback
+	}
+}
+
+// ensureDonut guarantees a pie chart has a donut hole — used when the model
+// asks for a "donut" but leaves inner_radius unset.
+func ensureDonut(raw json.RawMessage) json.RawMessage {
+	m := map[string]any{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &m)
+	}
+	if v, ok := m["inner_radius"]; !ok || v == nil || v == float64(0) {
+		m["inner_radius"] = 55
+	}
+	out, _ := json.Marshal(m)
+	return out
+}
+
 // registerChart saves a chart in the charts plugin (proxied by ratd at
-// /api/v1/x/charts) so it persists in the portal's Dashboards page. It returns
-// the new chart's ID, or an error if the charts plugin is not reachable.
-func (t *dataTools) registerChart(ctx context.Context, title, ctype, sql, labelCol, valueCol string) (string, error) {
-	raw := t.post(ctx, "/api/v1/x/charts/charts", map[string]any{
+// /api/v1/x/charts) so it persists in the portal's Dashboards page. The options
+// object is forwarded verbatim. It returns the new chart's ID, or an error if
+// the charts plugin is not reachable.
+func (t *dataTools) registerChart(
+	ctx context.Context, title, ctype, sql, labelCol string, yCols []string, options json.RawMessage,
+) (string, error) {
+	body := map[string]any{
 		"title":     title,
 		"type":      ctype,
 		"sql":       sql,
 		"x_column":  labelCol,
-		"y_columns": []string{valueCol},
-	})
+		"y_columns": yCols,
+	}
+	if len(options) > 0 {
+		body["options"] = options
+	}
+	raw := t.post(ctx, "/api/v1/x/charts/charts", body)
 	var resp struct {
 		ID    string `json:"id"`
 		Error string `json:"error"`

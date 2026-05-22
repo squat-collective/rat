@@ -20,7 +20,9 @@ func newAPI(s *store, rc *ratdClient) *api {
 	return &api{store: s, ratd: rc}
 }
 
-var chartTypes = map[string]bool{"bar": true, "line": true, "area": true, "pie": true}
+var chartTypes = map[string]bool{
+	"bar": true, "line": true, "area": true, "pie": true, "radar": true,
+}
 
 // mux wires every REST route. Go 1.22+ ServeMux supports method + {id}
 // patterns, which keeps the routing table flat and readable.
@@ -60,11 +62,12 @@ func (a *api) mux() *http.ServeMux {
 // ── Charts ────────────────────────────────────────────────────────
 
 type chartInput struct {
-	Title    string   `json:"title"`
-	Type     string   `json:"type"`
-	SQL      string   `json:"sql"`
-	XColumn  string   `json:"x_column"`
-	YColumns []string `json:"y_columns"`
+	Title    string       `json:"title"`
+	Type     string       `json:"type"`
+	SQL      string       `json:"sql"`
+	XColumn  string       `json:"x_column"`
+	YColumns []string     `json:"y_columns"`
+	Options  ChartOptions `json:"options"`
 }
 
 func (a *api) createChart(w http.ResponseWriter, r *http.Request) {
@@ -92,6 +95,7 @@ func (a *api) createChart(w http.ResponseWriter, r *http.Request) {
 	c := a.store.createChart(&Chart{
 		Title: in.Title, Type: in.Type, SQL: in.SQL,
 		XColumn: in.XColumn, YColumns: ys,
+		Options: normalizeOptions(in.Options),
 	})
 	writeJSON(w, http.StatusCreated, c)
 }
@@ -352,6 +356,14 @@ func clamp(v, lo, hi int) int {
 		return hi
 	}
 	return v
+}
+
+// normalizeOptions clamps the numeric appearance options to sane ranges. The
+// renderer tolerates any palette/curve string, so those need no validation.
+func normalizeOptions(o ChartOptions) ChartOptions {
+	o.BarRadius = clamp(o.BarRadius, 0, 16)
+	o.InnerRadius = clamp(o.InnerRadius, 0, 80)
+	return o
 }
 
 // cleanStrings trims and drops empty entries from a string slice.

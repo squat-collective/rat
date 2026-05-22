@@ -77,9 +77,16 @@ Work through the request:
    the chart_id values from every render_chart call. It returns a url; give it
    to the user as a markdown link, e.g. [Open the dashboard](/x/charts/d/...).
 
-render_chart needs a chart type (bar or line), a title, a SQL query, and which
-result columns are the labels and the values. Tables are namespace.layer.name
-(layers: bronze, silver, gold).
+render_chart takes: chart_type (bar, line, area, pie or radar), a title, a SQL
+query, label_column, and value_columns — one or more numeric columns; list
+several to plot multiple series. It also takes an optional "options" object to
+style the chart: a palette (rat, vivid, ocean, sunset, mono) or explicit colors
+(hex per series), plus stacked, curve (smooth/linear/step), dots, horizontal,
+bar_radius, inner_radius (makes a donut), show_labels, hide_grid, hide_legend.
+Pick the chart type and styling that best suit the data — e.g. pie or a donut
+for shares of a whole, line or area for trends over time, radar to compare
+entities across several metrics, stacked bars for parts of a total. Tables are
+namespace.layer.name (layers: bronze, silver, gold).
 
 To chart row counts across all tables: list_tables first, then UNION ALL — per
 table — a SELECT '<real table name>' AS table_name, count(*) AS rows FROM

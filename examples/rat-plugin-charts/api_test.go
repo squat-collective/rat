@@ -52,6 +52,29 @@ func TestCreateChartRejectsBadType(t *testing.T) {
 	}
 }
 
+func TestCreateChartStoresAndClampsOptions(t *testing.T) {
+	_, mux := newTestAPI(t)
+	rec := do(t, mux, "POST", "/charts",
+		`{"title":"Styled","type":"radar","sql":"SELECT a,b FROM t","x_column":"a","y_columns":["b"],`+
+			`"options":{"palette":"ocean","stacked":true,"curve":"step","bar_radius":99,"inner_radius":-5}}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 (radar is a valid type), got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var c Chart
+	if err := json.Unmarshal(rec.Body.Bytes(), &c); err != nil {
+		t.Fatalf("decode chart: %v", err)
+	}
+	if c.Options.Palette != "ocean" || !c.Options.Stacked || c.Options.Curve != "step" {
+		t.Errorf("options not stored: %+v", c.Options)
+	}
+	if c.Options.BarRadius != 16 {
+		t.Errorf("bar_radius should clamp to 16, got %d", c.Options.BarRadius)
+	}
+	if c.Options.InnerRadius != 0 {
+		t.Errorf("inner_radius should clamp to 0, got %d", c.Options.InnerRadius)
+	}
+}
+
 func TestCreateAndListCharts(t *testing.T) {
 	_, mux := newTestAPI(t)
 	rec := do(t, mux, "POST", "/charts",

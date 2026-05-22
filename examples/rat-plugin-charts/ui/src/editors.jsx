@@ -3,7 +3,7 @@
 
 import React from "react";
 import { api } from "./api.js";
-import { ChartView } from "./chart.jsx";
+import { ChartView, seriesColors, PALETTE_NAMES } from "./chart.jsx";
 import {
   C,
   Modal,
@@ -25,6 +25,177 @@ const labelStyle = {
   marginBottom: "0.25rem",
 };
 
+const subLabel = {
+  fontSize: "0.62rem",
+  fontWeight: 700,
+  letterSpacing: "0.05em",
+  textTransform: "uppercase",
+  color: C.muted,
+  marginBottom: "0.2rem",
+};
+
+// Toggle is a labelled checkbox used by the appearance controls.
+function Toggle(props) {
+  return (
+    <label
+      style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.78rem" }}
+    >
+      <input
+        type="checkbox"
+        checked={!!props.checked}
+        onChange={(e) => props.onChange(e.target.checked)}
+      />
+      {props.label}
+    </label>
+  );
+}
+
+// ChartAppearance is the appearance/options panel of the chart editor. It shows
+// only the controls relevant to the selected chart type and edits a
+// ChartOptions object in place.
+function ChartAppearance(props) {
+  const { type, ys, options } = props;
+  const opts = options || {};
+  const multi = ys.length > 1;
+
+  function set(key, val) {
+    props.onChange({ ...opts, [key]: val });
+  }
+  function setColor(i, hex) {
+    const colors = (opts.colors || []).slice();
+    colors[i] = hex;
+    props.onChange({ ...opts, colors: colors });
+  }
+  const resolved = seriesColors(opts, Math.max(1, ys.length));
+
+  return (
+    <div style={{ border: "1px solid " + C.border, padding: "0.65rem", marginTop: "0.6rem" }}>
+      <div style={labelStyle}>Appearance</div>
+
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "0.8rem 1.3rem",
+          alignItems: "flex-end",
+        }}
+      >
+        <div>
+          <div style={subLabel}>Palette</div>
+          <Select
+            value={opts.palette || "rat"}
+            onChange={(v) => set("palette", v)}
+            style={{ minWidth: "8rem" }}
+          >
+            {PALETTE_NAMES.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </Select>
+        </div>
+
+        {type !== "pie" ? (
+          <div>
+            <div style={subLabel}>Series colours</div>
+            <div style={{ display: "flex", gap: "0.3rem" }}>
+              {ys.map((y, i) => (
+                <input
+                  key={y}
+                  type="color"
+                  title={y}
+                  value={resolved[i] || "#4ade80"}
+                  onChange={(e) => setColor(i, e.target.value)}
+                  style={{
+                    width: "2.1rem",
+                    height: "1.8rem",
+                    padding: 0,
+                    border: "1px solid " + C.border,
+                    background: "transparent",
+                    cursor: "pointer",
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {type === "line" || type === "area" ? (
+          <div>
+            <div style={subLabel}>Curve</div>
+            <Select value={opts.curve || "smooth"} onChange={(v) => set("curve", v)}>
+              <option value="smooth">Smooth</option>
+              <option value="linear">Linear</option>
+              <option value="step">Step</option>
+            </Select>
+          </div>
+        ) : null}
+
+        {type === "bar" ? (
+          <div>
+            <div style={subLabel}>Bar radius · {opts.bar_radius || 0}</div>
+            <input
+              type="range"
+              min={0}
+              max={16}
+              value={opts.bar_radius || 0}
+              onChange={(e) => set("bar_radius", Number(e.target.value))}
+            />
+          </div>
+        ) : null}
+
+        {type === "pie" ? (
+          <div>
+            <div style={subLabel}>Donut hole · {opts.inner_radius || 0}%</div>
+            <input
+              type="range"
+              min={0}
+              max={80}
+              value={opts.inner_radius || 0}
+              onChange={(e) => set("inner_radius", Number(e.target.value))}
+            />
+          </div>
+        ) : null}
+      </div>
+
+      <div
+        style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem 1.2rem", marginTop: "0.7rem" }}
+      >
+        {(type === "bar" || type === "area") && multi ? (
+          <Toggle label="Stacked" checked={opts.stacked} onChange={(v) => set("stacked", v)} />
+        ) : null}
+        {type === "bar" ? (
+          <Toggle
+            label="Horizontal"
+            checked={opts.horizontal}
+            onChange={(v) => set("horizontal", v)}
+          />
+        ) : null}
+        {type === "line" ? (
+          <Toggle label="Dots" checked={opts.dots} onChange={(v) => set("dots", v)} />
+        ) : null}
+        <Toggle
+          label="Data labels"
+          checked={opts.show_labels}
+          onChange={(v) => set("show_labels", v)}
+        />
+        {type !== "pie" ? (
+          <Toggle
+            label="Grid"
+            checked={!opts.hide_grid}
+            onChange={(v) => set("hide_grid", !v)}
+          />
+        ) : null}
+        <Toggle
+          label="Legend"
+          checked={!opts.hide_legend}
+          onChange={(v) => set("hide_legend", !v)}
+        />
+      </div>
+    </div>
+  );
+}
+
 // ── Chart editor ──────────────────────────────────────────────────
 
 export function ChartEditor(props) {
@@ -35,6 +206,7 @@ export function ChartEditor(props) {
   const [running, setRunning] = React.useState(false);
   const [x, setX] = React.useState("");
   const [ys, setYs] = React.useState([]);
+  const [options, setOptions] = React.useState({ palette: "rat" });
   const [saving, setSaving] = React.useState(false);
   const [saveErr, setSaveErr] = React.useState("");
 
@@ -96,6 +268,7 @@ export function ChartEditor(props) {
         sql: sql.trim(),
         x_column: x,
         y_columns: ys,
+        options: options,
       })
       .then((c) => props.onSaved(c))
       .catch((e) => {
@@ -116,6 +289,7 @@ export function ChartEditor(props) {
           <option value="line">Line</option>
           <option value="area">Area</option>
           <option value="pie">Pie</option>
+          <option value="radar">Radar</option>
         </Select>
       </Field>
 
@@ -184,6 +358,15 @@ export function ChartEditor(props) {
               </div>
             </div>
 
+            {x && ys.length ? (
+              <ChartAppearance
+                type={type}
+                ys={ys}
+                options={options}
+                onChange={setOptions}
+              />
+            ) : null}
+
             <div
               style={{
                 border: "1px solid " + C.border,
@@ -195,7 +378,7 @@ export function ChartEditor(props) {
               <div style={{ ...labelStyle, marginBottom: "0.35rem" }}>Preview</div>
               {x && ys.length ? (
                 <ChartView
-                  chart={{ type: type, x_column: x, y_columns: ys }}
+                  chart={{ type: type, x_column: x, y_columns: ys, options: options }}
                   rows={preview.rows}
                   height={240}
                 />
