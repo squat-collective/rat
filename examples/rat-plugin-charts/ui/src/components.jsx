@@ -4,16 +4,23 @@
 
 import React from "react";
 
+// The portal defines its theme as bare HSL triplets (shadcn style, e.g.
+// `--border: 0 0% 16%`) and consumes them as `hsl(var(--border))`. Each MUST be
+// wrapped in hsl() here — using the variable bare produces an invalid colour,
+// which the browser silently drops (the cause of "transparent" panels). The
+// fallbacks are HSL triplets too, so they stay valid if a variable is missing.
 export const C = {
-  border: "var(--border, #2a2a2a)",
-  fg: "var(--foreground, #e5e5e5)",
-  muted: "var(--muted-foreground, #8a8a8a)",
-  primary: "var(--primary, #4ade80)",
-  primaryFg: "var(--primary-foreground, #0a0a0a)",
-  danger: "var(--destructive, #f87171)",
-  card: "var(--card, #141414)",
-  bg: "var(--background, #0a0a0a)",
-  popover: "var(--popover, #1a1a1a)",
+  border: "hsl(var(--border, 0 0% 16%))",
+  fg: "hsl(var(--foreground, 0 0% 90%))",
+  muted: "hsl(var(--muted-foreground, 0 0% 50%))",
+  primary: "hsl(var(--primary, 142 72% 45%))",
+  primaryFg: "hsl(var(--primary-foreground, 0 0% 2%))",
+  danger: "hsl(var(--destructive, 0 62% 35%))",
+  card: "hsl(var(--card, 0 0% 7%))",
+  bg: "hsl(var(--background, 0 0% 4%))",
+  // A slightly elevated surface — modals and tooltips sit on this so they
+  // stand clearly above the page background.
+  surface: "hsl(var(--secondary, 0 0% 12%))",
 };
 
 // ── Buttons ───────────────────────────────────────────────────────
@@ -178,7 +185,9 @@ export function Modal(props) {
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(0,0,0,0.65)",
+        background: "rgba(0,0,0,0.8)",
+        backdropFilter: "blur(2px)",
+        WebkitBackdropFilter: "blur(2px)",
         zIndex: 60,
         display: "flex",
         alignItems: "flex-start",
@@ -190,8 +199,9 @@ export function Modal(props) {
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: C.bg,
-          border: "1px solid " + C.border,
+          background: C.surface,
+          border: "2px solid " + C.border,
+          boxShadow: "0 24px 70px rgba(0,0,0,0.7)",
           width: "100%",
           maxWidth: props.wide ? "54rem" : "34rem",
           padding: "1.25rem",
@@ -203,6 +213,8 @@ export function Modal(props) {
             justifyContent: "space-between",
             alignItems: "center",
             marginBottom: "1rem",
+            paddingBottom: "0.6rem",
+            borderBottom: "1px solid " + C.border,
           }}
         >
           <h2 style={{ fontWeight: 700, fontSize: "1rem" }}>{props.title}</h2>

@@ -39,13 +39,15 @@ const chartMargin = { top: 8, right: 14, bottom: 4, left: 0 };
 const axisProps = { tick: { fontSize: 11, fill: "#9a9a9a" }, tickLine: false };
 const tooltipProps = {
   contentStyle: {
-    background: "var(--popover, #1a1a1a)",
-    border: "1px solid var(--border, #2a2a2a)",
+    background: C.surface,
+    border: "1px solid " + C.border,
     borderRadius: 0,
     fontSize: "0.75rem",
+    color: C.fg,
   },
-  labelStyle: { color: "var(--muted-foreground, #8a8a8a)" },
-  cursor: { fill: "rgba(255,255,255,0.05)" },
+  labelStyle: { color: C.muted },
+  itemStyle: { color: C.fg },
+  cursor: { fill: "rgba(255,255,255,0.06)" },
 };
 
 function toNum(v) {

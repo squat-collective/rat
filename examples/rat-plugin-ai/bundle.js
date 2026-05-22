@@ -16,6 +16,10 @@
     return;
   }
   var h = React.createElement;
+  // Portal --primary as a literal: the portal's CSS vars are bare HSL triplets
+  // (hsl(var(--primary))), and SVG fill/stroke attributes don't resolve CSS
+  // vars anyway — so a hex literal is the only thing that works everywhere.
+  var ACCENT = "#4ade80";
 
   function apiBase() {
     var s = document.querySelector('script[src*="/plugins/ai/ui/bundle.js"]');
@@ -67,7 +71,7 @@
         return h("a", {
           key: i,
           href: link[2],
-          style: { color: "var(--primary, #4ade80)", textDecoration: "underline" },
+          style: { color: ACCENT, textDecoration: "underline" },
         }, link[1]);
       }
       return p;
@@ -137,7 +141,7 @@
         ? h("div", { style: { marginTop: "0.45rem", fontSize: "0.68rem" } },
             h("a", {
               href: "/x/charts",
-              style: { color: "var(--primary, #4ade80)", textDecoration: "underline" },
+              style: { color: ACCENT, textDecoration: "underline" },
             }, "↗ saved to Dashboards"))
         : null
     );
@@ -162,7 +166,7 @@
             h("div", {
               style: {
                 width: pct + "%", minWidth: "2px", height: "1.05rem",
-                background: "var(--primary, #4ade80)",
+                background: ACCENT,
               },
             })),
           h("div", { style: { width: "3.6rem", fontFamily: "monospace" } }, fmtNum(v))
@@ -181,9 +185,9 @@
     function py(v) { return H - pad - ((v - min) / span) * (H - 2 * pad); }
     var pts = values.map(function (v, i) { return px(i) + "," + py(v); }).join(" ");
     return h("svg", { viewBox: "0 0 " + W + " " + H, style: { width: "100%", height: "auto" } },
-      h("polyline", { points: pts, fill: "none", stroke: "var(--primary, #4ade80)", strokeWidth: 2 }),
+      h("polyline", { points: pts, fill: "none", stroke: ACCENT, strokeWidth: 2 }),
       values.map(function (v, i) {
-        return h("circle", { key: i, cx: px(i), cy: py(v), r: 3, fill: "var(--primary, #4ade80)" });
+        return h("circle", { key: i, cx: px(i), cy: py(v), r: 3, fill: ACCENT });
       }),
       h("text", { x: 2, y: pad - 4, fontSize: 9, fill: "currentColor", opacity: 0.55 }, fmtNum(max)),
       h("text", { x: pad, y: H - 8, fontSize: 9, fill: "currentColor", opacity: 0.55 },
