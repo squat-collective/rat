@@ -1,6 +1,6 @@
 # RAT Example Plugins
 
-Example plugins for the RAT plugin system. The five **runner** plugins below are standalone, pip-installable Python packages covering all five Layer-1 extension points; [`rat-plugin-event-notifier`](./rat-plugin-event-notifier) is a Go platform plugin covering Layer 2 (platform / gRPC) and Layer 3 (portal UI). Copy any of them as a starting point for your own plugin.
+Example plugins for the RAT plugin system. The five **runner** plugins below are standalone, pip-installable Python packages covering all five Layer-1 extension points; [`rat-plugin-event-notifier`](./rat-plugin-event-notifier) and [`rat-plugin-ai`](./rat-plugin-ai) are Go platform plugins covering Layer 2 (platform / gRPC) and Layer 3 (portal UI). Copy any of them as a starting point for your own plugin.
 
 ## Extension Points
 
@@ -57,6 +57,10 @@ A `http` source connector that fetches JSON from any REST endpoint and returns i
 ### `rat-plugin-event-notifier` — Platform + Portal Plugin (L2 + L3)
 
 A Go ConnectRPC **platform plugin**: it phones home to ratd's open registry, implements `HealthCheck` / `Describe` / `HandleEvent`, subscribes to platform events (`run_completed`, `quality_failed`), and exposes a proxied `/events` route. It also ships a **portal UI bundle** (dashboard widget + sidebar nav item), so it covers Layer 2 *and* Layer 3 in one container. See its [README](./rat-plugin-event-notifier/README.md) — note it is built and run differently from the runner plugins (Docker image, not a pip package).
+
+### `rat-plugin-ai` — AI Data Navigator (L2 + L3)
+
+A Go platform plugin that turns any **OpenAI-compatible LLM** (Ollama, OpenAI, vLLM…) into a data assistant. It gives the model **tools** — `list_tables`, `describe_table`, `run_query` — and runs an agentic loop, so the model genuinely explores schemas and runs queries to answer. The portal UI bundle adds an `/x/ai` chat page with continuable conversations. See its [README](./rat-plugin-ai/README.md). The richest example of the plugin system — function-calling, chat sessions, and a real UI.
 
 ## Quick Start
 
