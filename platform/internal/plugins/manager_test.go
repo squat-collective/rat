@@ -13,6 +13,7 @@ import (
 	connect "connectrpc.com/connect"
 	"github.com/google/uuid"
 	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
+	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
 	"github.com/rat-data/rat/platform/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,36 +104,40 @@ func (c *memoryCatalog) UpdatePluginConfig(_ context.Context, name string, confi
 
 // ── Test helper: mock ConnectRPC plugin server ────────────────────────────
 
-// startMockPluginServer creates an HTTP test server that responds to
-// HealthCheck and Describe RPCs. Used to test the Manager's Register flow.
+// mockPluginService is a minimal PluginService for Register-flow tests. It
+// embeds Unimplemented so RPCs it does not provide return CodeUnimplemented.
+type mockPluginService struct {
+	pluginv1connect.UnimplementedPluginServiceHandler
+	caps []string
+}
+
+func (m *mockPluginService) HealthCheck(
+	_ context.Context, _ *connect.Request[pluginv1.HealthCheckRequest],
+) (*connect.Response[pluginv1.HealthCheckResponse], error) {
+	return connect.NewResponse(&pluginv1.HealthCheckResponse{
+		Status: pluginv1.Status_STATUS_SERVING,
+	}), nil
+}
+
+func (m *mockPluginService) Describe(
+	_ context.Context, _ *connect.Request[pluginv1.DescribeRequest],
+) (*connect.Response[pluginv1.DescribeResponse], error) {
+	return connect.NewResponse(&pluginv1.DescribeResponse{
+		Name:         "test-plugin",
+		Version:      "1.0.0",
+		Capabilities: m.caps,
+	}), nil
+}
+
+// startMockPluginServer creates an HTTP test server running a real ConnectRPC
+// PluginService handler, so the Manager's Connect client negotiates content
+// types correctly. Used to test the Manager's Register flow.
 func startMockPluginServer(t *testing.T, caps []string) *httptest.Server {
 	t.Helper()
 
 	mux := http.NewServeMux()
-
-	// HealthCheck endpoint.
-	mux.HandleFunc("/ratatouille.plugin.v1.PluginService/HealthCheck", func(w http.ResponseWriter, r *http.Request) {
-		resp := &pluginv1.HealthCheckResponse{
-			Status: pluginv1.Status_STATUS_SERVING,
-		}
-		data, _ := json.Marshal(resp)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write(data)
-	})
-
-	// Describe endpoint.
-	mux.HandleFunc("/ratatouille.plugin.v1.PluginService/Describe", func(w http.ResponseWriter, r *http.Request) {
-		resp := &pluginv1.DescribeResponse{
-			Name:         "test-plugin",
-			Version:      "1.0.0",
-			Capabilities: caps,
-		}
-		data, _ := json.Marshal(resp)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write(data)
-	})
+	path, handler := pluginv1connect.NewPluginServiceHandler(&mockPluginService{caps: caps})
+	mux.Handle(path, handler)
 
 	return httptest.NewServer(mux)
 }
