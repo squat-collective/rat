@@ -40,13 +40,15 @@ results.
 |---|---|---|
 | `OPENAI_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible API base |
 | `OPENAI_API_KEY` | `ollama` | API key (Ollama ignores it) |
-| `AI_MODEL` | `qwen2.5:7b-instruct` | model name — must support tool calling |
+| `AI_MODEL` | `gpt-oss:20b` | model name — must support tool calling |
 | `RATD_URL` | `http://ratd:8080` | ratd base URL (phone-home + tools) |
 | `GRPC_PORT` | `50091` | port to serve on |
 | `PLUGIN_ADDR` | `ai:50091` | address `ratd` dials back |
 
-<sub>Use a **tool-calling capable** model. Tested with `qwen2.5:7b-instruct` on
-Ollama.</sub>
+<sub>Use a **tool-calling capable** model. A reasoning model is strongly
+recommended — the multi-agent flow leans on planning. Verified with
+`gpt-oss:20b` on Ollama (it handles the hard multi-step requests; small
+non-reasoning models like a 7B struggle with them).</sub>
 
 ## Build & run
 
@@ -55,7 +57,7 @@ Ollama.</sub>
 make build
 
 # Run it on ratd's network, pointed at your LLM API.
-make run OPENAI_BASE_URL=http://10.2.1.1:11434/v1 AI_MODEL=qwen2.5:7b-instruct
+make run OPENAI_BASE_URL=http://10.2.1.1:11434/v1 AI_MODEL=gpt-oss:20b
 ```
 
 The plugin must be able to reach both `ratd` and the LLM API. For an Ollama

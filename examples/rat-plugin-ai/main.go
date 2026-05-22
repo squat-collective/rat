@@ -9,7 +9,7 @@
 //
 //	OPENAI_BASE_URL  OpenAI-compatible API base   (default http://localhost:11434/v1)
 //	OPENAI_API_KEY   API key                      (default "ollama"; Ollama ignores it)
-//	AI_MODEL         model name                   (default qwen2.5:7b-instruct)
+//	AI_MODEL         model name                   (default gpt-oss:20b)
 //	RATD_URL         ratd base URL                (default http://ratd:8080)
 //	GRPC_PORT        port to serve on             (default 50091)
 //	PLUGIN_NAME      registered plugin name       (default ai)
@@ -57,7 +57,7 @@ func main() {
 	ratdURL := envOr("RATD_URL", "http://ratd:8080")
 	baseURL := envOr("OPENAI_BASE_URL", "http://localhost:11434/v1")
 	apiKey := envOr("OPENAI_API_KEY", "ollama")
-	model := envOr("AI_MODEL", "qwen2.5:7b-instruct")
+	model := envOr("AI_MODEL", "gpt-oss:20b")
 
 	chat := newChatService(newAIClient(baseURL, apiKey, model), newDataTools(ratdURL))
 	h := newHandler(name, "http://"+selfAddr+"/bundle.js")

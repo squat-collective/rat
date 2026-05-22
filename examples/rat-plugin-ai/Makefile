@@ -5,7 +5,7 @@ ROOT := $(shell cd ../.. && pwd)
 # Override on the command line, e.g.
 #   make run OPENAI_BASE_URL=http://my-ollama:11434/v1 AI_MODEL=llama3.1
 OPENAI_BASE_URL ?= http://10.2.1.1:11434/v1
-AI_MODEL        ?= qwen2.5:7b-instruct
+AI_MODEL        ?= gpt-oss:20b
 
 # Build the plugin image (platform module passed as a named build context).
 build:
