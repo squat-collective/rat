@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -78,7 +79,14 @@ func newAIClient(baseURL, apiKey, model string) *aiClient {
 	}
 }
 
-// complete sends one chat-completions request and returns the assistant message.
+// completeMaxAttempts bounds how many times complete retries a transient
+// failure (see attempt).
+const completeMaxAttempts = 3
+
+// complete sends a chat-completions request and returns the assistant message.
+// A transient failure — typically the LLM server rejecting a malformed tool
+// call the model emitted (a 5xx) — is retried, since re-sampling almost always
+// produces a valid call.
 func (c *aiClient) complete(
 	ctx context.Context, messages []chatMessage, tools []toolDef,
 ) (chatMessage, error) {
@@ -86,11 +94,36 @@ func (c *aiClient) complete(
 	if err != nil {
 		return chatMessage{}, err
 	}
+
+	var lastErr error
+	for attempt := 1; attempt <= completeMaxAttempts; attempt++ {
+		msg, retryable, err := c.attempt(ctx, body)
+		if err == nil {
+			return msg, nil
+		}
+		lastErr = err
+		if !retryable || attempt == completeMaxAttempts {
+			break
+		}
+		slog.Warn("AI request failed, retrying", "attempt", attempt, "error", err)
+		select {
+		case <-ctx.Done():
+			return chatMessage{}, ctx.Err()
+		case <-time.After(time.Duration(attempt) * time.Second):
+		}
+	}
+	return chatMessage{}, lastErr
+}
+
+// attempt makes one chat-completions call. retryable is true when the failure
+// is transient — a 5xx, which is usually the LLM server rejecting a malformed
+// tool call the model emitted, and which re-sampling fixes.
+func (c *aiClient) attempt(ctx context.Context, body []byte) (chatMessage, bool, error) {
 	req, err := http.NewRequestWithContext(
 		ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body),
 	)
 	if err != nil {
-		return chatMessage{}, err
+		return chatMessage{}, false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -99,24 +132,29 @@ func (c *aiClient) complete(
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return chatMessage{}, fmt.Errorf("AI endpoint unreachable: %w", err)
+		return chatMessage{}, false, fmt.Errorf("AI endpoint unreachable: %w", err)
 	}
 	defer resp.Body.Close()
-
 	raw, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode >= 500 {
+		return chatMessage{}, true,
+			fmt.Errorf("the model produced an invalid response (HTTP %d) — try again", resp.StatusCode)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return chatMessage{}, fmt.Errorf("AI endpoint returned %d: %s", resp.StatusCode, string(raw))
+		return chatMessage{}, false,
+			fmt.Errorf("AI endpoint returned %d: %s", resp.StatusCode, truncateStr(string(raw), 200))
 	}
 
 	var cr chatResponse
 	if err := json.Unmarshal(raw, &cr); err != nil {
-		return chatMessage{}, fmt.Errorf("decode AI response: %w", err)
+		return chatMessage{}, false, fmt.Errorf("decode AI response: %w", err)
 	}
 	if cr.Error != nil {
-		return chatMessage{}, fmt.Errorf("AI error: %s", cr.Error.Message)
+		return chatMessage{}, false, fmt.Errorf("AI error: %s", cr.Error.Message)
 	}
 	if len(cr.Choices) == 0 {
-		return chatMessage{}, fmt.Errorf("AI returned no choices")
+		return chatMessage{}, false, fmt.Errorf("AI returned no choices")
 	}
-	return cr.Choices[0].Message, nil
+	return cr.Choices[0].Message, false, nil
 }
