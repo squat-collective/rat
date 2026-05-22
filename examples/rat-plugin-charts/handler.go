@@ -47,7 +47,7 @@ func (h *Handler) Describe(
 			{Method: "POST", Path: "/dashboards", Description: "Create a dashboard"},
 			{Method: "GET", Path: "/dashboards", Description: "List dashboards"},
 			{Method: "GET", Path: "/dashboards/{id}", Description: "Get a dashboard and its components"},
-			{Method: "PATCH", Path: "/dashboards/{id}", Description: "Update a dashboard's title or components"},
+			{Method: "PUT", Path: "/dashboards/{id}", Description: "Update a dashboard's title or components"},
 			{Method: "POST", Path: "/dashboards/{id}/components", Description: "Add a component to a dashboard"},
 			{Method: "POST", Path: "/query", Description: "Run a read-only SQL query for a component"},
 		},

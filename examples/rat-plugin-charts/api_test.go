@@ -106,10 +106,10 @@ func TestUpdateDashboardReplacesComponents(t *testing.T) {
 	var d Dashboard
 	_ = json.Unmarshal(rec.Body.Bytes(), &d)
 
-	rec = do(t, mux, "PATCH", "/dashboards/"+d.ID,
+	rec = do(t, mux, "PUT", "/dashboards/"+d.ID,
 		`{"components":[{"type":"heading","layout":{"x":0,"y":0,"w":12,"h":2},"props":{"text":"Hello"}}]}`)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("patch expected 200, got %d (%s)", rec.Code, rec.Body.String())
+		t.Fatalf("update expected 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
 	var upd Dashboard
 	_ = json.Unmarshal(rec.Body.Bytes(), &upd)

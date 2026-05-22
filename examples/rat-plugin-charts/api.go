@@ -32,7 +32,9 @@ func (a *api) mux() *http.ServeMux {
 	m.HandleFunc("POST /dashboards", a.createDashboard)
 	m.HandleFunc("GET /dashboards", a.listDashboards)
 	m.HandleFunc("GET /dashboards/{id}", a.getDashboard)
-	m.HandleFunc("PATCH /dashboards/{id}", a.updateDashboard)
+	// PUT (not PATCH): ratd's CORS allows GET/POST/PUT/DELETE but not PATCH,
+	// and the update replaces the whole title/components anyway.
+	m.HandleFunc("PUT /dashboards/{id}", a.updateDashboard)
 	m.HandleFunc("DELETE /dashboards/{id}", a.deleteDashboard)
 	m.HandleFunc("POST /dashboards/{id}/components", a.addComponent)
 

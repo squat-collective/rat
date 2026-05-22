@@ -43,7 +43,7 @@ export const api = {
   listDashboards: () => req("GET", API_ROOT + "/dashboards"),
   createDashboard: (title) => req("POST", API_ROOT + "/dashboards", { title: title }),
   getDashboard: (id) => req("GET", API_ROOT + "/dashboards/" + id),
-  updateDashboard: (id, patch) => req("PATCH", API_ROOT + "/dashboards/" + id, patch),
+  updateDashboard: (id, patch) => req("PUT", API_ROOT + "/dashboards/" + id, patch),
   deleteDashboard: (id) => req("DELETE", API_ROOT + "/dashboards/" + id),
   addComponent: (id, component) =>
     req("POST", API_ROOT + "/dashboards/" + id + "/components", component),
