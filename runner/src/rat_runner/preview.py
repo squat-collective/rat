@@ -217,8 +217,12 @@ def _load_config(
     config_yaml = read_s3_text(s3_config, f"{prefix}/config.yaml")
     if config_yaml:
         from rat_runner.config import parse_pipeline_config
+        from rat_runner.plugin_registry import PluginRegistry
 
-        return parse_pipeline_config(config_yaml)
+        # Discover plugin strategies so preview accepts custom merge strategies.
+        registry = PluginRegistry()
+        registry.discover()
+        return parse_pipeline_config(config_yaml, registry.strategy_names())
 
     return None
 

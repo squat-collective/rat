@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import boto3
@@ -178,12 +179,19 @@ class NessieConfig:
         return self._host_url + "/api/v2"
 
 
-def validate_pipeline_config(data: dict[str, object]) -> None:
+def validate_pipeline_config(
+    data: dict[str, object],
+    known_strategies: Iterable[str] | None = None,
+) -> None:
     """Validate pipeline config keys and values.
 
     Warns on unknown keys (backward-compatible — does not reject them) and
     raises ValueError for invalid values in fields that have a known set of
     valid options (merge_strategy, materialized).
+
+    ``known_strategies`` extends the accepted merge strategies beyond the six
+    built-ins — pass the names discovered by the runner plugin registry so
+    custom strategy plugins are not rejected. When None, only built-ins pass.
     """
     # Warn on unknown keys so users catch typos early.
     unknown_keys = set(data.keys()) - _KNOWN_CONFIG_KEYS
@@ -195,10 +203,12 @@ def validate_pipeline_config(data: dict[str, object]) -> None:
     merge_strategy = data.get("merge_strategy")
     if merge_strategy is not None:
         strategy_str = str(merge_strategy)
-        if not MergeStrategy.validate(strategy_str):
+        plugin_strategies = set(known_strategies or ())
+        if not MergeStrategy.validate(strategy_str) and strategy_str not in plugin_strategies:
+            valid = sorted({m.value for m in MergeStrategy} | plugin_strategies)
             raise ValueError(
                 f"Invalid merge_strategy '{strategy_str}'. "
-                f"Must be one of: {', '.join(sorted(m.value for m in MergeStrategy))}"
+                f"Must be one of: {', '.join(valid)}"
             )
 
     # Validate materialized — only "table" and "view" are supported.
@@ -258,17 +268,23 @@ def _parse_partition_by(raw: object) -> tuple[PartitionByEntry, ...]:
     return tuple(entries)
 
 
-def parse_pipeline_config(yaml_str: str) -> PipelineConfig:
+def parse_pipeline_config(
+    yaml_str: str,
+    known_strategies: Iterable[str] | None = None,
+) -> PipelineConfig:
     """Parse a pipeline config.yaml string into PipelineConfig.
 
     Validates the config after parsing: warns on unknown keys and raises
     ValueError for invalid merge_strategy or materialized values.
+
+    ``known_strategies`` is forwarded to :func:`validate_pipeline_config` so
+    plugin-provided merge strategies are accepted.
     """
     data = yaml.safe_load(yaml_str)
     if not isinstance(data, dict):
         return PipelineConfig()
 
-    validate_pipeline_config(data)
+    validate_pipeline_config(data, known_strategies)
 
     unique_key_raw = data.get("unique_key", [])
     if isinstance(unique_key_raw, str):
@@ -303,7 +319,7 @@ def parse_pipeline_config(yaml_str: str) -> PipelineConfig:
         description=str(data.get("description", "")),
         materialized=str(data.get("materialized", "table")),
         unique_key=unique_key,
-        merge_strategy=MergeStrategy(str(data.get("merge_strategy", "full_refresh"))),
+        merge_strategy=str(data.get("merge_strategy", "full_refresh")),
         watermark_column=str(data.get("watermark_column", "")),
         archive_landing_zones=str(data.get("archive_landing_zones", "false")).lower() == "true",
         partition_column=str(data.get("partition_column", "")),
@@ -344,7 +360,7 @@ def merge_configs(
         description=annotations.get("description", b.description),
         materialized=annotations.get("materialized", b.materialized),
         unique_key=unique_key,
-        merge_strategy=MergeStrategy(annotations["merge_strategy"])
+        merge_strategy=annotations["merge_strategy"]
         if "merge_strategy" in annotations
         else b.merge_strategy,
         watermark_column=annotations.get("watermark_column", b.watermark_column),

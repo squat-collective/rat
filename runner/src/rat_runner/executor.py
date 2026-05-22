@@ -214,7 +214,13 @@ def _phase1_detect_and_load(ctx: _PipelineContext) -> None:
 
     annotation_meta = extract_metadata(source)
     config_yaml = _read_versioned(ctx.s3_config, config_key, pv)
-    base_config = parse_pipeline_config(config_yaml) if config_yaml else None
+    # Pass plugin-discovered strategy names so config validation accepts
+    # custom merge strategies registered via runner plugins, not just built-ins.
+    base_config = (
+        parse_pipeline_config(config_yaml, ctx.registry.strategy_names())
+        if config_yaml
+        else None
+    )
     if annotation_meta or base_config:
         ctx.config = merge_configs(base_config, annotation_meta)
         if annotation_meta and base_config:

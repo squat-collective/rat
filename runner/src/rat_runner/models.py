@@ -157,7 +157,8 @@ class PipelineConfig:
     description: str = ""
     materialized: str = "table"  # "table" or "view"
     unique_key: tuple[str, ...] = ()
-    merge_strategy: MergeStrategy = MergeStrategy.FULL_REFRESH
+    # A built-in MergeStrategy value or a plugin-provided strategy name.
+    merge_strategy: str = MergeStrategy.FULL_REFRESH
     watermark_column: str = ""  # column for max() watermark reads (incremental)
     archive_landing_zones: bool = False  # move landing zone files to _processed/ after run
     partition_column: str = ""  # column for snapshot partitioning
