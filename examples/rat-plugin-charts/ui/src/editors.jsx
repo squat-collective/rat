@@ -26,6 +26,31 @@ const labelStyle = {
 };
 const subLabel = { ...labelStyle, fontSize: "0.62rem", marginBottom: "0.2rem" };
 
+// SqlField renders the portal's CodeMirror SQL editor (schema-aware
+// autocomplete, syntax highlighting) when the host exposes it on
+// window.__RAT_UI, and falls back to a plain textarea otherwise.
+function SqlField(props) {
+  const kit = typeof window !== "undefined" ? window.__RAT_UI : null;
+  const Editor = kit && kit.SqlEditorWithSchema;
+  if (Editor) {
+    return (
+      <Editor
+        value={props.value || ""}
+        onChange={props.onChange}
+        onExecute={props.onExecute}
+      />
+    );
+  }
+  return (
+    <TextArea
+      value={props.value || ""}
+      onChange={props.onChange}
+      rows={props.rows || 5}
+      placeholder={props.placeholder}
+    />
+  );
+}
+
 // A readable title for a component, used in pickers.
 export function cmpTitle(c) {
   const p = c.props || {};
@@ -256,10 +281,14 @@ function ChartFields(props) {
           <option value="radar">Radar</option>
         </Select>
       </Field>
-      <Field label="SQL query" hint="A read-only SELECT. Tables are namespace.layer.name.">
-        <TextArea
+      <Field
+        label="SQL query"
+        hint="Read-only SELECT — Ctrl-Enter runs it. Tables are namespace.layer.name."
+      >
+        <SqlField
           value={v.sql || ""}
           onChange={(s) => set({ sql: s })}
+          onExecute={run}
           rows={5}
           placeholder={"SELECT name, sum(amount) AS total\nFROM default.bronze.orders\nGROUP BY name"}
         />
@@ -429,10 +458,14 @@ function MetricFields(props) {
           placeholder="e.g. Total revenue"
         />
       </Field>
-      <Field label="SQL query" hint="The first value of the first row is shown.">
-        <TextArea
+      <Field
+        label="SQL query"
+        hint="The first value of the first row is shown — Ctrl-Enter tests it."
+      >
+        <SqlField
           value={v.sql || ""}
           onChange={(s) => set({ sql: s })}
+          onExecute={runTest}
           rows={3}
           placeholder="SELECT sum(amount) FROM default.bronze.orders"
         />
