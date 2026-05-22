@@ -18,9 +18,11 @@ results back, and repeats until the model has an answer.
 | `list_tables` | discover every table (`namespace.layer.name`) |
 | `describe_table` | inspect a table's column schema |
 | `run_query` | run a read-only DuckDB SQL query |
+| `render_chart` | draw a bar or line chart from a query |
 
 So "navigate and analyse my data" becomes real — ask a question, the assistant
-explores schemas, runs queries, and answers from the actual results.
+explores schemas, runs queries, draws charts, and answers from the actual
+results.
 
 ## How it works
 
@@ -28,8 +30,9 @@ explores schemas, runs queries, and answers from the actual results.
   home to `ratd`, and exposes `POST /chat` (proxied at `/api/v1/x/ai/chat`).
   Chat sessions are kept in memory and are continuable.
 - **Layer 3** — a portal UI bundle adds an **`/x/ai`** chat page and an
-  "AI Assistant" sidebar item. Each assistant turn shows the tool calls it made,
-  so the conversation is transparent.
+  "AI Assistant" sidebar item. It renders the assistant's markdown (code blocks,
+  lists), draws the charts it produces (build-free SVG/bar rendering), and shows
+  the tool calls each turn made — so the conversation is transparent.
 
 ## Environment
 

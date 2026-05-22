@@ -50,9 +50,12 @@ func TestToolErrorIsJSON(t *testing.T) {
 
 func TestExecuteUnknownTool(t *testing.T) {
 	tools := newDataTools("http://ratd:8080")
-	out := tools.execute(context.Background(), "no_such_tool", "{}")
+	out, chart := tools.execute(context.Background(), "no_such_tool", "{}")
 	if out == "" {
 		t.Fatal("expected an error payload for an unknown tool")
+	}
+	if chart != nil {
+		t.Error("an unknown tool should not produce a chart")
 	}
 }
 

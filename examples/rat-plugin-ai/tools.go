@@ -19,7 +19,7 @@ var toolSpecs = []toolDef{
 		Name: "list_tables",
 		Description: "List every data table in the platform (namespace, layer, name). " +
 			"This does NOT include row counts or data — use run_query for counts and values.",
-		Parameters:  json.RawMessage(`{"type":"object","properties":{}}`),
+		Parameters: json.RawMessage(`{"type":"object","properties":{}}`),
 	}},
 	{Type: "function", Function: functionSchema{
 		Name:        "describe_table",
@@ -36,6 +36,28 @@ var toolSpecs = []toolDef{
 			`"sql":{"type":"string","description":"a single read-only SELECT query"}},` +
 			`"required":["sql"]}`),
 	}},
+	{Type: "function", Function: functionSchema{
+		Name: "render_chart",
+		Description: "Draw a bar or line chart for the user from a SQL query. Provide the " +
+			"chart type, a title, a SELECT query, and which result columns hold the " +
+			"category labels and the numeric values. Use this whenever the user asks to " +
+			"chart, plot, graph or visualise data.",
+		Parameters: json.RawMessage(`{"type":"object","properties":{` +
+			`"chart_type":{"type":"string","enum":["bar","line"]},` +
+			`"title":{"type":"string"},` +
+			`"sql":{"type":"string","description":"a SELECT returning a label column and a numeric value column"},` +
+			`"label_column":{"type":"string","description":"result column for the x-axis labels"},` +
+			`"value_column":{"type":"string","description":"result column for the numeric y values"}},` +
+			`"required":["chart_type","title","sql","label_column","value_column"]}`),
+	}},
+}
+
+// chartSpec is a chart the model asked to render — returned to the UI.
+type chartSpec struct {
+	Type   string    `json:"type"` // "bar" | "line"
+	Title  string    `json:"title"`
+	Labels []string  `json:"labels"`
+	Values []float64 `json:"values"`
 }
 
 // dataTools executes the model's tool calls by calling back into ratd.
@@ -51,12 +73,13 @@ func newDataTools(ratdURL string) *dataTools {
 	}
 }
 
-// execute runs a named tool and returns its result as a string for the model.
-// Errors are returned as JSON strings so the model can see and recover from them.
-func (t *dataTools) execute(ctx context.Context, name, argsJSON string) string {
+// execute runs a named tool. It returns a string result for the model and,
+// for render_chart, a chart spec for the UI (nil otherwise). Errors are
+// returned as JSON strings so the model can see and recover from them.
+func (t *dataTools) execute(ctx context.Context, name, argsJSON string) (string, *chartSpec) {
 	switch name {
 	case "list_tables":
-		return t.get(ctx, "/api/v1/tables")
+		return t.get(ctx, "/api/v1/tables"), nil
 
 	case "describe_table":
 		var a struct {
@@ -65,30 +88,91 @@ func (t *dataTools) execute(ctx context.Context, name, argsJSON string) string {
 			Name      string `json:"name"`
 		}
 		if err := json.Unmarshal([]byte(argsJSON), &a); err != nil {
-			return toolError(err)
+			return toolError(err), nil
 		}
 		if a.Namespace == "" || a.Layer == "" || a.Name == "" {
-			return `{"error":"describe_table requires namespace, layer and name"}`
+			return `{"error":"describe_table requires namespace, layer and name"}`, nil
 		}
 		return t.get(ctx, fmt.Sprintf("/api/v1/tables/%s/%s/%s",
-			url.PathEscape(a.Namespace), url.PathEscape(a.Layer), url.PathEscape(a.Name)))
+			url.PathEscape(a.Namespace), url.PathEscape(a.Layer), url.PathEscape(a.Name))), nil
 
 	case "run_query":
 		var a struct {
 			SQL string `json:"sql"`
 		}
 		if err := json.Unmarshal([]byte(argsJSON), &a); err != nil {
-			return toolError(err)
+			return toolError(err), nil
 		}
 		if strings.TrimSpace(a.SQL) == "" {
-			return `{"error":"run_query requires a sql query"}`
+			return `{"error":"run_query requires a sql query"}`, nil
 		}
-		raw := t.post(ctx, "/api/v1/query", map[string]any{"sql": a.SQL, "limit": 50})
-		return cleanQueryResult(raw)
+		return cleanQueryResult(t.post(ctx, "/api/v1/query",
+			map[string]any{"sql": a.SQL, "limit": 50})), nil
+
+	case "render_chart":
+		return t.renderChart(ctx, argsJSON)
 
 	default:
-		return fmt.Sprintf(`{"error":"unknown tool %q"}`, name)
+		return fmt.Sprintf(`{"error":"unknown tool %q"}`, name), nil
 	}
+}
+
+// renderChart runs the chart's SQL, shapes the result into a chartSpec for the
+// UI, and returns the data to the model so it can describe the chart.
+func (t *dataTools) renderChart(ctx context.Context, argsJSON string) (string, *chartSpec) {
+	var a struct {
+		ChartType   string `json:"chart_type"`
+		Title       string `json:"title"`
+		SQL         string `json:"sql"`
+		LabelColumn string `json:"label_column"`
+		ValueColumn string `json:"value_column"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &a); err != nil {
+		return toolError(err), nil
+	}
+	if strings.TrimSpace(a.SQL) == "" || a.LabelColumn == "" || a.ValueColumn == "" {
+		return `{"error":"render_chart requires sql, label_column and value_column"}`, nil
+	}
+
+	raw := t.post(ctx, "/api/v1/query", map[string]any{"sql": a.SQL, "limit": 50})
+	var resp struct {
+		Rows  []map[string]any `json:"rows"`
+		Error string           `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
+		return fmt.Sprintf(`{"error":"chart query failed: %s"}`, truncateStr(raw, 300)), nil
+	}
+	if resp.Error != "" {
+		return raw, nil
+	}
+
+	spec := &chartSpec{Type: "bar", Title: a.Title}
+	if a.ChartType == "line" {
+		spec.Type = "line"
+	}
+	for _, row := range resp.Rows {
+		lv, hasL := row[a.LabelColumn]
+		vv, hasV := row[a.ValueColumn]
+		if !hasL || !hasV {
+			return fmt.Sprintf(`{"error":"columns %q / %q are not both in the query result"}`,
+				a.LabelColumn, a.ValueColumn), nil
+		}
+		spec.Labels = append(spec.Labels, fmt.Sprint(lv))
+		f, _ := vv.(float64) // JSON numbers decode to float64
+		spec.Values = append(spec.Values, f)
+	}
+	if len(spec.Values) == 0 {
+		return `{"error":"the chart query returned no rows"}`, nil
+	}
+
+	summary, _ := json.Marshal(map[string]any{
+		"status": "chart rendered for the user",
+		"type":   spec.Type,
+		"title":  spec.Title,
+		"labels": spec.Labels,
+		"values": spec.Values,
+	})
+	return string(summary), spec
 }
 
 func (t *dataTools) get(ctx context.Context, path string) string {
@@ -123,6 +207,13 @@ func (t *dataTools) do(req *http.Request) string {
 func toolError(err error) string {
 	b, _ := json.Marshal(map[string]string{"error": err.Error()})
 	return string(b)
+}
+
+func truncateStr(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }
 
 // cleanQueryResult reduces the query API response to just {columns, rows}.

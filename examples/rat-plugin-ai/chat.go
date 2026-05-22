@@ -34,6 +34,12 @@ to a "how many" or aggregate question is the numeric VALUE inside the first
 row — NOT how many rows the result has. Example: a result of
 {"rows": [{"count_star()": 42}]} means the count is 42 (not 1).
 
+You can also draw charts: render_chart takes a chart type (bar or line), a
+title, a SQL query, and the result columns to use for the labels and the
+values. Use it whenever the user asks to chart, plot, graph or visualise data.
+The chart is shown to the user automatically — NEVER put images, base64 data,
+or image markdown in your reply; just describe the chart in a sentence.
+
 Keep answers concise and grounded in the results you actually get back.`
 )
 
@@ -72,10 +78,11 @@ type chatStep struct {
 }
 
 type chatResponseBody struct {
-	SessionID string     `json:"session_id"`
-	Reply     string     `json:"reply,omitempty"`
-	Steps     []chatStep `json:"steps,omitempty"`
-	Error     string     `json:"error,omitempty"`
+	SessionID string      `json:"session_id"`
+	Reply     string      `json:"reply,omitempty"`
+	Steps     []chatStep  `json:"steps,omitempty"`
+	Charts    []chartSpec `json:"charts,omitempty"`
+	Error     string      `json:"error,omitempty"`
 }
 
 // HandleChat is the HTTP handler for POST /chat (proxied at /api/v1/x/ai/chat).
@@ -101,34 +108,45 @@ func (s *chatService) HandleChat(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), turnTimeout)
 	defer cancel()
 
-	reply, steps, err := s.runTurn(ctx, sess)
+	reply, steps, charts, err := s.runTurn(ctx, sess)
 	if err != nil {
 		slog.Warn("chat turn failed", "session", id, "error", err)
-		writeJSON(w, http.StatusOK, chatResponseBody{SessionID: id, Steps: steps, Error: err.Error()})
+		writeJSON(w, http.StatusOK, chatResponseBody{
+			SessionID: id, Steps: steps, Charts: charts, Error: err.Error(),
+		})
 		return
 	}
-	writeJSON(w, http.StatusOK, chatResponseBody{SessionID: id, Reply: reply, Steps: steps})
+	writeJSON(w, http.StatusOK, chatResponseBody{
+		SessionID: id, Reply: reply, Steps: steps, Charts: charts,
+	})
 }
 
 // runTurn drives the tool-calling loop: ask the model, run any tools it
 // requests, feed the results back, and repeat until it returns a text answer.
-func (s *chatService) runTurn(ctx context.Context, sess *session) (string, []chatStep, error) {
+// Charts produced by render_chart calls are collected for the UI.
+func (s *chatService) runTurn(
+	ctx context.Context, sess *session,
+) (string, []chatStep, []chartSpec, error) {
 	var steps []chatStep
+	var charts []chartSpec
 	for round := 0; round < maxToolRounds; round++ {
 		msg, err := s.ai.complete(ctx, s.withSystem(sess.messages), toolSpecs)
 		if err != nil {
-			return "", steps, err
+			return "", steps, charts, err
 		}
 		sess.messages = append(sess.messages, msg)
 
 		if len(msg.ToolCalls) == 0 {
-			return msg.Content, steps, nil
+			return msg.Content, steps, charts, nil
 		}
 
 		for _, tc := range msg.ToolCalls {
 			slog.Info("tool call", "tool", tc.Function.Name, "args", tc.Function.Arguments)
 			steps = append(steps, chatStep{Tool: tc.Function.Name, Args: tc.Function.Arguments})
-			result := s.tools.execute(ctx, tc.Function.Name, tc.Function.Arguments)
+			result, chart := s.tools.execute(ctx, tc.Function.Name, tc.Function.Arguments)
+			if chart != nil {
+				charts = append(charts, *chart)
+			}
 			sess.messages = append(sess.messages, chatMessage{
 				Role:       "tool",
 				ToolCallID: tc.ID,
@@ -137,7 +155,7 @@ func (s *chatService) runTurn(ctx context.Context, sess *session) (string, []cha
 			})
 		}
 	}
-	return "", steps, errToolBudget
+	return "", steps, charts, errToolBudget
 }
 
 // withSystem prepends the system prompt to the conversation for each request.
