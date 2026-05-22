@@ -6,7 +6,12 @@ import { Mermaid } from '@/components/mermaid'
 
 Runner plugins extend RAT at the **data layer**. They are Python packages discovered via [entry points](https://packaging.python.org/en/latest/specifications/entry-points/) — install a package, and the next pipeline run picks it up automatically.
 
-Unlike [platform plugins](/contributing/architecture/plugin-system) (Go gRPC containers), runner plugins run inside the runner process itself. They have direct access to PyArrow tables, DuckDB connections, and the Iceberg catalog.
+Unlike [platform plugins](/guides/platform-plugins) (Go gRPC containers), runner plugins run inside the runner process itself. They have direct access to PyArrow tables, DuckDB connections, and the Iceberg catalog.
+
+<Callout type="info">
+New to RAT plugins? Start with [Writing Plugins](/guides/writing-plugins) for an
+overview of all three plugin layers.
+</Callout>
 
 ---
 
@@ -479,6 +484,97 @@ See the [complete list of protected names](/reference/runner-plugins#built-in-sh
 
 ---
 
+## Writing a Pipeline Type
+
+Pipeline types add new **languages**. A pipeline type owns a file extension —
+a `pipeline.<ext>` file is detected, handed to the plugin's `execute()`, and the
+returned Arrow table is written like any other pipeline result.
+
+### Example: PRQL
+
+[`rat-plugin-prql`](https://github.com/squat-collective/rat/tree/main/examples/rat-plugin-prql)
+registers the `prql` type — a `pipeline.prql` file is compiled from
+[PRQL](https://prql-lang.org) to SQL and run on DuckDB:
+
+```python filename="src/rat_plugin_prql/pipeline_type.py"
+import prqlc
+
+from rat_runner.config import DuckDBConfig
+from rat_runner.engine import DuckDBEngine
+
+
+class PrqlPipelineType:
+    @property
+    def name(self) -> str:
+        return "prql"
+
+    @property
+    def file_extension(self) -> str:
+        return "prql"  # detects pipeline.prql
+
+    def execute(self, source, namespace, layer, pipeline_name,
+                s3_config, nessie_config, config):
+        sql = prqlc.compile(source)
+        engine = DuckDBEngine(s3_config, DuckDBConfig.from_env())
+        try:
+            return engine.query_arrow(sql)
+        finally:
+            engine.close()
+```
+
+```toml filename="pyproject.toml"
+[project.entry-points."rat.pipeline_types"]
+prql = "rat_plugin_prql.pipeline_type:PrqlPipelineType"
+```
+
+A pipeline of this type is a `pipeline.prql` file (with no `pipeline.sql` /
+`pipeline.py`). Both the executor and the preview detect it automatically.
+
+---
+
+## Writing a Source Connector
+
+Source connectors pull data from systems **outside** S3/Iceberg — REST APIs,
+operational databases, message queues — and return it as an Arrow table.
+
+### Example: HTTP source
+
+[`rat-plugin-http-source`](https://github.com/squat-collective/rat/tree/main/examples/rat-plugin-http-source)
+registers an `http` source that fetches JSON from any endpoint:
+
+```python filename="src/rat_plugin_http_source/source.py"
+import json
+import urllib.request
+
+import pyarrow as pa
+
+
+class HttpSource:
+    @property
+    def name(self) -> str:
+        return "http"
+
+    def fetch(self, config: dict, s3_config) -> pa.Table:
+        with urllib.request.urlopen(config["url"], timeout=30) as resp:
+            records = json.loads(resp.read())
+        return pa.Table.from_pylist(records)
+```
+
+```toml filename="pyproject.toml"
+[project.entry-points."rat.sources"]
+http = "rat_plugin_http_source.source:HttpSource"
+```
+
+<Callout type="warning">
+Source connectors implement `SourceConnectorProtocol` and are discovered by the
+registry, but the runner executor does not yet *invoke* sources as part of a
+pipeline run — there is no pipeline-side way to declare "use source X" yet.
+`rat-plugin-http-source` is a protocol-complete, unit-tested reference for when
+that wiring lands.
+</Callout>
+
+---
+
 ## Plugin Discovery
 
 ### How It Works
@@ -674,14 +770,21 @@ docker compose exec runner pytest /path/to/rat-plugin-my-plugin/tests -v
 
 ## Example Plugins
 
-RAT ships with 3 example plugins in the `examples/` directory. Use them as starting points:
+RAT ships an example for every runner extension point in the `examples/`
+directory. Use them as starting points:
 
-| Plugin | Type | Description |
+| Plugin | Extension point | Description |
 |---|---|---|
 | [`rat-plugin-soft-delete`](https://github.com/squat-collective/rat/tree/main/examples/rat-plugin-soft-delete) | Strategy | Marks deleted rows with `_deleted_at` instead of removing them |
 | [`rat-plugin-row-stats`](https://github.com/squat-collective/rat/tree/main/examples/rat-plugin-row-stats) | Hook | Logs row counts and strategy info after writes |
 | [`rat-plugin-dbt-compat`](https://github.com/squat-collective/rat/tree/main/examples/rat-plugin-dbt-compat) | Jinja Helper | Adds `env_var()`, `var()`, `generate_schema_name()` |
+| [`rat-plugin-prql`](https://github.com/squat-collective/rat/tree/main/examples/rat-plugin-prql) | Pipeline Type | Adds the `prql` language, compiled to SQL |
+| [`rat-plugin-http-source`](https://github.com/squat-collective/rat/tree/main/examples/rat-plugin-http-source) | Source | Fetches JSON from an HTTP/REST API |
 
 <Callout type="info">
 For the complete protocol reference with all method signatures, parameter types, and return values, see the [Runner Plugin Reference](/reference/runner-plugins).
+
+Need to extend the API or UI instead of the data layer? See
+[Platform Plugins](/guides/platform-plugins) and
+[Portal Plugins](/guides/portal-plugins).
 </Callout>

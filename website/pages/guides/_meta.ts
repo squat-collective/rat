@@ -15,7 +15,10 @@ export default {
   "data-retention": "Data Retention",
   "table-metadata": "Table Metadata",
   "---plugins": { type: "separator", title: "Plugins" },
+  "writing-plugins": "Writing Plugins",
   "runner-plugins": "Runner Plugins",
+  "platform-plugins": "Platform Plugins",
+  "portal-plugins": "Portal Plugins",
   "---best-practices": { type: "separator", title: "Best Practices" },
   "best-practices": "Best Practices",
 };

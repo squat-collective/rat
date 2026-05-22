@@ -1,0 +1,120 @@
+import { Callout } from 'nextra/components'
+import { Card, Cards } from '@/components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Writing Plugins
+
+RAT is extensible at every layer. A **plugin** adds capability without forking
+the core — a new merge strategy, an alerting integration, an extra page in the
+web IDE. This page explains the three plugin layers and helps you pick the
+right one; each layer then has its own guide.
+
+---
+
+## The three layers
+
+RAT's plugin system has three independent layers. Each extends a different
+part of the platform and uses the mechanism that fits that part best.
+
+<Mermaid chart={`
+flowchart TB
+    L3["Layer 3 — Portal plugins (UI)<br/>JS bundles loaded at runtime"]
+    L2["Layer 2 — Platform plugins (API / logic)<br/>gRPC sidecar containers"]
+    L1["Layer 1 — Runner plugins (data)<br/>Python entry points"]
+    L3 --- L2 --- L1
+    style L1 fill:#22c55e,color:#000
+    style L2 fill:#a855f7,color:#fff
+    style L3 fill:#3b82f6,color:#fff
+`} />
+
+| Layer | Runs as | Mechanism | Use it to… |
+|---|---|---|---|
+| **[Runner](/guides/runner-plugins)** | code inside the runner process | Python entry points | change how pipelines process data |
+| **[Platform](/guides/platform-plugins)** | a separate container | gRPC (ConnectRPC) + phone-home | add API endpoints, react to events, integrate services |
+| **[Portal](/guides/portal-plugins)** | a JS bundle in the browser | `<script>` + a window hook | add UI — widgets, pages, nav items |
+
+The layers are independent, but they **compose**: a single platform plugin
+container can answer gRPC *and* ship a portal UI bundle, so one deployable adds
+both backend logic and its own UI.
+
+---
+
+## Which layer do I need?
+
+<Cards>
+  <Card title="Runner plugin" href="/guides/runner-plugins">
+    A custom merge strategy, a pipeline hook, a SQL template function, a new
+    pipeline language, or an external data source.
+  </Card>
+  <Card title="Platform plugin" href="/guides/platform-plugins">
+    React to platform events (run completed, quality failed), expose new API
+    routes, or integrate an external system (auth, alerting, cloud).
+  </Card>
+  <Card title="Portal plugin" href="/guides/portal-plugins">
+    Add a dashboard widget, a sidebar entry, or a whole page to the web IDE.
+  </Card>
+</Cards>
+
+A quick decision guide:
+
+- **"I want pipelines to process data differently"** → Runner plugin. It runs
+  in-process with direct access to Arrow tables, DuckDB, and the Iceberg catalog.
+- **"I want to do something when a run finishes"** → Platform plugin. It
+  subscribes to the event bus and receives events over gRPC.
+- **"I want to add something to the web IDE"** → Portal plugin — usually shipped
+  *by* a platform plugin (the platform plugin serves the UI bundle).
+
+<Callout type="info">
+Runner plugins are the simplest to build and ship (a `pip install`-able
+package). Platform + portal plugins are more involved (a container image) but
+unlock API and UI extension. Start with the layer that matches your need.
+</Callout>
+
+---
+
+## How plugins connect
+
+Each layer has a different — deliberately simple — connection model:
+
+- **Runner** — discovered per pipeline run via `importlib.metadata.entry_points()`.
+  Install a package, the next run picks it up. No restart.
+- **Platform** — the plugin container starts and **phones home**:
+  `POST /internal/plugins/register` to ratd. ratd health-checks it, calls its
+  `Describe` RPC, and adds it to an open registry.
+- **Portal** — the portal fetches the enabled plugins, and for each one that
+  declares a UI bundle, injects a `<script>` tag. The bundle self-registers.
+
+No plugin requires editing core config files or rebuilding RAT.
+
+---
+
+## Example plugins
+
+Every extension point has a worked example in the
+[`examples/`](https://github.com/squat-collective/rat/tree/main/examples)
+directory of the repo — copy the closest one as a starting point.
+
+| Plugin | Layer | Demonstrates |
+|---|---|---|
+| `rat-plugin-soft-delete` | Runner | a custom merge strategy |
+| `rat-plugin-row-stats` | Runner | a pipeline hook |
+| `rat-plugin-dbt-compat` | Runner | SQL Jinja helpers |
+| `rat-plugin-prql` | Runner | a new pipeline language (PRQL) |
+| `rat-plugin-http-source` | Runner | an external source connector |
+| `rat-plugin-event-notifier` | Platform + Portal | a gRPC plugin that also ships a UI bundle |
+
+---
+
+## Next steps
+
+<Cards>
+  <Card title="Runner Plugins →" href="/guides/runner-plugins">
+    Build a data-layer plugin in Python.
+  </Card>
+  <Card title="Platform Plugins →" href="/guides/platform-plugins">
+    Build a gRPC platform plugin.
+  </Card>
+  <Card title="Portal Plugins →" href="/guides/portal-plugins">
+    Build a portal UI bundle.
+  </Card>
+</Cards>
