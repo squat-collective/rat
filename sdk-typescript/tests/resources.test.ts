@@ -508,7 +508,7 @@ describe("QualityResource", () => {
     const client = new RatClient();
     const result = await client.quality.list("default", "bronze", "orders");
 
-    expect(fetchCalls[0].url).toContain("/api/v1/tests/default/bronze/orders");
+    expect(fetchCalls[0].url).toContain("/api/v1/pipelines/default/bronze/orders/tests");
     expect(fetchCalls[0].method).toBe("GET");
     expect(result.tests).toHaveLength(1);
     expect(result.tests[0].name).toBe("not_null_id");
@@ -529,7 +529,7 @@ describe("QualityResource", () => {
     });
 
     expect(fetchCalls[0].method).toBe("POST");
-    expect(fetchCalls[0].url).toContain("/api/v1/tests/default/silver/users");
+    expect(fetchCalls[0].url).toContain("/api/v1/pipelines/default/silver/users/tests");
     const body = JSON.parse(fetchCalls[0].body!);
     expect(body.name).toBe("unique_email");
     expect(body.sql).toContain("DISTINCT email");
@@ -544,7 +544,7 @@ describe("QualityResource", () => {
 
     expect(fetchCalls[0].method).toBe("DELETE");
     expect(fetchCalls[0].url).toContain(
-      "/api/v1/tests/default/bronze/orders/not_null_id",
+      "/api/v1/pipelines/default/bronze/orders/tests/not_null_id",
     );
   });
 
@@ -569,7 +569,7 @@ describe("QualityResource", () => {
 
     expect(fetchCalls[0].method).toBe("POST");
     expect(fetchCalls[0].url).toContain(
-      "/api/v1/tests/default/bronze/orders/run",
+      "/api/v1/pipelines/default/bronze/orders/tests/run",
     );
     expect(result.passed).toBe(1);
     expect(result.failed).toBe(0);

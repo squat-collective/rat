@@ -14,7 +14,7 @@ export class QualityResource extends BaseResource {
   ): Promise<QualityTestListResponse> {
     return this.transport.request<QualityTestListResponse>(
       "GET",
-      `/api/v1/tests/${ns}/${layer}/${name}`,
+      `/api/v1/pipelines/${ns}/${layer}/${name}/tests`,
     );
   }
 
@@ -26,7 +26,7 @@ export class QualityResource extends BaseResource {
   ): Promise<CreateQualityTestResponse> {
     return this.transport.request<CreateQualityTestResponse>(
       "POST",
-      `/api/v1/tests/${ns}/${layer}/${name}`,
+      `/api/v1/pipelines/${ns}/${layer}/${name}/tests`,
       { json: req },
     );
   }
@@ -39,7 +39,7 @@ export class QualityResource extends BaseResource {
   ): Promise<void> {
     await this.transport.request(
       "DELETE",
-      `/api/v1/tests/${ns}/${layer}/${name}/${testName}`,
+      `/api/v1/pipelines/${ns}/${layer}/${name}/tests/${testName}`,
     );
   }
 
@@ -50,7 +50,7 @@ export class QualityResource extends BaseResource {
   ): Promise<QualityRunResponse> {
     return this.transport.request<QualityRunResponse>(
       "POST",
-      `/api/v1/tests/${ns}/${layer}/${name}/run`,
+      `/api/v1/pipelines/${ns}/${layer}/${name}/tests/run`,
     );
   }
 }
