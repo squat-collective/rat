@@ -1,6 +1,6 @@
 # RAT Example Plugins
 
-Example plugins for the RAT plugin system. The five **runner** plugins below are standalone, pip-installable Python packages covering all five Layer-1 extension points; [`rat-plugin-event-notifier`](./rat-plugin-event-notifier), [`rat-plugin-interconnect`](./rat-plugin-interconnect), [`rat-plugin-ai-provider`](./rat-plugin-ai-provider) and [`rat-plugin-dev-assistant`](./rat-plugin-dev-assistant) are Go platform plugins covering Layer 2 (platform / gRPC) and Layer 3 (portal UI). Copy any of them as a starting point for your own plugin.
+Example plugins for the RAT plugin system. The five **runner** plugins below are standalone, pip-installable Python packages covering all five Layer-1 extension points; [`rat-plugin-event-notifier`](./rat-plugin-event-notifier), [`rat-plugin-interconnect`](./rat-plugin-interconnect), [`rat-plugin-ai-provider`](./rat-plugin-ai-provider), [`rat-plugin-dev-assistant`](./rat-plugin-dev-assistant) and [`rat-plugin-docs-assistant`](./rat-plugin-docs-assistant) are Go platform plugins covering Layer 2 (platform / gRPC) and Layer 3 (portal UI). Copy any of them as a starting point for your own plugin.
 
 ## Extension Points
 
@@ -69,6 +69,10 @@ A reusable, **configurable AI provider** — a backend LLM service other AI exte
 ### `rat-plugin-dev-assistant` — AI Dev Assistant (L2 + L3)
 
 An **AI dev assistant** docked into the pipeline editor (via the core `pipeline-editor-sidebar` slot). It chats, explains, fixes, and **writes pipeline code from a described goal** — the reply's code block applies straight into the editor. A *thin consumer plugin*: no LLM code of its own — it brokers `ai.chat` to `rat-plugin-ai-provider` through the interconnect broker, with your current file and an optional data sample as context. The payoff of the provider + broker architecture. See its [README](./rat-plugin-dev-assistant/README.md).
+
+### `rat-plugin-docs-assistant` — AI Docs Assistant (L2 + L3)
+
+An **AI documentation writer for datasets**. Adds a *🤖 Suggest docs* button to a table-detail page (via the existing `table-actions` slot) — opens a modal of AI-generated **table description** and **per-column descriptions** you can edit and save through the core table-metadata API. Another *thin consumer plugin* — no LLM code of its own; brokers `ai.chat` to `rat-plugin-ai-provider` and asks for strict JSON, grounding the suggestions in the table's columns and a small data sample. See its [README](./rat-plugin-docs-assistant/README.md).
 
 ## Quick Start
 
