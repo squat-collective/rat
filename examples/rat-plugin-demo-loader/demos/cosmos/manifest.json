@@ -1,0 +1,75 @@
+{
+  "id": "cosmos",
+  "name": "🚀 Cosmos",
+  "description": "Space missions, planetary observations and satellites — a full bronze → silver → gold pipeline showing layered transforms and quality tests.",
+  "namespace": "cosmos",
+  "pipelines": [
+    {
+      "layer": "bronze",
+      "name": "missions",
+      "type": "sql",
+      "description": "200 synthetic rocket missions across six agencies and five planetary targets.",
+      "file": "bronze/missions.sql"
+    },
+    {
+      "layer": "bronze",
+      "name": "observations",
+      "type": "sql",
+      "description": "1000 synthetic telescope observations: when, where, magnitude, instrument.",
+      "file": "bronze/observations.sql"
+    },
+    {
+      "layer": "bronze",
+      "name": "satellites",
+      "type": "sql",
+      "description": "120 satellites in current operation by type and operator.",
+      "file": "bronze/satellites.sql"
+    },
+    {
+      "layer": "silver",
+      "name": "missions_enriched",
+      "type": "sql",
+      "description": "Missions joined with mission_type and decade, the silver-layer convenience view.",
+      "file": "silver/missions_enriched.sql"
+    },
+    {
+      "layer": "silver",
+      "name": "observations_daily",
+      "type": "sql",
+      "description": "Observations aggregated to one row per day-planet, used by the gold layer.",
+      "file": "silver/observations_daily.sql"
+    },
+    {
+      "layer": "gold",
+      "name": "success_by_program",
+      "type": "sql",
+      "description": "Mission success rate per agency — the bottom-line metric.",
+      "file": "gold/success_by_program.sql"
+    },
+    {
+      "layer": "gold",
+      "name": "satellite_summary",
+      "type": "sql",
+      "description": "Satellites grouped by type and operator with totals.",
+      "file": "gold/satellite_summary.sql"
+    }
+  ],
+  "quality_tests": [
+    {
+      "layer": "bronze",
+      "pipeline": "missions",
+      "name": "missions_id_not_null",
+      "severity": "error",
+      "description": "Every mission must have an id.",
+      "file": "tests/missions_id_not_null.sql"
+    },
+    {
+      "layer": "bronze",
+      "pipeline": "observations",
+      "name": "observations_magnitude_sane",
+      "severity": "warn",
+      "description": "Magnitudes should sit between -10 and 30.",
+      "file": "tests/observations_magnitude_sane.sql"
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "id": "shop",
+  "name": "🛒 Shop",
+  "description": "Customers, products and orders — classic e-commerce schema joined into a silver fact and aggregated to monthly revenue and top customers.",
+  "namespace": "shop",
+  "pipelines": [
+    {
+      "layer": "bronze",
+      "name": "customers",
+      "type": "sql",
+      "description": "500 synthetic customers with email, country and signup date.",
+      "file": "bronze/customers.sql"
+    },
+    {
+      "layer": "bronze",
+      "name": "products",
+      "type": "sql",
+      "description": "50 products across five categories with prices in EUR.",
+      "file": "bronze/products.sql"
+    },
+    {
+      "layer": "bronze",
+      "name": "orders",
+      "type": "sql",
+      "description": "5000 orders linking customers to products with quantity and date.",
+      "file": "bronze/orders.sql"
+    },
+    {
+      "layer": "silver",
+      "name": "orders_enriched",
+      "type": "sql",
+      "description": "Orders joined with customer and product info — the silver fact.",
+      "file": "silver/orders_enriched.sql"
+    },
+    {
+      "layer": "silver",
+      "name": "customer_lifetime",
+      "type": "sql",
+      "description": "Per-customer aggregate: order count, lifetime value, last order date.",
+      "file": "silver/customer_lifetime.sql"
+    },
+    {
+      "layer": "gold",
+      "name": "revenue_by_month",
+      "type": "sql",
+      "description": "Monthly revenue and order count — the time-series gold view.",
+      "file": "gold/revenue_by_month.sql"
+    },
+    {
+      "layer": "gold",
+      "name": "top_customers",
+      "type": "sql",
+      "description": "Top 20 customers by lifetime value.",
+      "file": "gold/top_customers.sql"
+    }
+  ],
+  "quality_tests": [
+    {
+      "layer": "bronze",
+      "pipeline": "orders",
+      "name": "orders_quantity_positive",
+      "severity": "error",
+      "description": "Order quantities must be positive.",
+      "file": "tests/orders_quantity_positive.sql"
+    },
+    {
+      "layer": "silver",
+      "pipeline": "orders_enriched",
+      "name": "orders_have_customer",
+      "severity": "error",
+      "description": "Every order in the silver fact must have a matching customer.",
+      "file": "tests/orders_have_customer.sql"
+    }
+  ]
+}

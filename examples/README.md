@@ -1,6 +1,6 @@
 # RAT Example Plugins
 
-Example plugins for the RAT plugin system. The five **runner** plugins below are standalone, pip-installable Python packages covering all five Layer-1 extension points; [`rat-plugin-event-notifier`](./rat-plugin-event-notifier), [`rat-plugin-interconnect`](./rat-plugin-interconnect), [`rat-plugin-ai-provider`](./rat-plugin-ai-provider), [`rat-plugin-dev-assistant`](./rat-plugin-dev-assistant) and [`rat-plugin-docs-assistant`](./rat-plugin-docs-assistant) are Go platform plugins covering Layer 2 (platform / gRPC) and Layer 3 (portal UI). Copy any of them as a starting point for your own plugin.
+Example plugins for the RAT plugin system. The five **runner** plugins below are standalone, pip-installable Python packages covering all five Layer-1 extension points; [`rat-plugin-event-notifier`](./rat-plugin-event-notifier), [`rat-plugin-interconnect`](./rat-plugin-interconnect), [`rat-plugin-ai-provider`](./rat-plugin-ai-provider), [`rat-plugin-dev-assistant`](./rat-plugin-dev-assistant), [`rat-plugin-docs-assistant`](./rat-plugin-docs-assistant) and [`rat-plugin-demo-loader`](./rat-plugin-demo-loader) are Go platform plugins covering Layer 2 (platform / gRPC) and Layer 3 (portal UI). Copy any of them as a starting point for your own plugin.
 
 ## Extension Points
 
@@ -73,6 +73,10 @@ An **AI dev assistant** docked into the pipeline editor (via the core `pipeline-
 ### `rat-plugin-docs-assistant` — AI Docs Assistant (L2 + L3)
 
 An **AI documentation writer for datasets**. Adds a *🤖 Suggest docs* button to a table-detail page (via the existing `table-actions` slot) — opens a modal of AI-generated **table description** and **per-column descriptions** you can edit and save through the core table-metadata API. Another *thin consumer plugin* — no LLM code of its own; brokers `ai.chat` to `rat-plugin-ai-provider` and asks for strict JSON, grounding the suggestions in the table's columns and a small data sample. See its [README](./rat-plugin-docs-assistant/README.md).
+
+### `rat-plugin-demo-loader` — One-Click Sample Demos (L2 + L3)
+
+A **one-click sample-data installer**. Ships three self-contained demos (🚀 Cosmos / 🎤 Underground / 🛒 Shop), each a full bronze → silver → gold pipeline with quality tests and synthetic data via `generate_series`. Installing one creates the namespace, all pipelines, writes their SQL, creates the quality tests and triggers the bronze runs — all through ratd's HTTP API. Adds a "Demos" sidebar entry. See its [README](./rat-plugin-demo-loader/README.md).
 
 ## Quick Start
 
