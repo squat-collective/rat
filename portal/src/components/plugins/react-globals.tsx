@@ -4,23 +4,25 @@ import { useEffect } from "react";
 import React from "react";
 import ReactDOM from "react-dom";
 import { mutate as globalMutate } from "swr";
+import { useRouter } from "next/navigation";
 
 /**
  * Exposes React, ReactDOM and a cache-invalidation helper on `window` so
  * plugin bundles can:
  *   - render with the portal's React (no duplicate copies)
- *   - tell the portal to refresh its SWR caches after a direct fetch
+ *   - tell the portal to refresh its caches after a direct fetch mutation
  *
  * Plugins call:
- *   window.__RAT_INVALIDATE()                       // revalidate every cached key
- *   window.__RAT_INVALIDATE("table-")               // prefix match
- *   window.__RAT_INVALIDATE((k) => k === "plugins") // predicate match
+ *   window.__RAT_INVALIDATE()                       // refresh everything
+ *   window.__RAT_INVALIDATE("table-")               // SWR prefix match
+ *   window.__RAT_INVALIDATE((k) => k === "plugins") // SWR predicate match
  *
- * This is the cross-plugin equivalent of SWR's mutate(): required because
- * plugin bundles fetch through plain HTTP and the portal's hooks otherwise
- * have no way to know their cache went stale.
+ * Every call also runs router.refresh() — many RAT list pages (pipelines,
+ * explorer, settings) are Server Components fetched via serverApi and held
+ * in Next.js's router cache, where SWR's mutate() can't reach.
  */
 export function ReactGlobals() {
+  const router = useRouter();
   useEffect(() => {
     const w = window as unknown as Record<string, unknown>;
     w.React = React;
@@ -34,8 +36,9 @@ export function ReactGlobals() {
           : typeof filter === "string"
             ? (k: unknown) => typeof k === "string" && k.startsWith(filter)
             : filter;
+      router.refresh();
       return globalMutate(matcher, undefined, { revalidate: true });
     };
-  }, []);
+  }, [router]);
   return null;
 }
