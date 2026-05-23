@@ -161,6 +161,11 @@
       )
         .then(function (r) {
           if (!r.ok) return r.text().then(function (t) { throw new Error("save failed: " + (t || r.status)); });
+          // Tell the portal to refresh its SWR caches so the Explorer's
+          // useTable() sees the new descriptions without a page reload.
+          if (typeof window.__RAT_INVALIDATE === "function") {
+            window.__RAT_INVALIDATE("table");
+          }
           setPhase("saved");
           setTimeout(props.onClose, 800);
         })

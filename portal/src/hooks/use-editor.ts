@@ -2,9 +2,12 @@
 
 import { useApiClient } from "@/providers/api-provider";
 import { useCallback, useState } from "react";
+import { useSWRConfig } from "swr";
+import { KEYS } from "@/lib/cache-keys";
 
 export function useSaveFile() {
   const api = useApiClient();
+  const { mutate } = useSWRConfig();
   const [saving, setSaving] = useState(false);
 
   const save = useCallback(
@@ -12,11 +15,16 @@ export function useSaveFile() {
       setSaving(true);
       try {
         await api.storage.write(path, content);
+        // Refresh the file tree and the file's own cache so callers don't
+        // have to remember. Resource-specific keys (quality tests, pipelines,
+        // etc.) are still the caller's responsibility.
+        await mutate(KEYS.match.files);
+        await mutate(KEYS.file(path));
       } finally {
         setSaving(false);
       }
     },
-    [api],
+    [api, mutate],
   );
 
   return { save, saving };

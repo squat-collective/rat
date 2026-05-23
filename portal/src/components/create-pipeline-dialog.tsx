@@ -190,6 +190,9 @@ export function CreatePipelineDialog() {
 
       setOpen(false);
       resetForm();
+      // Refresh both the pipelines list (and detail) and the lineage view so
+      // the new pipeline shows up without a manual reload.
+      await mutate(KEYS.match.pipelines);
       mutate(KEYS.match.lineage);
       router.push(`/pipelines/${effectiveNamespace}/${layer}/${name}?tab=code`);
     } catch (e) {
