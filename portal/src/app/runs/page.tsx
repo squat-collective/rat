@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useRuns, usePipelines } from "@/hooks/use-api";
 import { Loading } from "@/components/loading";
 import { ErrorAlert } from "@/components/error-alert";
@@ -10,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { STATUS_COLORS, STATUS_EMOJI } from "@/lib/constants";
 
 export default function RunsPage() {
+  const router = useRouter();
   const { data, isLoading, error } = useRuns();
   // Runs only carry pipeline_id; the list looks naked without the
   // pipeline reference. Fetch the pipelines list once and look up the
@@ -71,9 +73,16 @@ export default function RunsPage() {
             {runs.map((run, i) => (
               <tr
                 key={run.id}
+                tabIndex={0}
+                role="link"
+                onClick={() => router.push(`/runs/${run.id}`)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") router.push(`/runs/${run.id}`);
+                }}
                 className={cn(
-                  "group border-t border-border/20 transition-all cursor-pointer",
+                  "group border-t border-border/20 transition-all cursor-pointer outline-none",
                   "hover:bg-primary/5 hover:border-l-2 hover:border-l-primary",
+                  "focus-visible:bg-primary/10 focus-visible:border-l-2 focus-visible:border-l-primary",
                   i % 2 === 0 ? "bg-transparent" : "bg-muted/30",
                 )}
               >
@@ -94,6 +103,7 @@ export default function RunsPage() {
                     return p ? (
                       <Link
                         href={`/pipelines/${p.namespace}/${p.layer}/${p.name}`}
+                        onClick={(e) => e.stopPropagation()}
                         className="hover:text-primary"
                       >
                         <span className="text-muted-foreground">{p.namespace}.</span>
@@ -110,6 +120,7 @@ export default function RunsPage() {
                 <td className="whitespace-nowrap px-3 py-2">
                   <Link
                     href={`/runs/${run.id}`}
+                    onClick={(e) => e.stopPropagation()}
                     className="font-mono hover:text-primary"
                   >
                     {run.id.slice(0, 12)}
