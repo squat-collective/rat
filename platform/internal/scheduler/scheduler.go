@@ -82,6 +82,14 @@ func (s *Scheduler) Stop() {
 	}
 }
 
+// submitStagger is the delay inserted between concurrent same-tick
+// submissions so the runner doesn't get hit by N pipelines at the same
+// instant. DuckDB inside the runner can crash when multiple executions
+// start in the same millisecond ("terminate called without an active
+// exception"), and a crash orphans every in-flight run. Mirrors the
+// staggering the demo-loader does for its bronze runs.
+const submitStagger = 3 * time.Second
+
 // tick evaluates all enabled schedules and fires runs that are due.
 func (s *Scheduler) tick(ctx context.Context) {
 	schedules, err := s.schedules.ListSchedules(ctx)
@@ -91,6 +99,7 @@ func (s *Scheduler) tick(ctx context.Context) {
 	}
 
 	now := time.Now()
+	submittedThisTick := 0
 
 	for _, sched := range schedules {
 		if !sched.Enabled {
@@ -147,6 +156,16 @@ func (s *Scheduler) tick(ctx context.Context) {
 			slog.Error("scheduler: failed to create run", "schedule_id", sched.ID, "error", err)
 			continue
 		}
+
+		// Stagger same-tick submissions so we don't stampede the runner.
+		if submittedThisTick > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(submitStagger):
+			}
+		}
+		submittedThisTick++
 
 		// Submit to executor
 		if err := s.executor.Submit(ctx, run, pipeline); err != nil {

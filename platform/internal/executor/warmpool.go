@@ -46,6 +46,15 @@ var ErrRunnerBusy = errors.New("runner at capacity")
 // network partitions, runner crashes).
 const FallbackPollInterval = 60 * time.Second
 
+// orphanNotFoundThreshold is the number of consecutive NotFound responses
+// from the runner that mark a run as orphaned. The runner keeps run state
+// in memory only, so a process restart (crash, plugin auto-install re-exec,
+// container restart) wipes every in-flight run. Without this check, those
+// runs would sit at "running" until the reaper's 30-minute timeout — and
+// the UI would lie that whole time. 3 polls = ~3 minutes is enough to be
+// confident the run is gone, not just transiently unreachable.
+const orphanNotFoundThreshold = 3
+
 // WarmPoolExecutor dispatches pipeline runs to a ConnectRPC runner service.
 // It maintains an in-memory map of active runs. Status updates are primarily
 // received via push callbacks from the runner (HandleStatusCallback). Polling
@@ -58,6 +67,7 @@ type WarmPoolExecutor struct {
 	mu            sync.Mutex
 	active        map[string]*domain.Run // ratd run_id → Run
 	runnerIDs     map[string]string      // ratd run_id → runner run_id
+	notFoundCount map[string]int         // ratd run_id → consecutive NotFound polls
 	pollInterval  time.Duration
 	cancel        context.CancelFunc
 	done          chan struct{}
@@ -81,9 +91,10 @@ func NewWarmPoolExecutor(runnerAddr string, runs api.RunStore, httpClient ...*ht
 	return &WarmPoolExecutor{
 		runner:       client,
 		runs:         runs,
-		active:       make(map[string]*domain.Run),
-		runnerIDs:    make(map[string]string),
-		pollInterval: FallbackPollInterval,
+		active:        make(map[string]*domain.Run),
+		runnerIDs:     make(map[string]string),
+		notFoundCount: make(map[string]int),
+		pollInterval:  FallbackPollInterval,
 	}
 }
 
@@ -104,9 +115,10 @@ func newWarmPoolExecutorWithClient(client runnerv1connect.RunnerServiceClient, r
 	return &WarmPoolExecutor{
 		runner:       client,
 		runs:         runs,
-		active:       make(map[string]*domain.Run),
-		runnerIDs:    make(map[string]string),
-		pollInterval: FallbackPollInterval,
+		active:        make(map[string]*domain.Run),
+		runnerIDs:     make(map[string]string),
+		notFoundCount: make(map[string]int),
+		pollInterval:  FallbackPollInterval,
 	}
 }
 
@@ -238,9 +250,40 @@ func (e *WarmPoolExecutor) poll(ctx context.Context) {
 
 		resp, err := e.runner.GetRunStatus(ctx, req)
 		if err != nil {
+			// If the runner says NotFound repeatedly, the run is orphaned —
+			// the runner process restarted (crash or plugin re-exec) and lost
+			// it. Fail the run so the UI stops claiming it's still running.
+			if connectErr := new(connect.Error); errors.As(err, &connectErr) && connectErr.Code() == connect.CodeNotFound {
+				e.mu.Lock()
+				e.notFoundCount[id]++
+				count := e.notFoundCount[id]
+				e.mu.Unlock()
+				if count >= orphanNotFoundThreshold {
+					errMsg := "runner lost track of this run (process restarted mid-execution)"
+					if uErr := e.runs.UpdateRunStatus(ctx, id, domain.RunStatusFailed, &errMsg, nil, nil); uErr != nil {
+						slog.Error("poll: failed to mark orphaned run failed", "run_id", id, "error", uErr)
+						continue
+					}
+					slog.Warn("poll: marked orphaned run as failed", "run_id", id, "runner_id", runnerID, "consecutive_not_found", count)
+					e.mu.Lock()
+					delete(e.active, id)
+					delete(e.runnerIDs, id)
+					delete(e.notFoundCount, id)
+					e.mu.Unlock()
+					continue
+				}
+				slog.Warn("poll: run not found (will retry)", "run_id", id, "runner_id", runnerID, "consecutive_not_found", count, "threshold", orphanNotFoundThreshold)
+				continue
+			}
 			slog.Warn("poll: failed to get run status", "run_id", id, "runner_id", runnerID, "error", err)
 			continue
 		}
+
+		// Any successful response resets the orphan counter — a transient
+		// blip shouldn't accumulate across reachable polls.
+		e.mu.Lock()
+		delete(e.notFoundCount, id)
+		e.mu.Unlock()
 
 		status := protoStatusToDomain(resp.Msg.Status)
 		if status == domain.RunStatusSuccess || status == domain.RunStatusFailed {
