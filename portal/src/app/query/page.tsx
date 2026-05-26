@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { useApiClient } from "@/providers/api-provider";
 import { useQuerySchema } from "@/hooks/use-api";
 import { SqlEditor, type SqlEditorHandle } from "@/components/sql-editor";
@@ -18,7 +19,11 @@ export default function QueryPage() {
   const { triggerGlitch, GlitchOverlay } = useScreenGlitch();
   const editorRef = useRef<SqlEditorHandle>(null);
 
-  const [sqlValue, setSqlValue] = useState("SELECT 1 as test;");
+  // ?sql=<encoded> lets other surfaces deep-link queries into the editor
+  // (the chat plugin uses this so "Open in Query" copies the AI's SQL).
+  const searchParams = useSearchParams();
+  const initialSql = searchParams.get("sql") || "SELECT 1 as test;";
+  const [sqlValue, setSqlValue] = useState(initialSql);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

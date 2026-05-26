@@ -311,15 +311,79 @@
     );
   }
 
+  // Extract the QueryResult JSON that the SQL MCP server embeds inside its
+  // text output. The MCP tool returns "<header>\n\n<json>" — try to peel
+  // off the JSON tail and parse it. Returns null if it's not a SQL result.
+  function tryParseSqlResult(toolName, output) {
+    if (!toolName || (toolName.indexOf("sql__") !== 0)) return null;
+    if (typeof output !== "string") return null;
+    var idx = output.indexOf("\n{");
+    if (idx < 0) return null;
+    try {
+      var parsed = JSON.parse(output.slice(idx + 1));
+      if (parsed && Array.isArray(parsed.columns) && Array.isArray(parsed.rows)) {
+        var header = output.slice(0, idx).trim();
+        return { columns: parsed.columns, rows: parsed.rows, header: header };
+      }
+    } catch (e) { return null; }
+    return null;
+  }
+
+  // SqlResultTable renders a parsed QueryResult inline — much nicer than a
+  // JSON dump for the user. Capped at 25 rows for display; the LLM still
+  // gets all of them via the tool-result message.
+  function SqlResultTable(props) {
+    var r = props.result;
+    var maxRows = 25;
+    var rows = r.rows.slice(0, maxRows);
+    return h("div", null,
+      r.header && h("div", { style: { color: C.muted, fontSize: 11, margin: "0 0 6px" } }, r.header),
+      h("div", { style: { overflow: "auto", border: "1px solid " + C.border } },
+        h("table", { style: { borderCollapse: "collapse", fontSize: 11, width: "100%" } },
+          h("thead", null,
+            h("tr", null, r.columns.map(function (c, i) {
+              return h("th", { key: "h" + i, style: {
+                border: "1px solid " + C.border, padding: "4px 8px",
+                textAlign: "left", background: C.cardAlt, color: C.fg, fontWeight: 700,
+              } },
+                c.name,
+                h("span", { style: { color: C.muted, fontWeight: 400, marginLeft: 6, fontSize: 10 } }, c.type || ""),
+              );
+            }))),
+          h("tbody", null, rows.map(function (row, ri) {
+            return h("tr", { key: "r" + ri }, r.columns.map(function (c, ci) {
+              var v = row[c.name];
+              return h("td", { key: "c" + ci, style: {
+                border: "1px solid " + C.border, padding: "4px 8px",
+                color: C.fg, whiteSpace: "nowrap",
+              } }, v === null || v === undefined ? h("span", { style: { color: C.muted } }, "NULL") : String(v));
+            }));
+          })),
+        ),
+      ),
+      r.rows.length > maxRows && h("div", { style: { color: C.muted, fontSize: 11, marginTop: 6 } },
+        "showing " + maxRows + " of " + r.rows.length + " rows (AI got all of them)"),
+    );
+  }
+
+  // queryUrlFor builds a portal /query URL that pre-loads the AI's SQL,
+  // so the user can click through and iterate on it.
+  function queryUrlFor(sql) {
+    return apiBase().replace(/\/$/, "") + "/query?sql=" + encodeURIComponent(sql);
+  }
+
   function ToolCallCard(props) {
     var c = props.call, r = props.result;
     var openInit = false; // collapsed by default — output can be huge
     var st = useState(openInit), open = st[0], setOpen = st[1];
-    var args = "";
-    try { args = JSON.stringify(JSON.parse(c.function.arguments), null, 2); }
-    catch (e) { args = c.function.arguments || ""; }
+    var parsedArgs = null;
+    try { parsedArgs = JSON.parse(c.function.arguments); } catch (e) {}
+    var argsPretty = parsedArgs ? JSON.stringify(parsedArgs, null, 2) : (c.function.arguments || "");
     var output = r ? r.output : null;
     var isErr = r && r.is_error;
+    var sqlResult = r && !isErr ? tryParseSqlResult(c.function.name, output) : null;
+    var sqlText = parsedArgs && typeof parsedArgs.sql === "string" ? parsedArgs.sql : null;
+    var showOpenInQuery = sqlText && sqlText.length > 0;
 
     return h("div", {
       style: {
@@ -328,13 +392,27 @@
       },
     },
       h("div", {
-        style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", color: isErr ? C.danger : C.accent },
-        onClick: function () { setOpen(!open); },
+        style: { display: "flex", alignItems: "center", gap: 8 },
       },
-        h("span", { style: { fontWeight: 700 } }, isErr ? "✗ tool" : "→ tool"),
-        h("span", { style: { fontFamily: "monospace" } }, c.function.name),
-        r === null && h("span", { style: { color: C.muted } }, " · running…"),
-        r && h("span", { style: { color: C.muted, marginLeft: "auto" } }, open ? "▾ hide" : "▸ show"),
+        h("div", {
+          style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", color: isErr ? C.danger : C.accent, flex: 1 },
+          onClick: function () { setOpen(!open); },
+        },
+          h("span", { style: { fontWeight: 700 } }, isErr ? "✗ tool" : "→ tool"),
+          h("span", { style: { fontFamily: "monospace" } }, c.function.name),
+          r === null && h("span", { style: { color: C.muted } }, " · running…"),
+          sqlResult && h("span", { style: { color: C.muted, fontSize: 11 } },
+            " · " + sqlResult.rows.length + " row" + (sqlResult.rows.length === 1 ? "" : "s")),
+          r && h("span", { style: { color: C.muted, marginLeft: "auto" } }, open ? "▾ hide" : "▸ show"),
+        ),
+        showOpenInQuery && h("a", {
+          href: queryUrlFor(sqlText), target: "_blank", rel: "noreferrer",
+          onClick: function (e) { e.stopPropagation(); },
+          style: {
+            fontSize: 10, padding: "2px 8px", border: "1px solid " + C.border,
+            color: C.primary, textDecoration: "none", letterSpacing: 0.5,
+          },
+        }, "OPEN IN QUERY"),
       ),
       open && h("div", { style: { marginTop: 8 } },
         h("div", { style: { color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 } }, "arguments"),
@@ -343,17 +421,54 @@
             margin: "4px 0 8px", padding: 8, background: C.bg, color: C.fg,
             overflow: "auto", maxHeight: 200, fontSize: 11,
           },
-        }, args || "(none)"),
+        }, argsPretty || "(none)"),
         r && h(React.Fragment, null,
           h("div", { style: { color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 } }, "output"),
-          h("pre", {
-            style: {
-              margin: "4px 0 0", padding: 8, background: C.bg, color: isErr ? C.danger : C.fg,
-              overflow: "auto", maxHeight: 400, fontSize: 11, whiteSpace: "pre-wrap",
-            },
-          }, typeof output === "string" ? output : JSON.stringify(output, null, 2)),
+          sqlResult
+            ? h("div", { style: { margin: "4px 0 0" } }, h(SqlResultTable, { result: sqlResult }))
+            : h("pre", {
+                style: {
+                  margin: "4px 0 0", padding: 8, background: C.bg, color: isErr ? C.danger : C.fg,
+                  overflow: "auto", maxHeight: 400, fontSize: 11, whiteSpace: "pre-wrap",
+                },
+              }, typeof output === "string" ? output : JSON.stringify(output, null, 2)),
         ),
       ),
+    );
+  }
+
+  // StreamingBubble renders the in-progress assistant turn: content arrives
+  // token-by-token, reasoning models also send chain-of-thought we show as
+  // a muted "thinking…" preamble (collapsed). When the turn finalises we
+  // replace this with a normal MessageBubble in the transcript.
+  function StreamingBubble(props) {
+    var content = props.content || "";
+    var reasoning = props.reasoning || "";
+    var stTh = useState(false), thinkingOpen = stTh[0], setThinkingOpen = stTh[1];
+    return h("div", {
+      style: {
+        margin: "10px 0", padding: "8px 12px",
+        borderLeft: "3px dashed " + C.accent,
+        background: C.card, color: C.fg,
+      },
+    },
+      h("div", { style: { color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 } },
+        "assistant · streaming"),
+      reasoning && h("div", {
+        style: { color: C.muted, fontSize: 11, marginBottom: 6, cursor: "pointer" },
+        onClick: function () { setThinkingOpen(!thinkingOpen); },
+      },
+        thinkingOpen ? "▾ thinking" : "▸ thinking",
+        thinkingOpen && h("pre", {
+          style: {
+            margin: "4px 0 0", padding: 8, background: C.bg, color: C.muted,
+            fontSize: 11, whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto",
+          },
+        }, reasoning),
+      ),
+      content
+        ? h("div", { style: { color: C.fg } }, renderMarkdown(content))
+        : !reasoning && h("div", { style: { color: C.muted, fontSize: 12 } }, "thinking…"),
     );
   }
 
@@ -389,8 +504,13 @@
     var st4 = useState(false), busy = st4[0], setBusy = st4[1];
     var st5 = useState([]),    servers = st5[0], setServers = st5[1];
     var st6 = useState(null),  error = st6[0], setError = st6[1];
+    // streamingBubble is the in-progress assistant turn (per LLM call in
+    // the multi-turn loop). Cleared when the turn finalises (assistant_message
+    // event) and a fresh bubble appears for the next iteration after tools run.
+    var st7 = useState(null),  streamingBubble = st7[0], setStreamingBubble = st7[1];
     var cancelRef = useRef(null);
     var scrollerRef = useRef(null);
+    var streamingBufRef = useRef({ content: "", reasoning: "" });
 
     var refreshServers = useCallback(function () {
       reqJSON("GET", "/servers").then(function (d) {
@@ -425,11 +545,23 @@
       var pendingCalls = []; // [{call, result}]
       var currentAssistantIdx = null;
 
+      streamingBufRef.current = { content: "", reasoning: "" };
+      setStreamingBubble(null);
+
       cancelRef.current = streamChat({ messages: nextMsgs }, function (ev, data) {
-        if (ev === "assistant_message") {
-          // Capture the full assistant message (may have content + tool_calls)
-          // and append it to msgs for the next turn. The transcript shows it
-          // as a new bubble with its associated tool cards.
+        if (ev === "assistant_delta") {
+          // Per-token streaming. Append content / reasoning to the running
+          // streamingBubble — the StreamingBubble component renders it live.
+          var buf = streamingBufRef.current;
+          if (data && data.content) buf.content += data.content;
+          if (data && data.reasoning) buf.reasoning += data.reasoning;
+          setStreamingBubble({ content: buf.content, reasoning: buf.reasoning });
+        } else if (ev === "assistant_message") {
+          // Final assembled message for this turn — push as a real bubble
+          // and clear the streamingBubble so the next iteration's deltas
+          // start fresh.
+          streamingBufRef.current = { content: "", reasoning: "" };
+          setStreamingBubble(null);
           setMsgs(function (cur) { return cur.concat([data]); });
           pendingCalls = (data.tool_calls || []).map(function (tc) { return { call: tc, result: null }; });
           setTranscript(function (prev) {
@@ -474,24 +606,35 @@
             }]);
           });
         } else if (ev === "done") {
+          setStreamingBubble(null);
           setBusy(false);
         } else if (ev === "error") {
           setError((data && data.error) || "unknown error");
+          setStreamingBubble(null);
           setBusy(false);
         }
       }, function onDone() {
+        setStreamingBubble(null);
         setBusy(false);
       }, function onError(msg) {
         setError(msg);
+        setStreamingBubble(null);
         setBusy(false);
       });
     }, [busy, input, msgs]);
+
+    var cancelTurn = useCallback(function () {
+      if (cancelRef.current) cancelRef.current();
+      setStreamingBubble(null);
+      setBusy(false);
+    }, []);
 
     var resetConversation = useCallback(function () {
       if (cancelRef.current) cancelRef.current();
       setMsgs([]);
       setTranscript([]);
       setError(null);
+      setStreamingBubble(null);
       setBusy(false);
     }, []);
 
@@ -553,8 +696,9 @@
         transcript.map(function (item, i) {
           return h(MessageBubble, { key: i, msg: item.msg, calls: item.calls });
         }),
-        busy && h("div", { style: { color: C.muted, fontSize: 12, margin: "10px 0" } },
-          "thinking…"),
+        streamingBubble && h(StreamingBubble, {
+          content: streamingBubble.content, reasoning: streamingBubble.reasoning,
+        }),
         error && h("div", {
           style: {
             margin: "10px 0", padding: "8px 12px", background: "rgba(239,68,68,0.10)",
@@ -576,15 +720,25 @@
             fontSize: 13, resize: "vertical",
           },
         }),
-        h("button", {
-          onClick: send,
-          disabled: busy || !input.trim(),
-          style: {
-            padding: "0 18px", background: busy ? C.muted : C.primary,
-            color: C.bg, border: "none", cursor: busy ? "not-allowed" : "pointer",
-            fontWeight: 700, letterSpacing: 1,
-          },
-        }, busy ? "…" : "SEND"),
+        busy
+          ? h("button", {
+              onClick: cancelTurn,
+              style: {
+                padding: "0 18px", background: C.danger,
+                color: C.fg, border: "none", cursor: "pointer",
+                fontWeight: 700, letterSpacing: 1,
+              },
+              title: "Cancel this turn",
+            }, "STOP")
+          : h("button", {
+              onClick: send,
+              disabled: !input.trim(),
+              style: {
+                padding: "0 18px", background: !input.trim() ? C.muted : C.primary,
+                color: C.bg, border: "none", cursor: !input.trim() ? "not-allowed" : "pointer",
+                fontWeight: 700, letterSpacing: 1,
+              },
+            }, "SEND"),
       ),
     );
   }

@@ -149,6 +149,8 @@ func registerWithInterconnect(ratdURL, self string) {
 			"description": "Raw multi-message chat completion from the AI provider."},
 		{"name": "ai.chat-with-tools", "provider": self, "method": "POST", "path": "/chat-with-tools",
 			"description": "Chat with OpenAI-style tool/function calling — returns tool_calls + finish_reason."},
+		{"name": "ai.chat-with-tools-stream", "provider": self, "method": "POST", "path": "/chat-with-tools-stream",
+			"description": "Streaming variant of chat-with-tools — SSE events 'delta' / 'done' / 'error'."},
 	}
 	endpoint := ratdURL + "/api/v1/x/interconnect/register"
 

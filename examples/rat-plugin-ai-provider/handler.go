@@ -48,6 +48,7 @@ func (h *Handler) Describe(
 			{Method: "POST", Path: "/complete", Description: "One-shot LLM completion (prompt in, text out)"},
 			{Method: "POST", Path: "/chat", Description: "Raw multi-message chat completion"},
 			{Method: "POST", Path: "/chat-with-tools", Description: "Chat with OpenAI-style tool/function calling (returns tool_calls + finish_reason)"},
+			{Method: "POST", Path: "/chat-with-tools-stream", Description: "Streaming variant — SSE events 'delta' / 'done' / 'error'"},
 			{Method: "GET", Path: "/config", Description: "The current effective config (API key masked)"},
 		},
 		ConfigSchemaJson: configSchemaJSON,

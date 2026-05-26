@@ -15,6 +15,7 @@ package main
 // blob would be terrible with the multi-turn loop.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -71,7 +72,7 @@ func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []ch
 	})
 
 	for iter := 1; iter <= maxIterations; iter++ {
-		resp, err := o.callAI(ctx, messages, tools)
+		resp, err := o.callAI(ctx, sink, messages, tools)
 		if err != nil {
 			_ = sink.emit("error", map[string]string{"error": err.Error()})
 			return err
@@ -146,35 +147,92 @@ type aiResponse struct {
 	Error        string      `json:"error,omitempty"`
 }
 
-// callAI hits ai-provider's /chat-with-tools through ratd's plugin proxy.
-// We call it directly (not through the interconnect broker) because the
-// orchestrator is the canonical consumer — there is no value in the extra
-// indirection for a hot-path call.
-func (o *orchestrator) callAI(ctx context.Context, messages []chatMessage, tools []openAITool) (*aiResponse, error) {
+// callAI streams ai-provider's /chat-with-tools-stream and forwards each
+// upstream delta to the orchestrator's sink as "assistant_delta". The
+// stream's final "done" event carries the fully assembled assistant
+// message — that's what we return for the next loop iteration.
+//
+// We call ai-provider directly (not through the interconnect broker)
+// because the orchestrator is the canonical consumer and the broker's
+// envelope would defeat SSE streaming anyway.
+func (o *orchestrator) callAI(ctx context.Context, sink sseSink, messages []chatMessage, tools []openAITool) (*aiResponse, error) {
 	body, _ := json.Marshal(map[string]any{"messages": messages, "tools": tools})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		o.ratdURL+"/api/v1/x/ai-provider/chat-with-tools", bytes.NewReader(body))
+		o.ratdURL+"/api/v1/x/ai-provider/chat-with-tools-stream", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
 	resp, err := o.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("ai-provider unreachable: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
 	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
 		return nil, fmt.Errorf("ai-provider HTTP %d: %s", resp.StatusCode, truncate(string(raw), 200))
 	}
-	var ar aiResponse
-	if err := json.Unmarshal(raw, &ar); err != nil {
-		return nil, fmt.Errorf("decode ai-provider response: %w", err)
+
+	var ar *aiResponse
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	var event, dataLine string
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			// Blank line ends one SSE event — dispatch it.
+			if dataLine != "" {
+				if e := o.handleAIEvent(sink, event, dataLine, &ar); e != nil {
+					return nil, e
+				}
+			}
+			event, dataLine = "", ""
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			event = strings.TrimSpace(line[6:])
+		} else if strings.HasPrefix(line, "data:") {
+			dataLine += strings.TrimPrefix(line, "data:")
+			dataLine = strings.TrimLeft(dataLine, " ")
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read ai stream: %w", err)
+	}
+	if ar == nil {
+		return nil, fmt.Errorf("ai stream ended without a done event")
 	}
 	if ar.Error != "" {
 		return nil, fmt.Errorf("ai-provider: %s", ar.Error)
 	}
-	return &ar, nil
+	return ar, nil
+}
+
+// handleAIEvent processes one SSE event from ai-provider. Deltas are
+// forwarded to the UI; the "done" event carries the final assembled
+// message which we hand back to the loop.
+func (o *orchestrator) handleAIEvent(sink sseSink, event, data string, ar **aiResponse) error {
+	switch event {
+	case "delta":
+		// Pass-through; the UI knows how to render content + reasoning.
+		var d map[string]any
+		if err := json.Unmarshal([]byte(data), &d); err != nil {
+			return nil // skip malformed
+		}
+		_ = sink.emit("assistant_delta", d)
+	case "done":
+		var resp aiResponse
+		if err := json.Unmarshal([]byte(data), &resp); err != nil {
+			return fmt.Errorf("decode done event: %w", err)
+		}
+		*ar = &resp
+	case "error":
+		var e struct{ Error string `json:"error"` }
+		_ = json.Unmarshal([]byte(data), &e)
+		return fmt.Errorf("ai-provider: %s", e.Error)
+	}
+	return nil
 }
 
 // ── Type bridges between MCP and OpenAI's tool format ─────────────
