@@ -20,7 +20,12 @@
 -- @description: Live orders stream — 60-day backfill on first run, then continuous 30s ingestion. ordered_at is a TIMESTAMP so the "last hour / last 5 minutes" demos work.
 
 WITH backfill AS (
-  {% if not is_incremental() %}
+  -- "No watermark yet" is the actual signal we want — is_incremental()
+  -- by itself just means "strategy=incremental", which is true on every
+  -- run including the first. watermark_value is None on first run
+  -- (which Jinja renders as the literal string "None"), so we gate on
+  -- its truthiness.
+  {% if not watermark_value %}
     SELECT
       s.id AS order_id,
       1 + ((s.id * 7) % 500) AS customer_id,
@@ -62,6 +67,6 @@ live AS (
 SELECT * FROM backfill
 UNION ALL
 SELECT * FROM live
-{% if is_incremental() %}
+{% if watermark_value %}
 WHERE ordered_at > CAST('{{ watermark_value }}' AS TIMESTAMP)
 {% endif %}
