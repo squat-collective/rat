@@ -99,6 +99,197 @@
     return function () { ctrl.abort(); };
   }
 
+  // ── Tiny markdown renderer ─────────────────────────────────────
+  // Bundle is build-free (no node_modules), so we hand-render the subset of
+  // markdown the LLM actually emits: tables, headings, bold/italic, inline
+  // code, code fences, lists, links. ~100 lines instead of vendoring marked.
+
+  function escapeHtmlText(s) { return s; } // React.createElement escapes by default
+
+  // Render *inline* markdown (bold, italic, code, links) inside one piece of
+  // text. Returns an array of React nodes the caller can splat into a parent.
+  function renderInline(text, keyPrefix) {
+    var out = [];
+    var i = 0, n = text.length, key = 0;
+    function push(node) { out.push(node); }
+    function k() { key++; return (keyPrefix || "i") + "-" + key; }
+
+    while (i < n) {
+      // Inline code: `…`
+      if (text[i] === "`") {
+        var end = text.indexOf("`", i + 1);
+        if (end > i) {
+          push(h("code", { key: k(), style: {
+            background: C.bg, border: "1px solid " + C.border, padding: "1px 4px",
+            fontFamily: "monospace", fontSize: "0.92em", color: C.primary,
+          } }, text.slice(i + 1, end)));
+          i = end + 1; continue;
+        }
+      }
+      // Bold: **…**
+      if (text[i] === "*" && text[i + 1] === "*") {
+        var endB = text.indexOf("**", i + 2);
+        if (endB > i + 1) {
+          push(h("strong", { key: k(), style: { color: C.fg } }, renderInline(text.slice(i + 2, endB), k())));
+          i = endB + 2; continue;
+        }
+      }
+      // Italic: _…_  or *…* (single)
+      if ((text[i] === "_" || text[i] === "*") && text[i + 1] !== text[i]) {
+        var mark = text[i];
+        var endI = text.indexOf(mark, i + 1);
+        if (endI > i) {
+          push(h("em", { key: k() }, renderInline(text.slice(i + 1, endI), k())));
+          i = endI + 1; continue;
+        }
+      }
+      // Link: [label](url)
+      if (text[i] === "[") {
+        var lEnd = text.indexOf("]", i + 1);
+        if (lEnd > i && text[lEnd + 1] === "(") {
+          var uEnd = text.indexOf(")", lEnd + 2);
+          if (uEnd > lEnd) {
+            var label = text.slice(i + 1, lEnd);
+            var url = text.slice(lEnd + 2, uEnd);
+            push(h("a", { key: k(), href: url, target: "_blank", rel: "noreferrer",
+              style: { color: C.primary, textDecoration: "underline" } }, label));
+            i = uEnd + 1; continue;
+          }
+        }
+      }
+      // Plain run — eat until the next special character.
+      var j = i;
+      while (j < n && "`*_[".indexOf(text[j]) < 0) j++;
+      if (j === i) j = i + 1; // unmatched special, treat as literal
+      push(text.slice(i, j));
+      i = j;
+    }
+    return out;
+  }
+
+  // Split markdown text into block tokens and render each. We handle:
+  //   - fenced code blocks (```)
+  //   - headings (#, ##, …)
+  //   - GFM tables (pipe-delimited with a `---|---` separator row)
+  //   - unordered lists (- / *)
+  //   - ordered lists (1. 2. …)
+  //   - paragraphs (anything else)
+  function renderMarkdown(text) {
+    if (!text) return null;
+    var lines = text.replace(/\r\n/g, "\n").split("\n");
+    var blocks = [];
+    var i = 0, key = 0;
+    function k() { key++; return "b-" + key; }
+
+    while (i < lines.length) {
+      var line = lines[i];
+
+      // Fenced code block
+      if (/^```/.test(line)) {
+        var lang = line.slice(3).trim();
+        var start = i + 1;
+        i = start;
+        while (i < lines.length && !/^```/.test(lines[i])) i++;
+        var code = lines.slice(start, i).join("\n");
+        blocks.push(h("pre", { key: k(), style: {
+          background: C.bg, border: "1px solid " + C.border, padding: 10,
+          overflow: "auto", fontSize: 12, margin: "8px 0",
+        } }, h("code", { className: lang ? "language-" + lang : undefined,
+          style: { color: C.fg, fontFamily: "monospace" } }, code)));
+        i++; // skip closing fence
+        continue;
+      }
+
+      // Heading
+      var hm = /^(#{1,6})\s+(.*)$/.exec(line);
+      if (hm) {
+        var lvl = hm[1].length;
+        var size = [18, 16, 14, 13, 13, 13][lvl - 1];
+        blocks.push(h("h" + lvl, { key: k(), style: {
+          margin: "12px 0 6px", fontSize: size, fontWeight: 700,
+          color: C.fg, letterSpacing: lvl <= 2 ? 0.5 : 0,
+        } }, renderInline(hm[2], k())));
+        i++; continue;
+      }
+
+      // GFM table — header line, separator (---|---), then rows.
+      if (line.indexOf("|") >= 0 && i + 1 < lines.length &&
+          /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(lines[i + 1])) {
+        var header = splitRow(line);
+        i += 2; // skip header + separator
+        var rows = [];
+        while (i < lines.length && lines[i].indexOf("|") >= 0 && lines[i].trim() !== "") {
+          rows.push(splitRow(lines[i]));
+          i++;
+        }
+        blocks.push(h("div", { key: k(), style: { overflow: "auto", margin: "8px 0" } },
+          h("table", { style: { borderCollapse: "collapse", fontSize: 12 } },
+            h("thead", null,
+              h("tr", null, header.map(function (c, j) {
+                return h("th", { key: "h" + j, style: {
+                  border: "1px solid " + C.border, padding: "4px 8px",
+                  textAlign: "left", background: C.cardAlt, color: C.fg,
+                  fontWeight: 700,
+                } }, renderInline(c, "th-" + j));
+              }))),
+            h("tbody", null, rows.map(function (r, ri) {
+              return h("tr", { key: "r" + ri }, r.map(function (c, ci) {
+                return h("td", { key: "c" + ci, style: {
+                  border: "1px solid " + C.border, padding: "4px 8px",
+                  color: C.fg, whiteSpace: "nowrap",
+                } }, renderInline(c, "td-" + ri + "-" + ci));
+              }));
+            })),
+          ),
+        ));
+        continue;
+      }
+
+      // Lists (ordered or unordered) — collect consecutive list-lines.
+      if (/^\s*[-*]\s+/.test(line) || /^\s*\d+\.\s+/.test(line)) {
+        var ordered = /^\s*\d+\.\s+/.test(line);
+        var items = [];
+        while (i < lines.length && (/^\s*[-*]\s+/.test(lines[i]) || /^\s*\d+\.\s+/.test(lines[i]))) {
+          items.push(lines[i].replace(/^\s*([-*]|\d+\.)\s+/, ""));
+          i++;
+        }
+        var Tag = ordered ? "ol" : "ul";
+        blocks.push(h(Tag, { key: k(), style: { margin: "6px 0 6px 20px", color: C.fg, fontSize: 13, lineHeight: 1.5 } },
+          items.map(function (it, ii) {
+            return h("li", { key: "li-" + ii }, renderInline(it, "li-" + ii));
+          })));
+        continue;
+      }
+
+      // Blank line → flush paragraph break
+      if (line.trim() === "") { i++; continue; }
+
+      // Paragraph — gather consecutive non-blank, non-special lines.
+      var paraLines = [line];
+      i++;
+      while (i < lines.length && lines[i].trim() !== "" &&
+             !/^```/.test(lines[i]) && !/^#{1,6}\s+/.test(lines[i]) &&
+             !/^\s*[-*]\s+/.test(lines[i]) && !/^\s*\d+\.\s+/.test(lines[i]) &&
+             !(lines[i].indexOf("|") >= 0 && i + 1 < lines.length &&
+               /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(lines[i + 1]))) {
+        paraLines.push(lines[i]);
+        i++;
+      }
+      blocks.push(h("p", { key: k(), style: {
+        margin: "6px 0", color: C.fg, fontSize: 13, lineHeight: 1.55,
+      } }, renderInline(paraLines.join(" "), k())));
+    }
+
+    return blocks;
+  }
+
+  function splitRow(line) {
+    var s = line.trim();
+    if (s.charAt(0) === "|") s = s.slice(1);
+    if (s.charAt(s.length - 1) === "|") s = s.slice(0, -1);
+    return s.split("|").map(function (c) { return c.trim(); });
+  }
+
   // ── Components ─────────────────────────────────────────────────
 
   function ServerBadge(props) {
@@ -180,7 +371,9 @@
     },
       h("div", { style: { color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 } },
         label),
-      msg.content && h("div", { style: { whiteSpace: "pre-wrap", color: color, fontSize: 13, lineHeight: 1.5 } }, msg.content),
+      msg.content && (isUser
+        ? h("div", { style: { whiteSpace: "pre-wrap", color: color, fontSize: 13, lineHeight: 1.5 } }, msg.content)
+        : h("div", { style: { color: C.fg } }, renderMarkdown(msg.content))),
       calls && calls.length > 0 && h("div", null,
         calls.map(function (c) { return h(ToolCallCard, { key: c.call.id, call: c.call, result: c.result }); })
       ),
