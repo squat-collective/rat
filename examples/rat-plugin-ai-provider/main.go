@@ -147,6 +147,8 @@ func registerWithInterconnect(ratdURL, self string) {
 			"description": "One-shot LLM completion from the AI provider."},
 		{"name": "ai.chat", "provider": self, "method": "POST", "path": "/chat",
 			"description": "Raw multi-message chat completion from the AI provider."},
+		{"name": "ai.chat-with-tools", "provider": self, "method": "POST", "path": "/chat-with-tools",
+			"description": "Chat with OpenAI-style tool/function calling — returns tool_calls + finish_reason."},
 	}
 	endpoint := ratdURL + "/api/v1/x/interconnect/register"
 

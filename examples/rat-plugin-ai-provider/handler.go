@@ -47,6 +47,7 @@ func (h *Handler) Describe(
 		Routes: []*pluginv1.RouteDeclaration{
 			{Method: "POST", Path: "/complete", Description: "One-shot LLM completion (prompt in, text out)"},
 			{Method: "POST", Path: "/chat", Description: "Raw multi-message chat completion"},
+			{Method: "POST", Path: "/chat-with-tools", Description: "Chat with OpenAI-style tool/function calling (returns tool_calls + finish_reason)"},
 			{Method: "GET", Path: "/config", Description: "The current effective config (API key masked)"},
 		},
 		ConfigSchemaJson: configSchemaJSON,
