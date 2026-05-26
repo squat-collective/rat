@@ -72,10 +72,13 @@
     var d = props.demo;
     var stateS = React.useState({ status: "idle" });
     var state = stateS[0], setState = stateS[1];
+    var nsS = React.useState(d.namespace);
+    var ns = nsS[0], setNs = nsS[1];
 
     function install() {
+      var target = (ns || "").trim() || d.namespace;
       setState({ status: "installing" });
-      req("POST", "/api/v1/x/demo-loader/install", { demo_id: d.id })
+      req("POST", "/api/v1/x/demo-loader/install", { demo_id: d.id, namespace: target })
         .then(function (res) {
           if (typeof window.__RAT_INVALIDATE === "function") {
             window.__RAT_INVALIDATE();
@@ -95,10 +98,21 @@
         h("div", null,
           h("div", { style: { fontWeight: 800, fontSize: "1rem" } }, d.name),
           h("div", { style: { fontSize: "0.7rem", color: C.muted, marginTop: "0.15rem" } },
-            "namespace: ",
-            h("span", { style: { fontFamily: "monospace" } }, d.namespace),
-            " · ", d.pipeline_count, " pipelines · ", d.test_count, " quality tests")),
-        h("div", { style: { display: "flex", gap: "0.4rem", alignItems: "center" } },
+            d.pipeline_count, " pipelines · ", d.test_count, " quality tests")),
+        h("div", { style: { display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap" } },
+          h("label", { style: { fontSize: "0.6rem", color: C.muted, textTransform: "uppercase", letterSpacing: "0.05em" } }, "namespace"),
+          h("input", {
+            type: "text",
+            value: ns,
+            placeholder: d.namespace,
+            onChange: function (e) { setNs(e.target.value); },
+            disabled: state.status === "installing",
+            style: {
+              fontSize: "0.76rem", fontFamily: "monospace",
+              padding: "0.2rem 0.4rem", width: "8.5rem",
+              background: C.bg, color: C.fg, border: "1px solid " + C.border,
+            },
+          }),
           state.status === "installing"
             ? h("span", { style: { fontSize: "0.78rem", color: C.muted } }, "Installing…")
             : null,
