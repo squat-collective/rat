@@ -89,9 +89,15 @@ services:
       # S3 — same creds as ratd, for DuckDB table reads
       <<: *s3-credentials
       NESSIE_URL: http://nessie:19120/api/v1
+      # Federated user-data Postgres. ratq's DuckDB ATTACHes this on
+      # startup so queries can JOIN across Iceberg + Postgres (e.g.
+      # SELECT … FROM userdata.public.country_codes c JOIN
+      # shop.silver.orders_enriched o ON o.country = c.iso2).
+      POSTGRES_USERDATA_URL: "postgresql://${POSTGRES_USER:-rat}:${POSTGRES_PASSWORD:-rat}@postgres:5432/userdata"
     depends_on:
       minio: { condition: service_healthy }
       nessie: { condition: service_healthy }
+      postgres: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "python", "-c", "import grpc; ch=grpc.insecure_channel('localhost:50051'); grpc.channel_ready_future(ch).result(timeout=2)"]
       interval: 10s
@@ -212,6 +218,11 @@ services:
       POSTGRES_DB: rat
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # /docker-entrypoint-initdb.d/ runs SQL files in lexical order on
+      # FIRST startup only (when the data dir is empty). 01-create-
+      # userdata.sql creates the 'userdata' database the federated
+      # query layer attaches to.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rat}"]
       interval: 5s

@@ -20,7 +20,7 @@ from query.v1 import (
 
 from rat_query.arrow_ipc import columns_from_schema, table_to_ipc
 from rat_query.catalog import NessieCatalog
-from rat_query.config import DuckDBConfig, NessieConfig, S3Config
+from rat_query.config import DuckDBConfig, NessieConfig, S3Config, UserDataPostgresConfig
 from rat_query.engine import QueryEngine, _validate_identifier
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,11 @@ class QueryServiceImpl(query_pb2_grpc.QueryServiceServicer):
         nessie_config: NessieConfig,
         namespace: str = "default",
     ) -> None:
-        self._engine = QueryEngine(s3_config, DuckDBConfig.from_env())
+        self._engine = QueryEngine(
+            s3_config,
+            DuckDBConfig.from_env(),
+            UserDataPostgresConfig.from_env(),
+        )
         self._catalog = NessieCatalog(nessie_config, s3_config, self._engine)
         self._namespace = namespace
         self._refresh_stop = threading.Event()

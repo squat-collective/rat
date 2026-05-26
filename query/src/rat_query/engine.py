@@ -9,7 +9,7 @@ import threading
 import duckdb
 import pyarrow as pa
 
-from rat_query.config import DuckDBConfig, S3Config
+from rat_query.config import DuckDBConfig, S3Config, UserDataPostgresConfig
 
 
 def _to_arrow_table(arrow_result: pa.Table | pa.RecordBatchReader) -> pa.Table:
@@ -113,11 +113,21 @@ class QueryEngine:
     Unlike the runner engine (one connection per run), the query engine maintains
     a single persistent connection — DuckDB handles internal query parallelism.
     A threading.Lock protects DDL operations (view registration) only.
+
+    When userdata_pg is provided AND has a non-empty url, the connection
+    also ATTACHes that postgres database — making its tables queryable
+    alongside Iceberg ones (federated SELECT across both stores).
     """
 
-    def __init__(self, s3_config: S3Config, duckdb_config: DuckDBConfig | None = None) -> None:
+    def __init__(
+        self,
+        s3_config: S3Config,
+        duckdb_config: DuckDBConfig | None = None,
+        userdata_pg: UserDataPostgresConfig | None = None,
+    ) -> None:
         self._s3_config = s3_config
         self._duckdb_config = duckdb_config or DuckDBConfig()
+        self._userdata_pg = userdata_pg or UserDataPostgresConfig()
         self._conn = self._create_connection()
         self._ddl_lock = threading.Lock()
 
@@ -139,6 +149,31 @@ class QueryEngine:
         # Memory and thread limits to prevent resource exhaustion
         conn.execute("SET memory_limit = ?", [self._duckdb_config.memory_limit])
         conn.execute("SET threads = ?", [self._duckdb_config.threads])
+
+        # Optional: federated user-data Postgres. ATTACH makes the
+        # postgres tables queryable as `{alias}.{schema}.{table}` in any
+        # SELECT — DuckDB pushes filters down to postgres where it can.
+        if self._userdata_pg and self._userdata_pg.url:
+            try:
+                conn.execute("INSTALL postgres; LOAD postgres;")
+                # Single-quote escape — the URL is from env, not user input,
+                # but we still avoid string-format injection.
+                safe_url = self._userdata_pg.url.replace("'", "''")
+                safe_alias = _validate_identifier(
+                    self._userdata_pg.alias, "postgres alias"
+                )
+                conn.execute(
+                    f"ATTACH IF NOT EXISTS '{safe_url}' "
+                    f"AS \"{safe_alias}\" (TYPE postgres, READ_ONLY false)"
+                )
+                logger.info(
+                    "attached userdata postgres as '%s'", safe_alias
+                )
+            except Exception:
+                logger.exception(
+                    "failed to attach userdata postgres at %s — federation disabled, queries against userdata.* will fail",
+                    self._userdata_pg.url,
+                )
 
         return conn
 

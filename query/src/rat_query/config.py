@@ -87,6 +87,28 @@ class DuckDBConfig:
 
 
 @dataclass(frozen=True)
+class UserDataPostgresConfig:
+    """Postgres connection for the federated user-data database.
+
+    When set, ratq INSTALLs DuckDB's postgres extension and ATTACHes this
+    database as an alias (default "userdata"), making its tables queryable
+    alongside Iceberg ones via `SELECT … FROM userdata.public.foo`.
+
+    Empty url disables federation — useful for tests / minimal deployments.
+    """
+
+    url: str = ""
+    alias: str = "userdata"
+
+    @classmethod
+    def from_env(cls) -> UserDataPostgresConfig:
+        return cls(
+            url=os.environ.get("POSTGRES_USERDATA_URL", ""),
+            alias=os.environ.get("POSTGRES_USERDATA_ALIAS", "userdata"),
+        )
+
+
+@dataclass(frozen=True)
 class NessieConfig:
     """Nessie catalog connection configuration.
 
