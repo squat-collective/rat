@@ -51,7 +51,6 @@ export function PipelineOverview({
     try {
       await api.pipelines.rollback(pipeline.namespace, pipeline.layer, pipeline.name, versionNumber);
       await mutate(KEYS.match.pipelines);
-      await mutate(KEYS.match.lineage);
       await onVersionsRefresh();
     } catch (e) {
       console.error("Failed to rollback pipeline version:", e);

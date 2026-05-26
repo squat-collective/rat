@@ -235,7 +235,6 @@ export function PipelineEditor({
     try {
       await api.pipelines.publish(pipeline.namespace, pipeline.layer, pipeline.name, message);
       await mutate(KEYS.match.pipelines);
-      await mutate(KEYS.match.lineage);
       await onVersionsRefresh();
       setPublishDialogOpen(false);
       setPublishMessage("");

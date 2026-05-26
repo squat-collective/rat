@@ -1,3 +1,6 @@
+// dagre auto-layout for the lineage DAG. Direct port of the
+// portal's dag-layout.ts. Left-to-right rankdir matches the
+// natural flow of bronze → silver → gold pipelines.
 import dagre from "dagre";
 import type { Node, Edge } from "@xyflow/react";
 
@@ -7,7 +10,6 @@ const NODE_DIMENSIONS: Record<string, { width: number; height: number }> = {
   landing_zone: { width: 180, height: 80 },
 };
 
-/** Apply dagre auto-layout to React Flow nodes + edges (left-to-right). */
 export function layoutGraph(
   nodes: Node[],
   edges: Edge[],
@@ -17,7 +19,8 @@ export function layoutGraph(
   g.setGraph({ rankdir: "LR", nodesep: 60, ranksep: 120 });
 
   for (const node of nodes) {
-    const dims = NODE_DIMENSIONS[node.type ?? "pipeline"] ?? NODE_DIMENSIONS.pipeline;
+    const dims =
+      NODE_DIMENSIONS[node.type ?? "pipeline"] ?? NODE_DIMENSIONS.pipeline;
     g.setNode(node.id, { width: dims.width, height: dims.height });
   }
 
@@ -29,7 +32,8 @@ export function layoutGraph(
 
   const layoutedNodes = nodes.map((node) => {
     const pos = g.node(node.id);
-    const dims = NODE_DIMENSIONS[node.type ?? "pipeline"] ?? NODE_DIMENSIONS.pipeline;
+    const dims =
+      NODE_DIMENSIONS[node.type ?? "pipeline"] ?? NODE_DIMENSIONS.pipeline;
     return {
       ...node,
       position: {

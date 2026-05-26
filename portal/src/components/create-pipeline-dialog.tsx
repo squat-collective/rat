@@ -190,12 +190,11 @@ export function CreatePipelineDialog() {
 
       setOpen(false);
       resetForm();
-      // Refresh both the pipelines list (and detail) and the lineage view so
-      // the new pipeline shows up without a manual reload. router.refresh()
-      // covers the Server Component list page (/pipelines), which serverApi
-      // populates and which SWR's mutate() can't touch.
+      // Refresh the pipelines list (and detail) so the new pipeline shows
+      // up without a manual reload. router.refresh() covers the Server
+      // Component list page (/pipelines), which serverApi populates and
+      // which SWR's mutate() can't touch.
       await mutate(KEYS.match.pipelines);
-      mutate(KEYS.match.lineage);
       router.refresh();
       router.push(`/pipelines/${effectiveNamespace}/${layer}/${name}?tab=code`);
     } catch (e) {

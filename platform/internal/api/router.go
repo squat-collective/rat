@@ -468,7 +468,9 @@ func NewRouter(srv *Server) chi.Router {
 		MountQualityRoutes(vr, srv)
 		MountMetadataRoutes(vr, srv)
 		MountQueryRoutes(vr, srv)
-		MountLineageRoutes(vr, srv)
+		// Lineage moved out of core into rat-plugin-lineage. Mounted at
+		// /api/v1/x/lineage/graph by the plugin proxy; the plugin's UI
+		// bundle adds /x/lineage to the sidebar nav.
 		MountSharingRoutes(vr, srv)
 		MountLandingZoneRoutes(vr, srv)
 		if srv.Triggers != nil {

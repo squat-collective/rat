@@ -77,10 +77,6 @@ export const KEYS = {
   qualityTests: (ns: string, layer: string, name: string) =>
     `quality-${ns}-${layer}-${name}` as const,
 
-  // --- Lineage ---
-  lineage: (namespace?: string) =>
-    namespace ? (`lineage-${namespace}` as const) : ("lineage-all" as const),
-
   // --- Health / Features ---
   features: () => "features" as const,
 
@@ -123,9 +119,6 @@ export const KEYS = {
     /** Matches all table-related keys. */
     tables: (key: unknown): boolean =>
       typeof key === "string" && key.startsWith("tables"),
-    /** Matches all lineage keys. */
-    lineage: (key: unknown): boolean =>
-      typeof key === "string" && key.startsWith("lineage"),
     /** Matches all file tree keys (files-*). */
     files: (key: unknown): boolean =>
       typeof key === "string" && key.startsWith("files-"),

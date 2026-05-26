@@ -48,7 +48,6 @@ export function CreateLandingZoneDialog() {
       setName("");
       setDescription("");
       mutate(KEYS.match.landingZones);
-      mutate(KEYS.match.lineage);
     } catch (e) {
       console.error("Failed to create landing zone:", e);
       const msg =

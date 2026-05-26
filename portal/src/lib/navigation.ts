@@ -1,7 +1,6 @@
 import {
   Activity,
   Database,
-  GitBranch,
   Home,
   Inbox,
   Play,
@@ -20,7 +19,8 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Pipelines", href: "/pipelines", icon: Play },
   { label: "Query", href: "/query", icon: Search },
   { label: "Runs", href: "/runs", icon: Activity },
-  { label: "Lineage", href: "/lineage", icon: GitBranch },
+  // Lineage moved to rat-plugin-lineage; the plugin contributes its own
+  // sidebar entry via Describe().NavItems, so we don't add it here.
   { label: "Explorer", href: "/explorer", icon: Database },
   { label: "Landing", href: "/landing", icon: Inbox },
   { label: "Settings", href: "/settings", icon: Settings },

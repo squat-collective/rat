@@ -37,7 +37,6 @@ export function useUpdatePipeline(ns: string, layer: string, name: string) {
       try {
         const result = await api.pipelines.update(ns, layer, name, req);
         await mutate(KEYS.pipeline(ns, layer, name));
-        await mutate(KEYS.match.lineage);
         return result;
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));
@@ -103,7 +102,6 @@ export function useCreateRun(ns: string, layer: string, name: string) {
         trigger: "manual",
       });
       await mutate(KEYS.match.runs);
-      await mutate(KEYS.match.lineage);
       return result;
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e));
@@ -322,7 +320,6 @@ export function useUpdateLandingZone(ns: string, name: string) {
       try {
         const result = await api.landing.update(ns, name, req);
         await mutate(KEYS.landingZone(ns, name));
-        await mutate(KEYS.match.lineage);
         return result;
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));
@@ -524,15 +521,10 @@ export function usePreviewQualityTest(ns: string, layer: string, name: string) {
   return { preview, loading, results, errors };
 }
 
-/** Lineage */
-export function useLineage(namespace?: string) {
-  const api = useApiClient();
-  return useSWR(
-    KEYS.lineage(namespace),
-    () => api.lineage.get(namespace ? { namespace } : undefined),
-    { refreshInterval: 30000 },
-  );
-}
+// Lineage moved to rat-plugin-lineage (the plugin fetches its own
+// graph from /api/v1/x/lineage/graph). useLineage was removed; the
+// SDK's api.lineage method still exists but points at the old
+// /api/v1/lineage endpoint that no longer ships with ratd.
 
 /** Health */
 export function useFeatures() {

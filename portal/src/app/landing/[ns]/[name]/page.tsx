@@ -39,7 +39,6 @@ export default function LandingZoneDetailPage() {
     if (!confirm(`Delete zone "${params.name}" and all its files?`)) return;
     try {
       await api.landing.delete(params.ns, params.name);
-      mutate(KEYS.match.lineage);
       router.push("/landing");
     } catch (e) {
       console.error("Failed to delete landing zone:", e);
