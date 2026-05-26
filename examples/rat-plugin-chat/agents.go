@@ -23,14 +23,19 @@ import (
 // Agent mirrors the shape rat-plugin-agents serves. We keep a parallel
 // struct rather than importing — both plugins compile standalone.
 type Agent struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Icon         string   `json:"icon"`
-	Description  string   `json:"description"`
-	SystemPrompt string   `json:"system_prompt"`
-	AllowedTools []string `json:"allowed_tools"`
-	Model        string   `json:"model,omitempty"`
-	Temperature  float64  `json:"temperature,omitempty"`
+	ID               string   `json:"id"`
+	Name             string   `json:"name"`
+	Icon             string   `json:"icon"`
+	Description      string   `json:"description"`
+	SystemPrompt     string   `json:"system_prompt"`
+	AllowedTools     []string `json:"allowed_tools"`
+	Subagents        []string `json:"subagents,omitempty"`
+	MaxIterations    int      `json:"max_iterations,omitempty"`
+	Disabled         bool     `json:"disabled,omitempty"`
+	Color            string   `json:"color,omitempty"`
+	ExampleQuestions []string `json:"example_questions,omitempty"`
+	Model            string   `json:"model,omitempty"`
+	Temperature      float64  `json:"temperature,omitempty"`
 }
 
 // allowsAll returns true if this agent has the catch-all "*" tool entry

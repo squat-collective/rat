@@ -99,10 +99,15 @@ func (a *api) chat(w http.ResponseWriter, r *http.Request) {
 // responsible for executing the tools and feeding results back in the
 // next call. We deliberately do NOT loop here — the multi-turn dance is
 // the chat plugin's job, not ours.
+//
+// Optional `model` and `temperature` fields let the caller (typically an
+// agent) override the plugin's configured defaults per call.
 func (a *api) chatWithTools(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Messages []chatMessage     `json:"messages"`
-		Tools    []toolDeclaration `json:"tools"`
+		Messages    []chatMessage     `json:"messages"`
+		Tools       []toolDeclaration `json:"tools"`
+		Model       string            `json:"model,omitempty"`
+		Temperature float64           `json:"temperature,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
@@ -114,7 +119,7 @@ func (a *api) chatWithTools(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
-	msg, model, finish, err := a.llm.chatWithTools(ctx, in.Messages, in.Tools)
+	msg, model, finish, err := a.llm.chatWithTools(ctx, in.Messages, in.Tools, callOverrides{Model: in.Model, Temperature: in.Temperature})
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"error": err.Error()})
 		return
@@ -138,8 +143,10 @@ func (a *api) chatWithTools(w http.ResponseWriter, r *http.Request) {
 // assembled message at the end for the next loop iteration.
 func (a *api) chatWithToolsStream(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Messages []chatMessage     `json:"messages"`
-		Tools    []toolDeclaration `json:"tools"`
+		Messages    []chatMessage     `json:"messages"`
+		Tools       []toolDeclaration `json:"tools"`
+		Model       string            `json:"model,omitempty"`
+		Temperature float64           `json:"temperature,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body")
@@ -162,7 +169,7 @@ func (a *api) chatWithToolsStream(w http.ResponseWriter, r *http.Request) {
 	sink := &sseEmitter{w: w, flusher: flusher}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
-	msg, model, finish, err := a.llm.chatWithToolsStream(ctx, in.Messages, in.Tools, sink)
+	msg, model, finish, err := a.llm.chatWithToolsStream(ctx, in.Messages, in.Tools, callOverrides{Model: in.Model, Temperature: in.Temperature}, sink)
 	if err != nil {
 		_ = sink.emit("error", map[string]string{"error": err.Error()})
 		return

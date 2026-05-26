@@ -373,6 +373,17 @@
     return window.location.origin + "/query?sql=" + encodeURIComponent(sql);
   }
 
+  // Subagent calls are tool calls whose name starts with "agent__".
+  // We render them differently: header shows the subagent's name, and
+  // the output renders as full markdown (since the subagent returns
+  // free-form prose, not a JSON dump).
+  function isSubagentCall(name) {
+    return typeof name === "string" && name.indexOf("agent__") === 0;
+  }
+  function subagentIdOf(name) {
+    return name.indexOf("agent__") === 0 ? name.slice(7) : "";
+  }
+
   function ToolCallCard(props) {
     var c = props.call, r = props.result;
     var openInit = false; // collapsed by default — output can be huge
@@ -385,10 +396,28 @@
     var sqlResult = r && !isErr ? tryParseSqlResult(c.function.name, output) : null;
     var sqlText = parsedArgs && typeof parsedArgs.sql === "string" ? parsedArgs.sql : null;
     var showOpenInQuery = sqlText && sqlText.length > 0;
+    var sub = isSubagentCall(c.function.name);
+    var subAgent = sub ? (props.agentsById && props.agentsById[subagentIdOf(c.function.name)]) : null;
+    var subColor = subAgent && subAgent.color ? subAgent.color : C.accent;
+
+    var header = sub
+      ? h(React.Fragment, null,
+          h("span", { style: { fontWeight: 700 } }, isErr ? "✗ subagent" : "✦ subagent"),
+          subAgent && h("span", { style: {
+            width: 10, height: 10, borderRadius: 2, background: subColor, display: "inline-block",
+          } }),
+          h("span", { style: { fontWeight: 600 } }, (subAgent && subAgent.name) || subagentIdOf(c.function.name)),
+        )
+      : h(React.Fragment, null,
+          h("span", { style: { fontWeight: 700 } }, isErr ? "✗ tool" : "→ tool"),
+          h("span", { style: { fontFamily: "monospace" } }, c.function.name),
+        );
 
     return h("div", {
       style: {
-        margin: "8px 0", border: "1px solid " + (isErr ? C.danger : C.border),
+        margin: "8px 0",
+        border: "1px solid " + (isErr ? C.danger : C.border),
+        borderLeft: sub ? "4px solid " + subColor : "1px solid " + (isErr ? C.danger : C.border),
         background: C.cardAlt, padding: 10, fontSize: 12,
       },
     },
@@ -396,11 +425,11 @@
         style: { display: "flex", alignItems: "center", gap: 8 },
       },
         h("div", {
-          style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", color: isErr ? C.danger : C.accent, flex: 1 },
+          style: { display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
+                   color: isErr ? C.danger : (sub ? subColor : C.accent), flex: 1 },
           onClick: function () { setOpen(!open); },
         },
-          h("span", { style: { fontWeight: 700 } }, isErr ? "✗ tool" : "→ tool"),
-          h("span", { style: { fontFamily: "monospace" } }, c.function.name),
+          header,
           r === null && h("span", { style: { color: C.muted } }, " · running…"),
           sqlResult && h("span", { style: { color: C.muted, fontSize: 11 } },
             " · " + sqlResult.rows.length + " row" + (sqlResult.rows.length === 1 ? "" : "s")),
@@ -415,7 +444,21 @@
           },
         }, "OPEN IN QUERY"),
       ),
-      open && h("div", { style: { marginTop: 8 } },
+      // Subagents: show the task as a quoted preview (always visible),
+      // and render the full markdown answer inline (not collapsed) since
+      // that *is* the chat content the user came for.
+      sub && parsedArgs && parsedArgs.task && h("div", {
+        style: {
+          margin: "6px 0", padding: "4px 8px", borderLeft: "2px solid " + C.border,
+          color: C.muted, fontSize: 11, fontStyle: "italic",
+        },
+      }, "task: " + parsedArgs.task.slice(0, 220) + (parsedArgs.task.length > 220 ? "…" : "")),
+      sub && r && typeof output === "string" && h("div", {
+        style: { margin: "6px 0 0", padding: 8, background: C.card, color: isErr ? C.danger : C.fg },
+      }, isErr ? output : renderMarkdown(output)),
+      // Non-subagent: keep the collapsed-by-default behaviour with the
+      // SQL table affordance.
+      !sub && open && h("div", { style: { marginTop: 8 } },
         h("div", { style: { color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 } }, "arguments"),
         h("pre", {
           style: {
@@ -478,10 +521,11 @@
     var isUser = msg.role === "user";
     var label = isUser ? "you" : (msg.role === "assistant" ? "assistant" : msg.role);
     var color = isUser ? C.primary : C.fg;
+    var accentColor = isUser ? C.primary : (props.agentColor || C.accent);
     return h("div", {
       style: {
         margin: "10px 0", padding: "8px 12px",
-        borderLeft: "3px solid " + (isUser ? C.primary : C.accent),
+        borderLeft: "3px solid " + accentColor,
         background: C.card, color: C.fg,
       },
     },
@@ -491,7 +535,12 @@
         ? h("div", { style: { whiteSpace: "pre-wrap", color: color, fontSize: 13, lineHeight: 1.5 } }, msg.content)
         : h("div", { style: { color: C.fg } }, renderMarkdown(msg.content))),
       calls && calls.length > 0 && h("div", null,
-        calls.map(function (c) { return h(ToolCallCard, { key: c.call.id, call: c.call, result: c.result }); })
+        calls.map(function (c) {
+          return h(ToolCallCard, {
+            key: c.call.id, call: c.call, result: c.result,
+            agentsById: props.agentsById,
+          });
+        })
       ),
     );
   }
@@ -666,6 +715,14 @@
     }, [send]);
 
     var totalTools = servers.reduce(function (a, s) { return a + (s.tools_count || 0); }, 0);
+    var agentsById = {};
+    agents.forEach(function (a) { agentsById[a.id] = a; });
+    // Filter the picker to enabled agents only — disabled ones still
+    // resolve via /agents (for in-flight conversations) but can't be
+    // freshly picked.
+    var pickerAgents = agents.filter(function (a) { return !a.disabled; });
+    var currentAgent = agentsById[agentID];
+    var examples = (currentAgent && currentAgent.example_questions) || [];
 
     return h("div", {
       style: {
@@ -685,8 +742,11 @@
         // it mid-conversation just affects the *next* turn; we don't
         // mutate prior messages. "(no agent)" means use the plugin's
         // default system prompt + all tools.
-        agents.length > 0 && h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+        pickerAgents.length > 0 && h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
           h("span", { style: { color: C.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: 1 } }, "agent"),
+          currentAgent && currentAgent.color && h("span", {
+            style: { width: 10, height: 10, borderRadius: 2, background: currentAgent.color, display: "inline-block" },
+          }),
           h("select", {
             value: agentID,
             onChange: function (e) { setAgentID(e.target.value); },
@@ -699,10 +759,13 @@
             },
           },
             h("option", { value: "" }, "(no agent — defaults)"),
-            agents.map(function (a) {
-              var sel = a.allowed_tools && a.allowed_tools[0] === "*" ? "all tools" : a.allowed_tools.length + " tools";
-              return h("option", { key: a.id, value: a.id },
-                a.name + "  ·  " + sel);
+            pickerAgents.map(function (a) {
+              var toolCount = (a.allowed_tools && a.allowed_tools[0] === "*")
+                ? "all tools"
+                : ((a.allowed_tools && a.allowed_tools.length) || 0) + " tools";
+              var sub = (a.subagents && a.subagents.length) || 0;
+              var label = a.name + "  ·  " + toolCount + (sub > 0 ? "  ·  " + sub + " subagent" + (sub === 1 ? "" : "s") : "");
+              return h("option", { key: a.id, value: a.id }, label);
             }),
           ),
         ),
@@ -726,20 +789,36 @@
         style: { flex: 1, overflow: "auto", padding: "16px 20px" },
       },
         transcript.length === 0 && h("div", {
-          style: { color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 640 },
+          style: { color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 720 },
         },
           h("div", { style: { fontSize: 18, color: C.fg, marginBottom: 8 } }, "Ask about your data."),
-          "The chat can call any MCP server registered through the interconnect. ",
-          "Try: ",
-          h("em", null, "“what tables do we have in shop?”"),
-          ", ",
-          h("em", null, "“give me total revenue per month from gold.revenue_by_month”"),
-          ", or ",
-          h("em", null, "“describe the cosmos namespace”"),
-          ".",
+          currentAgent
+            ? h("div", null,
+                "Currently: ",
+                h("span", { style: { color: currentAgent.color || C.fg, fontWeight: 700 } }, currentAgent.name),
+                currentAgent.description && h("span", { style: { color: C.muted } }, " — " + currentAgent.description),
+              )
+            : h("div", null, "Pick an agent in the header or use defaults — chat can call any MCP server wired through the interconnect."),
+          // Example-question chips (per agent). One click submits.
+          examples.length > 0 && h("div", { style: { marginTop: 14, display: "flex", flexWrap: "wrap", gap: 8 } },
+            examples.map(function (q, i) {
+              return h("button", {
+                key: i, type: "button",
+                onClick: function () { setInput(q); setTimeout(send, 0); },
+                style: {
+                  padding: "6px 10px", background: C.card, color: C.fg,
+                  border: "1px solid " + C.border, cursor: "pointer", fontSize: 12,
+                  textAlign: "left",
+                },
+              }, "→ " + q);
+            }),
+          ),
         ),
         transcript.map(function (item, i) {
-          return h(MessageBubble, { key: i, msg: item.msg, calls: item.calls });
+          return h(MessageBubble, {
+            key: i, msg: item.msg, calls: item.calls,
+            agentColor: currentAgent && currentAgent.color, agentsById: agentsById,
+          });
         }),
         streamingBubble && h(StreamingBubble, {
           content: streamingBubble.content, reasoning: streamingBubble.reasoning,

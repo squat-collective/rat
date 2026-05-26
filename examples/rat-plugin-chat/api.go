@@ -70,7 +70,7 @@ func (a *api) getConfig(w http.ResponseWriter, _ *http.Request) {
 	c := a.cfg.get()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"system_prompt":   c.SystemPrompt,
-		"max_iterations":  maxIterations,
+		"max_iterations":  defaultMaxIterations,
 		"discovered_servers": len(a.disco.list()),
 	})
 }
@@ -129,7 +129,7 @@ func (a *api) chat(w http.ResponseWriter, r *http.Request) {
 	// call, but if a tool hangs we want the whole thing to die eventually.
 	ctx, cancel := context.WithTimeout(r.Context(), 5*60*1e9) // 5 minutes
 	defer cancel()
-	_ = a.orch.chatTurn(ctx, sink, in.Messages, sysPrompt, in.AgentID)
+	_ = a.orch.chatTurn(ctx, sink, in.Messages, sysPrompt, in.AgentID, 0)
 }
 
 // ── SSE sink ──────────────────────────────────────────────────────

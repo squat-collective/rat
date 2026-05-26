@@ -62,22 +62,30 @@ type streamSink interface {
 // out of the upstream SSE, forwards it through sink, and returns the
 // fully-assembled assistant message plus its finish_reason at the end.
 func (l *llm) chatWithToolsStream(
-	ctx context.Context, messages []chatMessage, tools []toolDeclaration, sink streamSink,
+	ctx context.Context, messages []chatMessage, tools []toolDeclaration, ov callOverrides, sink streamSink,
 ) (chatMessage, string, string, error) {
 	c := l.cfg.get()
 	if strings.TrimSpace(c.BaseURL) == "" {
 		return chatMessage{}, "", "", fmt.Errorf("no API base URL configured — set it in the plugin settings")
 	}
-	if strings.TrimSpace(c.Model) == "" {
+	model := c.Model
+	if ov.Model != "" {
+		model = ov.Model
+	}
+	if strings.TrimSpace(model) == "" {
 		return chatMessage{}, "", "", fmt.Errorf("no model configured — set it in the plugin settings")
 	}
 
-	body, _ := json.Marshal(map[string]any{
-		"model":    c.Model,
+	reqPayload := map[string]any{
+		"model":    model,
 		"messages": messages,
 		"tools":    tools,
 		"stream":   true,
-	})
+	}
+	if ov.Temperature > 0 {
+		reqPayload["temperature"] = ov.Temperature
+	}
+	body, _ := json.Marshal(reqPayload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(c.BaseURL, "/")+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
@@ -94,13 +102,13 @@ func (l *llm) chatWithToolsStream(
 	streamingClient := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := streamingClient.Do(req)
 	if err != nil {
-		return chatMessage{}, c.Model, "", fmt.Errorf("AI endpoint unreachable: %w", err)
+		return chatMessage{}, model, "", fmt.Errorf("AI endpoint unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
-		return chatMessage{}, c.Model, "", fmt.Errorf("AI endpoint returned %d: %s",
+		return chatMessage{}, model, "", fmt.Errorf("AI endpoint returned %d: %s",
 			resp.StatusCode, truncate(string(raw), 300))
 	}
 
@@ -140,7 +148,7 @@ func (l *llm) chatWithToolsStream(
 			continue
 		}
 		if ev.Error != nil {
-			return chatMessage{}, c.Model, "", fmt.Errorf("AI error: %s", ev.Error.Message)
+			return chatMessage{}, model, "", fmt.Errorf("AI error: %s", ev.Error.Message)
 		}
 		if len(ev.Choices) == 0 {
 			continue
@@ -186,11 +194,11 @@ func (l *llm) chatWithToolsStream(
 			continue
 		}
 		if err := sink.emit("delta", ch.Delta); err != nil {
-			return chatMessage{}, c.Model, "", err
+			return chatMessage{}, model, "", err
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return chatMessage{}, c.Model, "", fmt.Errorf("read stream: %w", err)
+		return chatMessage{}, model, "", fmt.Errorf("read stream: %w", err)
 	}
 
 	// Build the final assembled message.
@@ -200,5 +208,5 @@ func (l *llm) chatWithToolsStream(
 			final.ToolCalls = append(final.ToolCalls, *tc)
 		}
 	}
-	return final, c.Model, finishReason, nil
+	return final, model, finishReason, nil
 }

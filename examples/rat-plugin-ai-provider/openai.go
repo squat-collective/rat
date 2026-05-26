@@ -50,9 +50,10 @@ type toolDeclaration struct {
 }
 
 type chatRequest struct {
-	Model    string            `json:"model"`
-	Messages []chatMessage     `json:"messages"`
-	Tools    []toolDeclaration `json:"tools,omitempty"`
+	Model       string            `json:"model"`
+	Messages    []chatMessage     `json:"messages"`
+	Tools       []toolDeclaration `json:"tools,omitempty"`
+	Temperature *float64          `json:"temperature,omitempty"`
 }
 
 type chatResponse struct {
@@ -77,9 +78,19 @@ func newLLM(cfg *configStore) *llm {
 	return &llm{cfg: cfg, http: &http.Client{Timeout: 100 * time.Second}}
 }
 
+// callOverrides bundles per-call overrides the caller can pass. Both
+// model and temperature are optional; empty/zero means "use the
+// plugin's configured default". This is what lets agents in
+// rat-plugin-agents pick their own model / temperature without
+// affecting other consumers.
+type callOverrides struct {
+	Model       string
+	Temperature float64 // 0 = leave unset (don't send to upstream)
+}
+
 // chat sends messages and returns the assistant's reply and the model used.
 func (l *llm) chat(ctx context.Context, messages []chatMessage) (chatMessage, string, error) {
-	msg, model, _, err := l.chatWithTools(ctx, messages, nil)
+	msg, model, _, err := l.chatWithTools(ctx, messages, nil, callOverrides{})
 	return msg, model, err
 }
 
@@ -88,17 +99,26 @@ func (l *llm) chat(ctx context.Context, messages []chatMessage) (chatMessage, st
 // Both chat() and chatWithTools() hit the same /chat/completions endpoint
 // — OpenAI's API multiplexes tool-use into the same request format.
 func (l *llm) chatWithTools(
-	ctx context.Context, messages []chatMessage, tools []toolDeclaration,
+	ctx context.Context, messages []chatMessage, tools []toolDeclaration, ov callOverrides,
 ) (chatMessage, string, string, error) {
 	c := l.cfg.get()
 	if strings.TrimSpace(c.BaseURL) == "" {
 		return chatMessage{}, "", "", fmt.Errorf("no API base URL configured — set it in the plugin settings")
 	}
-	if strings.TrimSpace(c.Model) == "" {
+	model := c.Model
+	if ov.Model != "" {
+		model = ov.Model
+	}
+	if strings.TrimSpace(model) == "" {
 		return chatMessage{}, "", "", fmt.Errorf("no model configured — set it in the plugin settings")
 	}
 
-	body, _ := json.Marshal(chatRequest{Model: c.Model, Messages: messages, Tools: tools})
+	reqBody := chatRequest{Model: model, Messages: messages, Tools: tools}
+	if ov.Temperature > 0 {
+		t := ov.Temperature
+		reqBody.Temperature = &t
+	}
+	body, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(c.BaseURL, "/")+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
@@ -111,26 +131,26 @@ func (l *llm) chatWithTools(
 
 	resp, err := l.http.Do(req)
 	if err != nil {
-		return chatMessage{}, c.Model, "", fmt.Errorf("AI endpoint unreachable: %w", err)
+		return chatMessage{}, model, "", fmt.Errorf("AI endpoint unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
 
 	if resp.StatusCode != http.StatusOK {
-		return chatMessage{}, c.Model, "", fmt.Errorf("AI endpoint returned %d: %s",
+		return chatMessage{}, model, "", fmt.Errorf("AI endpoint returned %d: %s",
 			resp.StatusCode, truncate(string(raw), 200))
 	}
 	var cr chatResponse
 	if err := json.Unmarshal(raw, &cr); err != nil {
-		return chatMessage{}, c.Model, "", fmt.Errorf("decode AI response: %w", err)
+		return chatMessage{}, model, "", fmt.Errorf("decode AI response: %w", err)
 	}
 	if cr.Error != nil {
-		return chatMessage{}, c.Model, "", fmt.Errorf("AI error: %s", cr.Error.Message)
+		return chatMessage{}, model, "", fmt.Errorf("AI error: %s", cr.Error.Message)
 	}
 	if len(cr.Choices) == 0 {
-		return chatMessage{}, c.Model, "", fmt.Errorf("AI returned no choices")
+		return chatMessage{}, model, "", fmt.Errorf("AI returned no choices")
 	}
-	return cr.Choices[0].Message, c.Model, cr.Choices[0].FinishReason, nil
+	return cr.Choices[0].Message, model, cr.Choices[0].FinishReason, nil
 }
 
 func truncate(s string, n int) string {

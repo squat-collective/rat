@@ -27,7 +27,17 @@ import (
 )
 
 // safety cap on iterations — even a runaway model can't burn forever.
-const maxIterations = 8
+// Agents can override via Agent.MaxIterations; this is the fallback.
+const defaultMaxIterations = 8
+
+// maxSubagentDepth bounds A→B→C delegation chains. Even within the depth
+// cap, the orchestrator's per-iteration cap still applies at each level.
+const maxSubagentDepth = 3
+
+// agentToolPrefix marks tools that delegate to a subagent. The
+// orchestrator handles these specially in the tool-call loop instead of
+// routing them through MCP.
+const agentToolPrefix = "agent__"
 
 // sseSink is anything that can emit one SSE event with a JSON payload.
 type sseSink interface {
@@ -54,13 +64,18 @@ func newOrchestrator(ratdURL string, mcp *mcpClient, disco *discoverer, agents *
 	}
 }
 
-// chatTurn runs the loop until the model is done (or maxIterations is hit).
-// messages is the full conversation so far (system + user + prior turns);
-// systemOverride, if non-empty, replaces the leading system message.
-// agentID, if non-empty, selects an agent: its system_prompt overrides
-// systemOverride and its allowed_tools whitelists the tool list shown to
-// the LLM.
-func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []chatMessage, systemOverride, agentID string) error {
+// chatTurn runs the loop until the model is done. The depth parameter
+// counts subagent nesting (0 = top-level user request, 1 = called by
+// the top-level agent's agent__X tool, etc.) and is capped at
+// maxSubagentDepth.
+func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []chatMessage, systemOverride, agentID string, depth int) error {
+	if depth > maxSubagentDepth {
+		_ = sink.emit("error", map[string]string{
+			"error": fmt.Sprintf("subagent depth cap (%d) exceeded — refusing to recurse further", maxSubagentDepth),
+		})
+		return fmt.Errorf("subagent depth cap exceeded")
+	}
+
 	// Resolve the agent (if any). An invalid agentID is non-fatal — we
 	// just fall back to defaults and warn through the started event.
 	var agent *Agent
@@ -85,7 +100,7 @@ func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []ch
 		}
 	}
 
-	// Filter the tool list by the agent's whitelist if one's selected.
+	// Filter the MCP tool list by the agent's whitelist if one's selected.
 	allTools := o.disco.allTools()
 	if agent != nil && !agent.allowsAll() {
 		filtered := allTools[:0]
@@ -98,20 +113,37 @@ func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []ch
 	}
 	tools := openAIToolsFromMCP(allTools)
 
+	// Add one tool per subagent so the model can delegate. Skip the
+	// subagent dance entirely if we're already at max depth — there's
+	// no point exposing tools we can't actually run.
+	subagentTools := []openAITool{}
+	if agent != nil && depth < maxSubagentDepth {
+		subagentTools = o.subagentTools(ctx, agent)
+	}
+	tools = append(tools, subagentTools...)
+
+	maxIter := defaultMaxIterations
+	if agent != nil && agent.MaxIterations > 0 {
+		maxIter = agent.MaxIterations
+	}
+
 	started := map[string]any{
 		"tools_available": len(tools),
 		"servers":         summarizeServers(o.disco.list()),
+		"depth":           depth,
 	}
 	if agent != nil {
 		started["agent"] = map[string]any{
-			"id": agent.ID, "name": agent.Name, "icon": agent.Icon,
-			"tools_allowed": len(tools),
+			"id": agent.ID, "name": agent.Name, "icon": agent.Icon, "color": agent.Color,
+			"tools_allowed":  len(tools) - len(subagentTools),
+			"subagents":      len(subagentTools),
+			"max_iterations": maxIter,
 		}
 	}
 	_ = sink.emit("started", started)
 
-	for iter := 1; iter <= maxIterations; iter++ {
-		resp, err := o.callAI(ctx, sink, messages, tools)
+	for iter := 1; iter <= maxIter; iter++ {
+		resp, err := o.callAI(ctx, sink, messages, tools, agent)
 		if err != nil {
 			_ = sink.emit("error", map[string]string{"error": err.Error()})
 			return err
@@ -126,7 +158,15 @@ func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []ch
 		if resp.FinishReason == "tool_calls" && len(resp.Message.ToolCalls) > 0 {
 			for _, tc := range resp.Message.ToolCalls {
 				_ = sink.emit("tool_call", tc)
-				result, isErr := o.runToolCall(ctx, tc)
+				var (
+					result string
+					isErr  bool
+				)
+				if strings.HasPrefix(tc.Function.Name, agentToolPrefix) {
+					result, isErr = o.runSubagentCall(ctx, sink, tc, depth)
+				} else {
+					result, isErr = o.runToolCall(ctx, tc)
+				}
 				_ = sink.emit("tool_result", map[string]any{
 					"tool_call_id": tc.ID,
 					"name":         tc.Function.Name,
@@ -150,8 +190,116 @@ func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []ch
 
 	// Loop limit hit — emit a hint and stop.
 	_ = sink.emit("error", map[string]string{
-		"error": fmt.Sprintf("max_iterations (%d) exceeded — the model kept calling tools without answering", maxIterations),
+		"error": fmt.Sprintf("max_iterations (%d) exceeded — the model kept calling tools without answering", maxIter),
 	})
+	return nil
+}
+
+// subagentTools builds one tool declaration per agent in agent.Subagents
+// that points at an existing, enabled agent. Each tool takes one
+// argument — `task` — which the orchestrator hands to the subagent as
+// its user message.
+func (o *orchestrator) subagentTools(ctx context.Context, parent *Agent) []openAITool {
+	if len(parent.Subagents) == 0 {
+		return nil
+	}
+	out := make([]openAITool, 0, len(parent.Subagents))
+	for _, subID := range parent.Subagents {
+		sub, err := o.agents.get(ctx, subID)
+		if err != nil || sub == nil || sub.Disabled {
+			continue
+		}
+		var t openAITool
+		t.Type = "function"
+		t.Function.Name = agentToolPrefix + sub.ID
+		t.Function.Description = fmt.Sprintf("Delegate to subagent %q. %s. Hand it a focused, self-contained task and it will respond with a final answer.",
+			sub.Name, sub.Description)
+		t.Function.Parameters = map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"task": map[string]any{
+					"type":        "string",
+					"description": "A focused, self-contained task for the subagent. Provide all the context it needs — it doesn't see this conversation.",
+				},
+			},
+			"required": []string{"task"},
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// runSubagentCall handles an `agent__<id>` tool call by spawning a
+// nested chatTurn against the named subagent and returning its final
+// assistant content. The nested run uses a captureSink so we can pluck
+// the answer out without polluting the parent's SSE stream — the user
+// just sees a normal tool_result card.
+func (o *orchestrator) runSubagentCall(ctx context.Context, _ sseSink, tc toolCall, depth int) (string, bool) {
+	subID := strings.TrimPrefix(tc.Function.Name, agentToolPrefix)
+	var args struct {
+		Task string `json:"task"`
+	}
+	if tc.Function.Arguments != "" {
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			return "invalid subagent arguments JSON: " + err.Error(), true
+		}
+	}
+	if args.Task == "" {
+		return "subagent call missing required `task` argument", true
+	}
+
+	// Verify the subagent still exists + isn't disabled.
+	sub, err := o.agents.get(ctx, subID)
+	if err != nil || sub == nil {
+		return fmt.Sprintf("unknown subagent %q", subID), true
+	}
+	if sub.Disabled {
+		return fmt.Sprintf("subagent %q is disabled", subID), true
+	}
+
+	nestedSink := &captureSink{}
+	nestedMsgs := []chatMessage{{Role: "user", Content: args.Task}}
+	nestedCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	if err := o.chatTurn(nestedCtx, nestedSink, nestedMsgs, "", subID, depth+1); err != nil {
+		// Subagent failures still come back as a tool result so the
+		// parent can react / retry rather than dying.
+		final := nestedSink.lastContent
+		if final == "" {
+			final = "subagent error: " + err.Error()
+		}
+		return final, true
+	}
+	if nestedSink.lastContent == "" {
+		return "subagent returned no content", true
+	}
+	return nestedSink.lastContent, false
+}
+
+// captureSink eats all events from a nested chatTurn and remembers the
+// most recent assistant_message content. That's the "final answer" we
+// return to the parent as the subagent tool's result.
+type captureSink struct {
+	lastContent string
+}
+
+func (c *captureSink) emit(event string, payload any) error {
+	if event != "assistant_message" {
+		return nil
+	}
+	// payload is a chatMessage when emitted from chatTurn; marshal/unmarshal
+	// is the laziest way to handle it generically.
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	var m chatMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	if m.Content != "" {
+		c.lastContent = m.Content
+	}
 	return nil
 }
 
@@ -193,9 +341,20 @@ type aiResponse struct {
 //
 // We call ai-provider directly (not through the interconnect broker)
 // because the orchestrator is the canonical consumer and the broker's
-// envelope would defeat SSE streaming anyway.
-func (o *orchestrator) callAI(ctx context.Context, sink sseSink, messages []chatMessage, tools []openAITool) (*aiResponse, error) {
-	body, _ := json.Marshal(map[string]any{"messages": messages, "tools": tools})
+// envelope would defeat SSE streaming anyway. When agent is non-nil and
+// has Model/Temperature set, those are forwarded as overrides so a
+// per-agent model swap takes effect.
+func (o *orchestrator) callAI(ctx context.Context, sink sseSink, messages []chatMessage, tools []openAITool, agent *Agent) (*aiResponse, error) {
+	payload := map[string]any{"messages": messages, "tools": tools}
+	if agent != nil {
+		if agent.Model != "" {
+			payload["model"] = agent.Model
+		}
+		if agent.Temperature > 0 {
+			payload["temperature"] = agent.Temperature
+		}
+	}
+	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		o.ratdURL+"/api/v1/x/ai-provider/chat-with-tools-stream", bytes.NewReader(body))
 	if err != nil {
