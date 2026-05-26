@@ -384,10 +384,118 @@
     return name.indexOf("agent__") === 0 ? name.slice(7) : "";
   }
 
+  // SubagentTraceTimeline lazy-loads /subagent-runs/{id} and renders the
+  // subagent's full inner timeline: its own tool calls (which can be
+  // nested subagents themselves), its intermediate assistant messages,
+  // and any errors. Like Claude's "Show thinking / Show tool use".
+  function SubagentTraceTimeline(props) {
+    var runId = props.runId;
+    var st = useState(null), run = st[0], setRun = st[1];
+    var stE = useState(null), err = stE[0], setErr = stE[1];
+    var stL = useState(false), loading = stL[0], setLoading = stL[1];
+
+    useEffect(function () {
+      if (!runId) return;
+      setLoading(true);
+      fetch(API + "/subagent-runs/" + encodeURIComponent(runId))
+        .then(function (r) { return r.text().then(function (t) { return { ok: r.ok, body: t }; }); })
+        .then(function (x) {
+          if (!x.ok) { setErr("trace not found (yet?)"); setLoading(false); return; }
+          try { setRun(JSON.parse(x.body)); } catch (e) { setErr("malformed trace"); }
+          setLoading(false);
+        })
+        .catch(function (e) { setErr((e && e.message) || String(e)); setLoading(false); });
+    }, [runId]);
+
+    if (loading) {
+      return h("div", { style: { color: C.muted, fontSize: 11, padding: "6px 0" } }, "loading subagent trace…");
+    }
+    if (err) {
+      return h("div", { style: { color: C.danger, fontSize: 11, padding: "6px 0" } }, err);
+    }
+    if (!run || !run.events) {
+      return h("div", { style: { color: C.muted, fontSize: 11, padding: "6px 0" } }, "no events recorded");
+    }
+
+    // Pair tool_call → tool_result by tool_call_id, and collapse the
+    // assistant_delta firehose into the matching assistant_message.
+    var steps = [];
+    var pendingByCallId = {};
+    var msgCount = 0, toolCount = 0;
+    for (var i = 0; i < run.events.length; i++) {
+      var ev = run.events[i];
+      var payload = ev.payload || {};
+      if (ev.event === "tool_call") {
+        steps.push({ kind: "tool", call: payload, result: null });
+        pendingByCallId[payload.id] = steps.length - 1;
+        toolCount++;
+      } else if (ev.event === "tool_result") {
+        var idx = pendingByCallId[payload.tool_call_id];
+        if (idx !== undefined) steps[idx].result = payload;
+      } else if (ev.event === "assistant_message") {
+        // Only show assistant messages that have content (skip the
+        // "tool-call-only" turns — the tool_call card itself surfaces
+        // those).
+        if (payload.content) {
+          steps.push({ kind: "message", content: payload.content });
+          msgCount++;
+        }
+      } else if (ev.event === "started") {
+        steps.unshift({ kind: "started", payload: payload });
+      } else if (ev.event === "error") {
+        steps.push({ kind: "error", message: (payload && payload.error) || "" });
+      }
+    }
+
+    return h("div", { style: { padding: "8px 8px 4px 12px", marginTop: 8, borderTop: "1px dashed " + C.border } },
+      h("div", { style: {
+        color: C.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6,
+      } },
+        "subagent timeline · " + toolCount + " tool call" + (toolCount === 1 ? "" : "s") +
+        " · " + msgCount + " message" + (msgCount === 1 ? "" : "s")),
+      steps.map(function (s, i) {
+        if (s.kind === "started") {
+          var agent = s.payload && s.payload.agent;
+          return h("div", { key: "step" + i, style: { fontSize: 11, color: C.muted, margin: "4px 0" } },
+            "● started",
+            agent && h("span", null, " · ", h("strong", { style: { color: C.fg } }, agent.name || agent.id)),
+            " · " + (s.payload.tools_available || 0) + " tools available",
+          );
+        }
+        if (s.kind === "tool") {
+          // Recursive! A subagent's tool_call can itself be agent__X
+          // which would have its own trace at the same conversation.
+          return h(ToolCallCard, {
+            key: "step" + i, call: s.call, result: s.result,
+            agentsById: props.agentsById, conversationID: props.conversationID,
+          });
+        }
+        if (s.kind === "message") {
+          return h("div", { key: "step" + i, style: {
+            margin: "6px 0", padding: "6px 10px", background: C.card,
+            borderLeft: "2px solid " + (props.subagentColor || C.accent), color: C.fg,
+          } },
+            h("div", { style: { color: C.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: 1, marginBottom: 3 } },
+              "subagent message"),
+            renderMarkdown(s.content),
+          );
+        }
+        if (s.kind === "error") {
+          return h("div", { key: "step" + i, style: { color: C.danger, fontSize: 11, margin: "4px 0" } },
+            "✗ " + s.message);
+        }
+        return null;
+      }),
+    );
+  }
+
   function ToolCallCard(props) {
     var c = props.call, r = props.result;
     var openInit = false; // collapsed by default — output can be huge
     var st = useState(openInit), open = st[0], setOpen = st[1];
+    // Subagent calls have a separate "show work" toggle that lazy-loads
+    // the nested trace. Default closed.
+    var stTrace = useState(false), traceOpen = stTrace[0], setTraceOpen = stTrace[1];
     var parsedArgs = null;
     try { parsedArgs = JSON.parse(c.function.arguments); } catch (e) {}
     var argsPretty = parsedArgs ? JSON.stringify(parsedArgs, null, 2) : (c.function.arguments || "");
@@ -399,6 +507,8 @@
     var sub = isSubagentCall(c.function.name);
     var subAgent = sub ? (props.agentsById && props.agentsById[subagentIdOf(c.function.name)]) : null;
     var subColor = subAgent && subAgent.color ? subAgent.color : C.accent;
+    // Subagent runs are stored at {parent_conv_id}__{tool_call_id}.
+    var subRunId = sub && props.conversationID ? (props.conversationID + "__" + c.id) : null;
 
     var header = sub
       ? h(React.Fragment, null,
@@ -446,7 +556,8 @@
       ),
       // Subagents: show the task as a quoted preview (always visible),
       // and render the full markdown answer inline (not collapsed) since
-      // that *is* the chat content the user came for.
+      // that *is* the chat content the user came for. Plus a separate
+      // "show work" toggle that lazy-loads the subagent's full timeline.
       sub && parsedArgs && parsedArgs.task && h("div", {
         style: {
           margin: "6px 0", padding: "4px 8px", borderLeft: "2px solid " + C.border,
@@ -456,6 +567,22 @@
       sub && r && typeof output === "string" && h("div", {
         style: { margin: "6px 0 0", padding: 8, background: C.card, color: isErr ? C.danger : C.fg },
       }, isErr ? output : renderMarkdown(output)),
+      // The "show work" affordance: opens the nested timeline only when
+      // we have a conversation id (and thus can resolve a run id).
+      sub && r && subRunId && h("div", { style: { marginTop: 6 } },
+        h("button", {
+          onClick: function () { setTraceOpen(!traceOpen); },
+          style: {
+            padding: "3px 8px", background: "transparent",
+            border: "1px solid " + C.border, color: C.muted,
+            cursor: "pointer", fontSize: 10, letterSpacing: 0.5, textTransform: "uppercase",
+          },
+        }, traceOpen ? "▾ hide work" : "▸ show subagent's work"),
+        traceOpen && h(SubagentTraceTimeline, {
+          runId: subRunId, agentsById: props.agentsById,
+          conversationID: props.conversationID, subagentColor: subColor,
+        }),
+      ),
       // Non-subagent: keep the collapsed-by-default behaviour with the
       // SQL table affordance.
       !sub && open && h("div", { style: { marginTop: 8 } },
@@ -539,6 +666,7 @@
           return h(ToolCallCard, {
             key: c.call.id, call: c.call, result: c.result,
             agentsById: props.agentsById,
+            conversationID: props.conversationID,
           });
         })
       ),
@@ -1032,6 +1160,7 @@
           return h(MessageBubble, {
             key: i, msg: item.msg, calls: item.calls,
             agentColor: currentAgent && currentAgent.color, agentsById: agentsById,
+            conversationID: conversationID,
           });
         }),
         streamingBubble && h(StreamingBubble, {
