@@ -122,6 +122,39 @@ func (c *ratdClient) SubmitRun(ctx context.Context, ns, layer, name, trigger str
 	return statusError("submit run for "+name, status)
 }
 
+// SetTableMetadata PUTs the table's description + column descriptions —
+// this is the same endpoint the docs-assistant plugin writes to.
+func (c *ratdClient) SetTableMetadata(
+	ctx context.Context, ns, layer, name, description string, columns map[string]string,
+) error {
+	body, _ := json.Marshal(map[string]any{
+		"description":         description,
+		"column_descriptions": columns,
+	})
+	_, status, err := c.do(ctx, http.MethodPut,
+		fmt.Sprintf("/api/v1/tables/%s/%s/%s/metadata", ns, layer, name), body)
+	if err != nil {
+		return err
+	}
+	return statusError("set metadata for "+name, status)
+}
+
+// CreateSchedule POSTs /api/v1/schedules to attach a cron schedule to a
+// pipeline. ratd's scheduler picks it up automatically — no restart needed.
+func (c *ratdClient) CreateSchedule(
+	ctx context.Context, ns, layer, pipeline, cron string, enabled bool,
+) error {
+	body, _ := json.Marshal(map[string]any{
+		"namespace": ns, "layer": layer, "pipeline": pipeline,
+		"cron": cron, "enabled": enabled,
+	})
+	_, status, err := c.do(ctx, http.MethodPost, "/api/v1/schedules", body)
+	if err != nil {
+		return err
+	}
+	return statusError("create schedule for "+pipeline, status)
+}
+
 // statusError turns a non-2xx status into an error — except 409 which becomes
 // a conflictErr so the installer can treat it as idempotent.
 func statusError(action string, status int) error {

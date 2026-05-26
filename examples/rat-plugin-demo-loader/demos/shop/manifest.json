@@ -1,49 +1,81 @@
 {
   "id": "shop",
   "name": "🛒 Shop",
-  "description": "Customers, products and orders — classic e-commerce schema joined into a silver fact and aggregated to monthly revenue and top customers.",
+  "description": "E-commerce schema with an INCREMENTAL bronze fact, a PYTHON gold pipeline, table-level documentation, rich quality tests and an hourly schedule — the most feature-rich of the three demos.",
   "namespace": "shop",
   "pipelines": [
     {
       "layer": "bronze",
       "name": "customers",
       "type": "sql",
-      "description": "500 synthetic customers with email, country and signup date.",
-      "file": "bronze/customers.sql"
+      "description": "500 synthetic customers — full_refresh.",
+      "file": "bronze/customers.sql",
+      "table_metadata": {
+        "description": "Customer master. Full refresh — the demo regenerates all 500 customers each run.",
+        "column_descriptions": {
+          "customer_id": "Synthetic primary key.",
+          "email": "Unique email — used as the natural key.",
+          "name": "Display name.",
+          "country": "ISO-like country code (FR / DE / NL / BE / IT / ES).",
+          "signup_at": "Date the customer first signed up.",
+          "is_premium": "Whether the customer is on a paid plan (~22%)."
+        }
+      }
     },
     {
       "layer": "bronze",
       "name": "products",
       "type": "sql",
-      "description": "50 products across five categories with prices in EUR.",
-      "file": "bronze/products.sql"
+      "description": "50 products — full_refresh.",
+      "file": "bronze/products.sql",
+      "table_metadata": {
+        "description": "Product catalogue. 50 SKUs across audio / stickers / apparel / accessories / print.",
+        "column_descriptions": {
+          "product_id": "Synthetic primary key.",
+          "sku": "Stock-keeping unit (PROD-001 style).",
+          "product_name": "Display name.",
+          "category": "Product family.",
+          "price_eur": "Unit price in euros."
+        }
+      }
     },
     {
       "layer": "bronze",
       "name": "orders",
       "type": "sql",
-      "description": "5000 orders linking customers to products with quantity and date.",
-      "file": "bronze/orders.sql"
+      "description": "5000 orders — INCREMENTAL strategy. Each run appends rows whose ordered_at is newer than the previous watermark.",
+      "file": "bronze/orders.sql",
+      "table_metadata": {
+        "description": "Order facts — incremental: each run inserts only the orders newer than the previous watermark (ordered_at).",
+        "column_descriptions": {
+          "order_id": "Primary key (also the unique_key for the incremental merge).",
+          "customer_id": "FK into bronze.customers.",
+          "product_id": "FK into bronze.products.",
+          "quantity": "Units ordered (1..5).",
+          "ordered_at": "Order timestamp — also the watermark column.",
+          "status": "completed (~98%) or cancelled."
+        }
+      }
     },
     {
       "layer": "silver",
       "name": "orders_enriched",
       "type": "sql",
-      "description": "Orders joined with customer and product info — the silver fact.",
+      "description": "Orders joined with customer + product, only completed orders kept — uses ref() across three bronze tables.",
       "file": "silver/orders_enriched.sql"
     },
     {
       "layer": "silver",
       "name": "customer_lifetime",
       "type": "sql",
-      "description": "Per-customer aggregate: order count, lifetime value, last order date.",
+      "description": "Per-customer order count + lifetime value.",
       "file": "silver/customer_lifetime.sql"
     },
     {
       "layer": "gold",
       "name": "revenue_by_month",
       "type": "sql",
-      "description": "Monthly revenue and order count — the time-series gold view.",
+      "description": "Monthly revenue + AOV — scheduled hourly so dashboards stay current.",
       "file": "gold/revenue_by_month.sql"
     },
     {
@@ -52,6 +84,21 @@
       "type": "sql",
       "description": "Top 20 customers by lifetime value.",
       "file": "gold/top_customers.sql"
+    },
+    {
+      "layer": "gold",
+      "name": "customer_segments",
+      "type": "python",
+      "description": "PYTHON pipeline — buckets every customer into whale / loyal / casual via PyArrow.",
+      "file": "gold/customer_segments.py",
+      "table_metadata": {
+        "description": "Customer segments synthesised in Python (PyArrow Table from a list comprehension). Shows that pipelines aren't SQL-only.",
+        "column_descriptions": {
+          "customer_id": "Customer key.",
+          "segment": "whale (top spenders) / loyal / casual.",
+          "estimated_spend_eur": "Heuristic spend estimate used by the segmentation."
+        }
+      }
     }
   ],
   "quality_tests": [
@@ -60,7 +107,7 @@
       "pipeline": "orders",
       "name": "orders_quantity_positive",
       "severity": "error",
-      "description": "Order quantities must be positive.",
+      "description": "Quantities must be positive.",
       "file": "tests/orders_quantity_positive.sql"
     },
     {
@@ -68,8 +115,15 @@
       "pipeline": "orders_enriched",
       "name": "orders_have_customer",
       "severity": "error",
-      "description": "Every order in the silver fact must have a matching customer.",
+      "description": "Every order joined to the silver fact must have a matching customer.",
       "file": "tests/orders_have_customer.sql"
+    }
+  ],
+  "schedules": [
+    {
+      "layer": "gold",
+      "pipeline": "revenue_by_month",
+      "cron": "0 * * * *"
     }
   ]
 }

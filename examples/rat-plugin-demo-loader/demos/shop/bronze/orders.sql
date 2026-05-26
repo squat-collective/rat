@@ -1,5 +1,20 @@
--- @merge_strategy: full_refresh
--- @description: 5000 orders linking customers to products.
+-- ============================================================================
+-- bronze.orders — INCREMENTAL merge strategy
+-- ----------------------------------------------------------------------------
+-- The annotations below tell the runner:
+--   • merge_strategy:   incremental — append only the new rows each run
+--   • unique_key:       order_id    — de-dupe key on re-insert
+--   • watermark_column: ordered_at  — column used to filter the delta
+--
+-- The Jinja `is_incremental()` helper returns false on the first run (no
+-- prior watermark) and true thereafter; `{{ watermark_value }}` then holds
+-- the previous run's max(ordered_at). The two together let one SQL file
+-- serve both the initial backfill and every incremental refresh.
+-- ============================================================================
+-- @merge_strategy: incremental
+-- @unique_key: order_id
+-- @watermark_column: ordered_at
+-- @description: 5000 orders linking customers to products — appended incrementally.
 
 WITH base AS (
   SELECT
@@ -15,3 +30,6 @@ WITH base AS (
   FROM generate_series(1, 5000) AS s(id)
 )
 SELECT * FROM base
+{% if is_incremental() %}
+WHERE ordered_at > CAST('{{ watermark_value }}' AS DATE)
+{% endif %}

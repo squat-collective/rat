@@ -1,5 +1,12 @@
--- @merge_strategy: full_refresh
--- @description: 500 gigs across the underground venues.
+-- ============================================================================
+-- bronze.gigs — APPEND_ONLY merge strategy
+-- ----------------------------------------------------------------------------
+-- A gig is an immutable event in time — once it happened, it doesn't change.
+-- append_only models that: every run extends the table; the runner never
+-- rewrites existing rows.
+-- ============================================================================
+-- @merge_strategy: append_only
+-- @description: Gig schedule across the underground venues — append-only history.
 
 WITH base AS (
   SELECT

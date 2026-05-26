@@ -67,7 +67,44 @@ func (i *Installer) Install(ctx context.Context, m *Manifest, nsOverride string)
 		res.Steps = append(res.Steps, fmt.Sprintf("pipeline %s.%s", p.Layer, p.Name))
 	}
 
-	// 3. Quality tests
+	// 3a. Table metadata. The endpoint stores against a (ns, layer, name)
+	// key regardless of whether the Iceberg table itself exists yet — so
+	// it's safe to apply at install time, before the first run materialises
+	// the table. The descriptions then show up in the Explorer immediately.
+	for _, p := range m.Pipelines {
+		if p.TableMetadata == nil {
+			continue
+		}
+		err := i.ratd.SetTableMetadata(
+			ctx, ns, p.Layer, p.Name,
+			p.TableMetadata.Description,
+			p.TableMetadata.ColumnDescriptions,
+		)
+		if err != nil {
+			res.Errors = append(res.Errors,
+				fmt.Sprintf("metadata %s.%s: %s", p.Layer, p.Name, err))
+			continue
+		}
+		res.Steps = append(res.Steps,
+			fmt.Sprintf("metadata %s.%s", p.Layer, p.Name))
+	}
+
+	// 3b. Schedules — declared in the manifest, applied at install. The
+	// scheduler picks them up live; no restart required.
+	for _, s := range m.Schedules {
+		// `enabled` defaults to true when the field is omitted; only the
+		// explicit `"enabled": false` should disable.
+		enabled := true
+		if err := i.ratd.CreateSchedule(ctx, ns, s.Layer, s.Pipeline, s.Cron, enabled); err != nil && !isConflict(err) {
+			res.Errors = append(res.Errors,
+				fmt.Sprintf("schedule %s.%s (%s): %s", s.Layer, s.Pipeline, s.Cron, err))
+			continue
+		}
+		res.Steps = append(res.Steps,
+			fmt.Sprintf("schedule %s.%s every '%s'", s.Layer, s.Pipeline, s.Cron))
+	}
+
+	// 3c. Quality tests
 	for _, qt := range m.Tests {
 		sql, err := i.readDemoFile(m.ID, qt.File)
 		if err != nil {

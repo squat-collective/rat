@@ -1,5 +1,14 @@
--- @merge_strategy: full_refresh
--- @description: 1000 synthetic telescope observations: when, where, magnitude.
+-- ============================================================================
+-- bronze.observations — APPEND_ONLY merge strategy
+-- ----------------------------------------------------------------------------
+-- Every run extends the table; nothing is overwritten. Good fit for log-like
+-- data where history matters. The runner appends every row this query
+-- produces, so rerunning grows the table by another batch (we use
+-- generate_series for the demo — in real life this would be a CDC stream
+-- or a daily file).
+-- ============================================================================
+-- @merge_strategy: append_only
+-- @description: Telescope observations — append-only feed.
 
 WITH base AS (
   SELECT
