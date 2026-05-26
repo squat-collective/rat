@@ -68,7 +68,6 @@ func main() {
 	mcp := newMCPClient(ratdURL)
 	disco := newDiscoverer(ratdURL, mcp)
 	agents := newAgentsClient(ratdURL)
-	orch := newOrchestrator(ratdURL, mcp, disco, agents)
 
 	convDir := envOr("CONVERSATIONS_DIR", "/data/conversations")
 	convs, err := newConversationStore(convDir)
@@ -78,7 +77,16 @@ func main() {
 	}
 	slog.Info("conversation store ready", "dir", convDir, "loaded", len(convs.list()))
 
-	a := newAPI(disco, orch, cfg, agents, convs)
+	subRunDir := envOr("SUBAGENT_RUNS_DIR", "/data/subagent_runs")
+	subRuns, err := newSubagentRunStore(subRunDir)
+	if err != nil {
+		slog.Error("subagent run store init failed", "dir", subRunDir, "error", err)
+		os.Exit(1)
+	}
+	slog.Info("subagent run store ready", "dir", subRunDir)
+
+	orch := newOrchestrator(ratdURL, mcp, disco, agents, subRuns)
+	a := newAPI(disco, orch, cfg, agents, convs, subRuns)
 	h := newHandler(name, "http://"+selfAddr+"/bundle.js")
 
 	mux := http.NewServeMux()

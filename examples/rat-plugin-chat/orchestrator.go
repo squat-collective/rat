@@ -47,19 +47,21 @@ type sseSink interface {
 // orchestrator wires the AI provider + the MCP discoverer together for one
 // turn of the chat.
 type orchestrator struct {
-	ratdURL string
-	mcp     *mcpClient
-	disco   *discoverer
-	agents  *agentsClient
-	http    *http.Client
+	ratdURL  string
+	mcp      *mcpClient
+	disco    *discoverer
+	agents   *agentsClient
+	subRuns  *subagentRunStore // nil-safe: subagent traces just don't get persisted
+	http     *http.Client
 }
 
-func newOrchestrator(ratdURL string, mcp *mcpClient, disco *discoverer, agents *agentsClient) *orchestrator {
+func newOrchestrator(ratdURL string, mcp *mcpClient, disco *discoverer, agents *agentsClient, subRuns *subagentRunStore) *orchestrator {
 	return &orchestrator{
 		ratdURL: strings.TrimRight(ratdURL, "/"),
 		mcp:     mcp,
 		disco:   disco,
 		agents:  agents,
+		subRuns: subRuns,
 		http:    &http.Client{Timeout: 180 * time.Second},
 	}
 }
@@ -67,8 +69,9 @@ func newOrchestrator(ratdURL string, mcp *mcpClient, disco *discoverer, agents *
 // chatTurn runs the loop until the model is done. The depth parameter
 // counts subagent nesting (0 = top-level user request, 1 = called by
 // the top-level agent's agent__X tool, etc.) and is capped at
-// maxSubagentDepth.
-func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []chatMessage, systemOverride, agentID string, depth int) error {
+// maxSubagentDepth. parentConvID lets nested subagent traces be linked
+// back to the conversation that triggered them.
+func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []chatMessage, systemOverride, agentID string, depth int, parentConvID string) error {
 	if depth > maxSubagentDepth {
 		_ = sink.emit("error", map[string]string{
 			"error": fmt.Sprintf("subagent depth cap (%d) exceeded — refusing to recurse further", maxSubagentDepth),
@@ -163,7 +166,7 @@ func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []ch
 					isErr  bool
 				)
 				if strings.HasPrefix(tc.Function.Name, agentToolPrefix) {
-					result, isErr = o.runSubagentCall(ctx, sink, tc, depth)
+					result, isErr = o.runSubagentCall(ctx, sink, tc, depth, parentConvID)
 				} else {
 					result, isErr = o.runToolCall(ctx, tc)
 				}
@@ -231,10 +234,11 @@ func (o *orchestrator) subagentTools(ctx context.Context, parent *Agent) []openA
 
 // runSubagentCall handles an `agent__<id>` tool call by spawning a
 // nested chatTurn against the named subagent and returning its final
-// assistant content. The nested run uses a captureSink so we can pluck
-// the answer out without polluting the parent's SSE stream — the user
-// just sees a normal tool_result card.
-func (o *orchestrator) runSubagentCall(ctx context.Context, _ sseSink, tc toolCall, depth int) (string, bool) {
+// assistant content. The nested run uses a traceSink so we can
+// (a) pluck the answer out without polluting the parent's SSE stream,
+// and (b) persist the full event stream so the parent's "subagent
+// returned no content" can actually be debugged.
+func (o *orchestrator) runSubagentCall(ctx context.Context, _ sseSink, tc toolCall, depth int, parentConvID string) (string, bool) {
 	subID := strings.TrimPrefix(tc.Function.Name, agentToolPrefix)
 	var args struct {
 		Task string `json:"task"`
@@ -248,7 +252,6 @@ func (o *orchestrator) runSubagentCall(ctx context.Context, _ sseSink, tc toolCa
 		return "subagent call missing required `task` argument", true
 	}
 
-	// Verify the subagent still exists + isn't disabled.
 	sub, err := o.agents.get(ctx, subID)
 	if err != nil || sub == nil {
 		return fmt.Sprintf("unknown subagent %q", subID), true
@@ -257,23 +260,59 @@ func (o *orchestrator) runSubagentCall(ctx context.Context, _ sseSink, tc toolCa
 		return fmt.Sprintf("subagent %q is disabled", subID), true
 	}
 
-	nestedSink := &captureSink{}
+	// Build the trace record. ID encodes parent_conv + parent_tool_call so
+	// `cat /data/subagent_runs/{parent_conv}__*.json` lists every
+	// subagent invocation from one conversation.
+	run := &SubagentRun{
+		ID:               parentConvID + "__" + tc.ID,
+		ParentConvID:     parentConvID,
+		ParentToolCallID: tc.ID,
+		SubagentID:       subID,
+		Task:             args.Task,
+		StartedAt:        time.Now().UTC(),
+	}
+	if parentConvID == "" {
+		// Top-level orphan runs — still save with a placeholder.
+		run.ID = "orphan__" + tc.ID
+	}
+
+	sink := newTraceSink(run)
 	nestedMsgs := []chatMessage{{Role: "user", Content: args.Task}}
 	nestedCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	if err := o.chatTurn(nestedCtx, nestedSink, nestedMsgs, "", subID, depth+1); err != nil {
-		// Subagent failures still come back as a tool result so the
-		// parent can react / retry rather than dying.
-		final := nestedSink.lastContent
+
+	turnErr := o.chatTurn(nestedCtx, sink, nestedMsgs, "", subID, depth+1, parentConvID)
+	run.FinishedAt = time.Now().UTC()
+	if turnErr != nil {
+		run.Error = turnErr.Error()
+	}
+	run.FinalContent = sink.finalContent()
+
+	// Persist the trace. Best-effort — a save failure shouldn't break
+	// the parent's response path.
+	if o.subRuns != nil {
+		if err := o.subRuns.save(run); err != nil {
+			// fall through; the tool result still works.
+			_ = err
+		}
+	}
+
+	if turnErr != nil {
+		final := run.FinalContent
 		if final == "" {
-			final = "subagent error: " + err.Error()
+			final = "subagent error: " + turnErr.Error()
 		}
 		return final, true
 	}
-	if nestedSink.lastContent == "" {
-		return "subagent returned no content", true
+	if run.FinalContent == "" {
+		// Surface a hint of what actually happened so the parent can
+		// react (and so a human reading the conversation file knows
+		// where to look for the full trace).
+		hint := fmt.Sprintf("subagent returned no content (trace: /data/subagent_runs/%s.json, events: %d)",
+			run.ID, len(run.Events))
+		return hint, true
 	}
-	return nestedSink.lastContent, false
+	return run.FinalContent, false
 }
 
 // captureSink eats all events from a nested chatTurn and remembers the

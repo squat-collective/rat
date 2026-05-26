@@ -108,35 +108,48 @@ func phoneHome(ratdURL, name, addr string) {
 // registerWithInterconnect publishes our MCP endpoint as a brokered
 // capability so the chat plugin can discover it without hardcoding URLs.
 // The "mcp.server." prefix is the convention chat scans for.
+//
+// Runs forever: re-registers every 60s once steady-state. This is the
+// belt-and-braces fix for "interconnect restarted and silently lost
+// every capability" — within 60s, the plugin re-advertises itself.
 func registerWithInterconnect(ratdURL, self string) {
 	cap := map[string]string{
 		"name": "mcp.server.docs", "provider": self, "method": "POST", "path": "/mcp",
 		"description": "MCP server: RAT catalog & metadata (list/describe tables, descriptions)",
 	}
-	body, _ := json.Marshal(cap)
 	endpoint := ratdURL + "/api/v1/x/interconnect/register"
 
-	for attempt := 1; attempt <= 15; attempt++ {
-		time.Sleep(3 * time.Second)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-		if err != nil {
-			cancel()
-			return
+	var wasUp bool
+	for {
+		ok := tryRegister(endpoint, cap)
+		if ok && !wasUp {
+			slog.Info("registered mcp.server.docs with interconnect")
+		} else if !ok && wasUp {
+			slog.Warn("interconnect registration failed — will retry")
 		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
-		cancel()
-		if err != nil || resp.StatusCode >= 300 {
-			if resp != nil {
-				_ = resp.Body.Close()
-			}
-			slog.Info("interconnect not ready", "attempt", attempt)
-			continue
+		wasUp = ok
+		if ok {
+			time.Sleep(60 * time.Second)
+		} else {
+			time.Sleep(5 * time.Second)
 		}
-		_ = resp.Body.Close()
-		slog.Info("registered mcp.server.docs with interconnect")
-		return
 	}
-	slog.Warn("could not register with interconnect — chat won't see this MCP server (this is optional)")
+}
+
+// tryRegister does one POST /register attempt. Returns true on 2xx.
+func tryRegister(endpoint string, cap map[string]string) bool {
+	body, _ := json.Marshal(cap)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode < 300
 }

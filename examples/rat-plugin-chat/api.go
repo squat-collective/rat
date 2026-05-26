@@ -20,15 +20,16 @@ import (
 )
 
 type api struct {
-	disco  *discoverer
-	orch   *orchestrator
-	cfg    *configStore
-	agents *agentsClient
-	convs  *conversationStore
+	disco   *discoverer
+	orch    *orchestrator
+	cfg     *configStore
+	agents  *agentsClient
+	convs   *conversationStore
+	subRuns *subagentRunStore
 }
 
-func newAPI(disco *discoverer, orch *orchestrator, cfg *configStore, agents *agentsClient, convs *conversationStore) *api {
-	return &api{disco: disco, orch: orch, cfg: cfg, agents: agents, convs: convs}
+func newAPI(disco *discoverer, orch *orchestrator, cfg *configStore, agents *agentsClient, convs *conversationStore, subRuns *subagentRunStore) *api {
+	return &api{disco: disco, orch: orch, cfg: cfg, agents: agents, convs: convs, subRuns: subRuns}
 }
 
 func (a *api) mux() *http.ServeMux {
@@ -41,6 +42,8 @@ func (a *api) mux() *http.ServeMux {
 	m.HandleFunc("POST /conversations", a.createConversation)
 	m.HandleFunc("PATCH /conversations/{id}", a.renameConversation)
 	m.HandleFunc("DELETE /conversations/{id}", a.deleteConversation)
+	m.HandleFunc("GET /conversations/{id}/subagent-runs", a.listSubagentRuns)
+	m.HandleFunc("GET /subagent-runs/{id}", a.getSubagentRun)
 	m.HandleFunc("POST /chat", a.chat)
 	m.HandleFunc("GET /config", a.getConfig)
 	m.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
@@ -103,6 +106,30 @@ func (a *api) deleteConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// listSubagentRuns returns summaries of every subagent invocation that
+// happened during a given conversation (oldest first). The Events field
+// is stripped; clients fetch full traces individually with GET
+// /subagent-runs/{id}.
+func (a *api) listSubagentRuns(w http.ResponseWriter, r *http.Request) {
+	convID := r.PathValue("id")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"runs": a.subRuns.listForConversation(convID),
+	})
+}
+
+// getSubagentRun returns one full trace, including every event the
+// orchestrator emitted during the subagent's chat loop (tool_calls,
+// tool_results, assistant_message deltas, etc).
+func (a *api) getSubagentRun(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	run, ok := a.subRuns.get(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "subagent run not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
 }
 
 // listAgents proxies the agents plugin's catalog so the chat UI can
@@ -262,7 +289,7 @@ func (a *api) chat(w http.ResponseWriter, r *http.Request) {
 	// arrive and persist them — gives us a partial transcript even if
 	// the client disconnects mid-stream.
 	tracker := &convTracker{inner: sink, conv: conv, store: a.convs}
-	_ = a.orch.chatTurn(ctx, tracker, conv.Messages, sysPrompt, in.AgentID, 0)
+	_ = a.orch.chatTurn(ctx, tracker, conv.Messages, sysPrompt, in.AgentID, 0, conv.ID)
 
 	// Final save after the loop finishes — captures the last assistant
 	// message and any post-loop bookkeeping.

@@ -146,6 +146,9 @@ func phoneHome(ratdURL, name, addr string) {
 	slog.Error("phone-home failed after retries")
 }
 
+// Runs forever: re-registers every 60s once steady-state. Same pattern
+// as the MCP plugins — protects against interconnect restart wiping
+// capabilities.
 func registerWithInterconnect(ratdURL, self string) {
 	caps := []map[string]string{
 		{"name": "agents.list", "provider": self, "method": "GET", "path": "/agents",
@@ -153,33 +156,42 @@ func registerWithInterconnect(ratdURL, self string) {
 	}
 	endpoint := ratdURL + "/api/v1/x/interconnect/register"
 
-	for attempt := 1; attempt <= 15; attempt++ {
-		time.Sleep(3 * time.Second)
-		ok := true
-		for _, c := range caps {
-			body, _ := json.Marshal(c)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-			if err != nil {
-				cancel()
-				return
-			}
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := http.DefaultClient.Do(req)
-			cancel()
-			if err != nil || resp.StatusCode >= 300 {
-				if resp != nil {
-					_ = resp.Body.Close()
-				}
-				ok = false
-				break
-			}
-			_ = resp.Body.Close()
+	var wasUp bool
+	for {
+		ok := tryRegisterAll(endpoint, caps)
+		if ok && !wasUp {
+			slog.Info("registered capabilities with interconnect", "count", len(caps))
+		} else if !ok && wasUp {
+			slog.Warn("interconnect registration failed — will retry")
 		}
+		wasUp = ok
 		if ok {
-			slog.Info("registered capability agents.list with interconnect")
-			return
+			time.Sleep(60 * time.Second)
+		} else {
+			time.Sleep(5 * time.Second)
 		}
 	}
-	slog.Warn("could not register with interconnect — chat will fall back to direct HTTP (this is optional)")
+}
+
+func tryRegisterAll(endpoint string, caps []map[string]string) bool {
+	for _, c := range caps {
+		body, _ := json.Marshal(c)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			cancel()
+			return false
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		cancel()
+		if err != nil || resp.StatusCode >= 300 {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			return false
+		}
+		_ = resp.Body.Close()
+	}
+	return true
 }

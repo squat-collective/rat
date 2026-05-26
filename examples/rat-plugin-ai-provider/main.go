@@ -139,8 +139,10 @@ func phoneHome(ratdURL, name, addr string) {
 
 // registerWithInterconnect advertises the provider's capabilities to the
 // interconnect plugin, so other plugins can broker to it by capability name.
-// The interconnect plugin is optional — if it is not installed this gives up
-// quietly after a few retries.
+// Runs forever: re-registers every 60s once steady-state. This handles the
+// "interconnect restarted and lost everything" case — within 60s the
+// capabilities are back. Idempotent: register is treated as upsert by
+// the interconnect store.
 func registerWithInterconnect(ratdURL, self string) {
 	caps := []map[string]string{
 		{"name": "ai.complete", "provider": self, "method": "POST", "path": "/complete",
@@ -154,34 +156,42 @@ func registerWithInterconnect(ratdURL, self string) {
 	}
 	endpoint := ratdURL + "/api/v1/x/interconnect/register"
 
-	for attempt := 1; attempt <= 15; attempt++ {
-		time.Sleep(3 * time.Second)
-		ok := true
-		for _, c := range caps {
-			body, _ := json.Marshal(c)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-			if err != nil {
-				cancel()
-				return
-			}
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := http.DefaultClient.Do(req)
-			cancel()
-			if err != nil || resp.StatusCode >= 300 {
-				if resp != nil {
-					_ = resp.Body.Close()
-				}
-				ok = false
-				break
-			}
-			_ = resp.Body.Close()
+	var wasUp bool
+	for {
+		ok := tryRegisterAll(endpoint, caps)
+		if ok && !wasUp {
+			slog.Info("registered capabilities with the interconnect plugin", "count", len(caps))
+		} else if !ok && wasUp {
+			slog.Warn("interconnect registration failed — will retry")
 		}
+		wasUp = ok
 		if ok {
-			slog.Info("registered capabilities with the interconnect plugin")
-			return
+			time.Sleep(60 * time.Second)
+		} else {
+			time.Sleep(5 * time.Second)
 		}
-		slog.Info("interconnect not ready, retrying capability registration", "attempt", attempt)
 	}
-	slog.Warn("could not register with interconnect — it may not be installed (this is optional)")
+}
+
+func tryRegisterAll(endpoint string, caps []map[string]string) bool {
+	for _, c := range caps {
+		body, _ := json.Marshal(c)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			cancel()
+			return false
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		cancel()
+		if err != nil || resp.StatusCode >= 300 {
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			return false
+		}
+		_ = resp.Body.Close()
+	}
+	return true
 }

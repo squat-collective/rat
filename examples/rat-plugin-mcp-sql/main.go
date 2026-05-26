@@ -100,34 +100,45 @@ func phoneHome(ratdURL, name, addr string) {
 	slog.Error("phone-home failed after retries")
 }
 
+// Runs forever: re-registers every 60s once steady-state. Same shape
+// as rat-plugin-mcp-docs — see that file for the why.
 func registerWithInterconnect(ratdURL, self string) {
 	cap := map[string]string{
 		"name": "mcp.server.sql", "provider": self, "method": "POST", "path": "/mcp",
 		"description": "MCP server: read-only SQL against the warehouse (DuckDB via ratq)",
 	}
-	body, _ := json.Marshal(cap)
 	endpoint := ratdURL + "/api/v1/x/interconnect/register"
 
-	for attempt := 1; attempt <= 15; attempt++ {
-		time.Sleep(3 * time.Second)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-		if err != nil {
-			cancel()
-			return
+	var wasUp bool
+	for {
+		ok := tryRegister(endpoint, cap)
+		if ok && !wasUp {
+			slog.Info("registered mcp.server.sql with interconnect")
+		} else if !ok && wasUp {
+			slog.Warn("interconnect registration failed — will retry")
 		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
-		cancel()
-		if err != nil || resp.StatusCode >= 300 {
-			if resp != nil {
-				_ = resp.Body.Close()
-			}
-			continue
+		wasUp = ok
+		if ok {
+			time.Sleep(60 * time.Second)
+		} else {
+			time.Sleep(5 * time.Second)
 		}
-		_ = resp.Body.Close()
-		slog.Info("registered mcp.server.sql with interconnect")
-		return
 	}
-	slog.Warn("could not register with interconnect — chat won't see this MCP server (this is optional)")
+}
+
+func tryRegister(endpoint string, cap map[string]string) bool {
+	body, _ := json.Marshal(cap)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode < 300
 }
