@@ -23,6 +23,7 @@ func (a *api) mux() *http.ServeMux {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /demos", a.listDemos)
 	m.HandleFunc("POST /install", a.install)
+	m.HandleFunc("POST /run", a.run)
 	m.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -119,4 +120,38 @@ func (a *api) install(w http.ResponseWriter, r *http.Request) {
 
 	res := a.installer.Install(r.Context(), target, req.Namespace)
 	writeJSON(w, http.StatusOK, res)
+}
+
+// run triggers every pipeline in the demo in layer order (bronze → silver
+// → gold), waiting for each layer to finish before moving on. The endpoint
+// blocks until done; the panel shows a spinner.
+func (a *api) run(w http.ResponseWriter, r *http.Request) {
+	var req installRequest // same shape: {demo_id, namespace?}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(req.DemoID) == "" {
+		writeErr(w, http.StatusBadRequest, "demo_id is required")
+		return
+	}
+
+	ms, err := a.loadManifests()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "failed to read demos: "+err.Error())
+		return
+	}
+	var target *Manifest
+	for i := range ms {
+		if ms[i].ID == req.DemoID {
+			target = &ms[i]
+			break
+		}
+	}
+	if target == nil {
+		writeErr(w, http.StatusNotFound, "no such demo: "+req.DemoID)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, a.installer.RunAll(r.Context(), target, req.Namespace))
 }

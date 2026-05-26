@@ -141,7 +141,7 @@ func (i *Installer) Install(ctx context.Context, m *Manifest, nsOverride string)
 			}
 		}
 		first = false
-		if err := i.ratd.SubmitRun(ctx, ns, p.Layer, p.Name, "manual"); err != nil {
+		if _, err := i.ratd.SubmitRun(ctx, ns, p.Layer, p.Name, "manual"); err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("run %s.%s: %s", p.Layer, p.Name, err))
 			continue
 		}

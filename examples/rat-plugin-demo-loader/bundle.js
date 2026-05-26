@@ -74,6 +74,8 @@
     var state = stateS[0], setState = stateS[1];
     var nsS = React.useState(d.namespace);
     var ns = nsS[0], setNs = nsS[1];
+    var runS = React.useState({ status: "idle" });
+    var runState = runS[0], setRunState = runS[1];
 
     function install() {
       var target = (ns || "").trim() || d.namespace;
@@ -90,8 +92,27 @@
         });
     }
 
+    function runAll() {
+      var target = (ns || "").trim() || d.namespace;
+      setRunState({ status: "running" });
+      // /run is synchronous — it submits each layer, polls each layer to
+      // completion, then triggers the next. Can take a couple of minutes.
+      req("POST", "/api/v1/x/demo-loader/run", { demo_id: d.id, namespace: target })
+        .then(function (res) {
+          if (typeof window.__RAT_INVALIDATE === "function") {
+            window.__RAT_INVALIDATE();
+          }
+          setRunState({ status: "done", result: res });
+        })
+        .catch(function (e) {
+          setRunState({ status: "error", error: String((e && e.message) || e) });
+        });
+    }
+
     var installed = state.status === "done" && state.result && (!state.result.errors || state.result.errors.length === 0);
     var partial = state.status === "done" && state.result && state.result.errors && state.result.errors.length > 0;
+    var runResult = runState.status === "done" ? runState.result : null;
+    var runErrored = runResult && (runResult.errors || []).length > 0;
 
     return h("div", { style: cardStyle },
       h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "0.5rem", flexWrap: "wrap" } },
@@ -121,12 +142,47 @@
             : null,
           h("button", {
             onClick: install,
-            disabled: state.status === "installing",
+            disabled: state.status === "installing" || runState.status === "running",
             style: state.status === "done" ? btn : btnPrimary,
-          }, state.status === "done" ? "Reinstall" : "Install"))),
+          }, state.status === "done" ? "Reinstall" : "Install"),
+          h("button", {
+            onClick: runAll,
+            disabled: runState.status === "running" || state.status === "installing",
+            title: "Submit every pipeline in bronze → silver → gold order, waiting between layers",
+            style: btn,
+          }, runState.status === "running" ? "Running…" : "▶ Run all"))),
       h("p", { style: { fontSize: "0.82rem", color: C.muted, margin: "0.6rem 0 0", lineHeight: 1.5 } }, d.description),
       state.status === "error"
         ? h("div", { style: { color: C.danger, fontSize: "0.78rem", marginTop: "0.5rem" } }, "✗ " + state.error)
+        : null,
+      runState.status === "error"
+        ? h("div", { style: { color: C.danger, fontSize: "0.78rem", marginTop: "0.5rem" } }, "✗ Run failed: " + runState.error)
+        : null,
+      runResult
+        ? h("div", { style: { marginTop: "0.7rem", paddingTop: "0.7rem", borderTop: "1px solid " + C.border } },
+            h("div", { style: sub }, runErrored ? "Run all — completed with errors" : "Run all — all green"),
+            h("div", { style: { display: "grid", gridTemplateColumns: "5rem 1fr 1fr 1fr 5rem", gap: "0.4rem 0.8rem", marginTop: "0.4rem", fontSize: "0.72rem" } },
+              h("div", { style: { color: C.muted, fontWeight: 700 } }, "layer"),
+              h("div", { style: { color: C.muted, fontWeight: 700 } }, "submitted"),
+              h("div", { style: { color: C.muted, fontWeight: 700 } }, "succeeded"),
+              h("div", { style: { color: C.muted, fontWeight: 700 } }, "failed"),
+              h("div", { style: { color: C.muted, fontWeight: 700 } }, "ms"),
+              (runResult.layers || []).flatMap(function (l) {
+                return [
+                  h("div", { key: l.layer + "-l", style: { fontFamily: "monospace" } }, l.layer),
+                  h("div", { key: l.layer + "-s" }, (l.submitted || []).length),
+                  h("div", { key: l.layer + "-ok", style: { color: C.primary } }, (l.succeeded || []).length),
+                  h("div", { key: l.layer + "-ko", style: { color: ((l.failed || []).length > 0) ? C.danger : C.muted } }, (l.failed || []).length),
+                  h("div", { key: l.layer + "-d", style: { color: C.muted } }, l.duration_ms),
+                ];
+              })),
+            runErrored
+              ? h("div", { style: { color: C.danger, fontSize: "0.72rem", marginTop: "0.4rem" } },
+                  h("ul", { style: { margin: "0.2rem 0 0 1rem" } },
+                    (runResult.errors || []).map(function (e, i) {
+                      return h("li", { key: i }, e);
+                    })))
+              : null)
         : null,
       state.status === "done" && state.result
         ? h("div", { style: { marginTop: "0.7rem", paddingTop: "0.7rem", borderTop: "1px solid " + C.border } },

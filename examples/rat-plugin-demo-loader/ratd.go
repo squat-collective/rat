@@ -110,16 +110,45 @@ func (c *ratdClient) CreateQualityTest(
 }
 
 // SubmitRun POSTs /api/v1/runs to trigger a pipeline run. The ratd handler
-// expects the field name "pipeline" (not "pipeline_name").
-func (c *ratdClient) SubmitRun(ctx context.Context, ns, layer, name, trigger string) error {
+// expects the field name "pipeline" (not "pipeline_name"). Returns the
+// resulting run_id so the caller can poll it (e.g. RunAll waits for each
+// layer to complete before triggering the next).
+func (c *ratdClient) SubmitRun(ctx context.Context, ns, layer, name, trigger string) (string, error) {
 	body, _ := json.Marshal(map[string]string{
 		"namespace": ns, "layer": layer, "pipeline": name, "trigger": trigger,
 	})
-	_, status, err := c.do(ctx, http.MethodPost, "/api/v1/runs", body)
+	raw, status, err := c.do(ctx, http.MethodPost, "/api/v1/runs", body)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return statusError("submit run for "+name, status)
+	if err := statusError("submit run for "+name, status); err != nil {
+		return "", err
+	}
+	var resp struct {
+		RunID string `json:"run_id"`
+	}
+	_ = json.Unmarshal(raw, &resp)
+	return resp.RunID, nil
+}
+
+// GetRunStatus polls GET /api/v1/runs/{id} and returns the current status
+// (pending / running / success / failed / cancelled). Used by RunAll to wait
+// for a layer to finish before triggering the next.
+func (c *ratdClient) GetRunStatus(ctx context.Context, id string) (string, error) {
+	raw, status, err := c.do(ctx, http.MethodGet, "/api/v1/runs/"+id, nil)
+	if err != nil {
+		return "", err
+	}
+	if err := statusError("get run "+id, status); err != nil {
+		return "", err
+	}
+	var resp struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return "", err
+	}
+	return resp.Status, nil
 }
 
 // SetTableMetadata PUTs the table's description + column descriptions —
