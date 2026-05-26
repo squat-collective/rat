@@ -47,7 +47,12 @@ func New(
 		runs:      runs,
 		executor:  executor,
 		interval:  interval,
-		parser:    cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
+		// SecondOptional lets the parser accept BOTH 5-field cron (minute
+		// granularity, e.g. "0 * * * *") and 6-field cron with leading
+		// seconds (e.g. "*/30 * * * * *" for every 30s). Required for
+		// the demo's live-ingestion pipeline; legacy schedules keep
+		// working unchanged.
+		parser:    cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
 	}
 }
 

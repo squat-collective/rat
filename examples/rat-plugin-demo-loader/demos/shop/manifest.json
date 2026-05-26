@@ -1,7 +1,7 @@
 {
   "id": "shop",
   "name": "🛒 Shop",
-  "description": "E-commerce schema with an INCREMENTAL bronze fact, a PYTHON gold pipeline, table-level documentation, rich quality tests and an hourly schedule — the most feature-rich of the three demos.",
+  "description": "E-commerce schema with LIVE 30-second ingestion: a new batch of orders lands every half-minute, silver refreshes every minute, and an hourly + sub-hourly gold view stay current. Demonstrates the incremental merge strategy at sub-minute cadence.",
   "namespace": "shop",
   "pipelines": [
     {
@@ -43,16 +43,16 @@
       "layer": "bronze",
       "name": "orders",
       "type": "sql",
-      "description": "5000 orders — INCREMENTAL strategy. Each run appends rows whose ordered_at is newer than the previous watermark.",
+      "description": "LIVE orders stream — initial 60-day backfill on first run, then 4 fresh orders every 30 seconds.",
       "file": "bronze/orders.sql",
       "table_metadata": {
-        "description": "Order facts — incremental: each run inserts only the orders newer than the previous watermark (ordered_at).",
+        "description": "Live order facts — 5000 historical rows backfilled on first run, then ~4 new orders every 30 seconds. ordered_at is a TIMESTAMP, so 'last hour' / 'last 5 minutes' analyses work.",
         "column_descriptions": {
-          "order_id": "Primary key (also the unique_key for the incremental merge).",
+          "order_id": "Primary key. Backfill IDs are 1..5000; live IDs are epoch-based to guarantee uniqueness across runs.",
           "customer_id": "FK into bronze.customers.",
           "product_id": "FK into bronze.products.",
           "quantity": "Units ordered (1..5).",
-          "ordered_at": "Order timestamp — also the watermark column.",
+          "ordered_at": "Order TIMESTAMP — also the watermark column. Backfill spans the last 60 days; live rows land in the last 25 seconds.",
           "status": "completed (~98%) or cancelled."
         }
       }
@@ -75,8 +75,24 @@
       "layer": "gold",
       "name": "revenue_by_month",
       "type": "sql",
-      "description": "Monthly revenue + AOV — scheduled hourly so dashboards stay current.",
+      "description": "Monthly revenue + AOV — scheduled every 5 minutes so dashboards stay current.",
       "file": "gold/revenue_by_month.sql"
+    },
+    {
+      "layer": "gold",
+      "name": "revenue_by_hour",
+      "type": "sql",
+      "description": "Hourly revenue + order count for the last 48 hours — the live-cadence counterpart of revenue_by_month.",
+      "file": "gold/revenue_by_hour.sql",
+      "table_metadata": {
+        "description": "Hourly revenue trend for the trailing 48 hours. Refreshed every minute so 'last hour' analyses are always current with the live bronze.orders stream.",
+        "column_descriptions": {
+          "hour": "DATE_TRUNC('hour', ordered_at) — bucket label.",
+          "orders": "Completed orders in that hour.",
+          "revenue_eur": "Sum of revenue_eur in that hour.",
+          "avg_order_value_eur": "Average order value (revenue / orders)."
+        }
+      }
     },
     {
       "layer": "gold",
@@ -121,9 +137,40 @@
   ],
   "schedules": [
     {
+      "layer": "bronze",
+      "pipeline": "orders",
+      "cron": "*/30 * * * * *",
+      "_comment": "Every 30 seconds — the live-ingestion heartbeat."
+    },
+    {
+      "layer": "silver",
+      "pipeline": "orders_enriched",
+      "cron": "0 * * * * *",
+      "_comment": "Every minute — keep the joined fact fresh."
+    },
+    {
+      "layer": "silver",
+      "pipeline": "customer_lifetime",
+      "cron": "0 */2 * * * *",
+      "_comment": "Every 2 minutes — heavier aggregate."
+    },
+    {
+      "layer": "gold",
+      "pipeline": "revenue_by_hour",
+      "cron": "0 * * * * *",
+      "_comment": "Every minute — the 'right now' dashboard."
+    },
+    {
       "layer": "gold",
       "pipeline": "revenue_by_month",
-      "cron": "0 * * * *"
+      "cron": "0 */5 * * * *",
+      "_comment": "Every 5 minutes — historical view."
+    },
+    {
+      "layer": "gold",
+      "pipeline": "top_customers",
+      "cron": "0 */5 * * * *",
+      "_comment": "Every 5 minutes."
     }
   ]
 }

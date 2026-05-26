@@ -70,7 +70,10 @@ func NewEvaluator(
 		runs:      runs,
 		executor:  executor,
 		interval:  interval,
-		parser:    cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
+		// Same flags as the scheduler — accept both 5-field and 6-field
+		// (seconds-optional) cron so sub-minute schedules work the same
+		// way everywhere.
+		parser:    cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
 	}
 }
 

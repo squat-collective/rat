@@ -89,8 +89,11 @@ type cronDependencyConfig struct {
 	Dependencies []string `json:"dependencies"`
 }
 
-// cronParser is a standard 5-field cron parser (minute, hour, day-of-month, month, day-of-week).
-var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+// cronParser accepts both 5-field cron (minute granularity, e.g.
+// "0 * * * *") and 6-field cron with an optional leading seconds field
+// (e.g. "*/30 * * * * *" for every 30 seconds). Same flags as the
+// scheduler so validation and execution agree on what's valid.
+var cronParser = cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
 // MountTriggerRoutes registers trigger endpoints nested under pipelines.
 func MountTriggerRoutes(r chi.Router, srv *Server) {
