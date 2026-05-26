@@ -137,25 +137,28 @@ def create_branch(
     source_ref = _get_reference(nessie_config, from_branch)
     source_hash = source_ref["hash"]
 
-    url = f"{nessie_config.api_v2_url}/trees"
-    payload = {
+    # Nessie v2 POST /trees uses query parameters for the new branch's
+    # name/type, and the request body is the source Reference (NOT a
+    # wrapped {name,type,reference:{...}} object as some older clients
+    # documented). The response wraps the created branch under a
+    # "reference" key. Both shapes verified against Nessie 0.99.x.
+    url = (
+        f"{nessie_config.api_v2_url}/trees"
+        f"?name={urllib.parse.quote(branch_name, safe='')}&type=BRANCH"
+    )
+    source_payload = {
         "type": "BRANCH",
-        "name": branch_name,
-        "reference": {
-            "type": "BRANCH",
-            "name": from_branch,
-            "hash": source_hash,
-        },
+        "name": from_branch,
+        "hash": source_hash,
     }
-
-    data = json.dumps(payload).encode("utf-8")
+    data = json.dumps(source_payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
 
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             result = json.loads(resp.read().decode("utf-8"))
-            return result["hash"]
+            return result["reference"]["hash"]
     except urllib.error.HTTPError as e:
         if e.code == 409:
             # Branch already exists — return its current hash
@@ -170,11 +173,24 @@ def merge_branch(
     source: str,
     target: str = "main",
 ) -> None:
-    """Merge a source branch into a target branch."""
+    """Merge a source branch into a target branch.
+
+    Nessie v2 requires the target ref's current hash in the path using
+    the `{ref}@{hash}` syntax (the `expected-hash` query-string form is
+    not accepted on /history/merge — confirmed against Nessie 0.99.x).
+    Without it the merge returns 400 "Expected hash must be provided".
+    """
     source_ref = _get_reference(nessie_config, source)
     source_hash = source_ref["hash"]
 
-    url = f"{nessie_config.api_v2_url}/trees/{_encode_branch(target)}/history/merge"
+    target_ref = _get_reference(nessie_config, target)
+    target_hash = target_ref["hash"]
+
+    # Path-embed the expected target hash with @-syntax (URL-encoded).
+    target_path = (
+        _encode_branch(target) + urllib.parse.quote("@" + target_hash, safe="")
+    )
+    url = f"{nessie_config.api_v2_url}/trees/{target_path}/history/merge"
     payload = {
         "fromRefName": source,
         "fromHash": source_hash,
@@ -184,7 +200,7 @@ def merge_branch(
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
 
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:
         resp.read()  # consume response
 
 
@@ -216,8 +232,16 @@ def delete_branch(
 
 @retry_on_transient()
 def _get_reference(nessie_config: NessieConfig, branch_name: str) -> dict[str, str]:
-    """Get a Nessie branch reference (name + hash)."""
+    """Get a Nessie branch reference (returns the inner {type,name,hash}).
+
+    Nessie v2 GET /trees/{ref} wraps the reference in a top-level
+    `reference` key. We unwrap so callers can do `ref["hash"]` directly.
+    """
     url = f"{nessie_config.api_v2_url}/trees/{_encode_branch(branch_name)}"
     req = urllib.request.Request(url)
     with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        body = json.loads(resp.read().decode("utf-8"))
+    # Tolerate both shapes: the wrapped {"reference": {...}} returned by
+    # Nessie 0.99.x, and a raw {type,name,hash} if a future Nessie
+    # version flattens it.
+    return body.get("reference", body)
