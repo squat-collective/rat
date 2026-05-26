@@ -366,10 +366,11 @@
     );
   }
 
-  // queryUrlFor builds a portal /query URL that pre-loads the AI's SQL,
-  // so the user can click through and iterate on it.
+  // queryUrlFor builds a portal /query URL that pre-loads the AI's SQL.
+  // Uses window.location.origin (the portal) rather than apiBase() (which
+  // points at ratd's API host — a different port — and would 404 here).
   function queryUrlFor(sql) {
-    return apiBase().replace(/\/$/, "") + "/query?sql=" + encodeURIComponent(sql);
+    return window.location.origin + "/query?sql=" + encodeURIComponent(sql);
   }
 
   function ToolCallCard(props) {
