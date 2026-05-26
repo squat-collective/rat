@@ -1,0 +1,53 @@
+package main
+
+import (
+	"context"
+
+	connect "connectrpc.com/connect"
+	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
+	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
+)
+
+const pluginVersion = "0.1.0"
+
+type Handler struct {
+	pluginv1connect.UnimplementedPluginServiceHandler
+	name      string
+	bundleURL string
+}
+
+func newHandler(name, bundleURL string) *Handler {
+	return &Handler{name: name, bundleURL: bundleURL}
+}
+
+func (h *Handler) HealthCheck(
+	_ context.Context, _ *connect.Request[pluginv1.HealthCheckRequest],
+) (*connect.Response[pluginv1.HealthCheckResponse], error) {
+	return connect.NewResponse(&pluginv1.HealthCheckResponse{
+		Status: pluginv1.Status_STATUS_SERVING, Message: h.name + " ready",
+	}), nil
+}
+
+func (h *Handler) Describe(
+	_ context.Context, _ *connect.Request[pluginv1.DescribeRequest],
+) (*connect.Response[pluginv1.DescribeResponse], error) {
+	return connect.NewResponse(&pluginv1.DescribeResponse{
+		Name:        h.name,
+		Version:     pluginVersion,
+		Description: "Activity feed of every change in the system. Polls ratd every 15s for plugins/configs, pipelines, schedules, secrets, namespaces, tables, and runs; emits structured events. Drill into any table-level event to see the row-level diff between two Iceberg snapshots.",
+		Routes: []*pluginv1.RouteDeclaration{
+			{Method: "GET", Path: "/events", Description: "Recent activity events (newest first). Query params: kind=<prefix>, limit=<n>"},
+			{Method: "GET", Path: "/tables/{ns}/{layer}/{name}/snapshots", Description: "List Iceberg snapshots for a table (newest first)"},
+			{Method: "POST", Path: "/tables/{ns}/{layer}/{name}/diff", Description: "Row-level diff between two snapshots. Body: {snapshot_a, snapshot_b, limit?}"},
+		},
+		Ui: &pluginv1.PluginUIDescriptor{
+			BundleUrl: h.bundleURL,
+			NavItems: []*pluginv1.UINavItem{
+				{Label: "Diff", Icon: "git-compare", Path: "/x/diff", Priority: 14},
+			},
+			Routes: []*pluginv1.UIRoute{
+				{Path: "/x/diff", ComponentName: "DiffApp"},
+			},
+		},
+	}), nil
+}
