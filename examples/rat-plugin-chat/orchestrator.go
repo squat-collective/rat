@@ -40,14 +40,16 @@ type orchestrator struct {
 	ratdURL string
 	mcp     *mcpClient
 	disco   *discoverer
+	agents  *agentsClient
 	http    *http.Client
 }
 
-func newOrchestrator(ratdURL string, mcp *mcpClient, disco *discoverer) *orchestrator {
+func newOrchestrator(ratdURL string, mcp *mcpClient, disco *discoverer, agents *agentsClient) *orchestrator {
 	return &orchestrator{
 		ratdURL: strings.TrimRight(ratdURL, "/"),
 		mcp:     mcp,
 		disco:   disco,
+		agents:  agents,
 		http:    &http.Client{Timeout: 180 * time.Second},
 	}
 }
@@ -55,7 +57,25 @@ func newOrchestrator(ratdURL string, mcp *mcpClient, disco *discoverer) *orchest
 // chatTurn runs the loop until the model is done (or maxIterations is hit).
 // messages is the full conversation so far (system + user + prior turns);
 // systemOverride, if non-empty, replaces the leading system message.
-func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []chatMessage, systemOverride string) error {
+// agentID, if non-empty, selects an agent: its system_prompt overrides
+// systemOverride and its allowed_tools whitelists the tool list shown to
+// the LLM.
+func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []chatMessage, systemOverride, agentID string) error {
+	// Resolve the agent (if any). An invalid agentID is non-fatal — we
+	// just fall back to defaults and warn through the started event.
+	var agent *Agent
+	if agentID != "" {
+		a, err := o.agents.get(ctx, agentID)
+		if err == nil && a != nil {
+			agent = a
+			systemOverride = a.SystemPrompt
+		} else if err != nil {
+			_ = sink.emit("warning", map[string]string{
+				"warning": "agent " + agentID + " not found, using defaults",
+			})
+		}
+	}
+
 	// Inject / replace the system prompt up front.
 	if systemOverride != "" {
 		if len(messages) > 0 && messages[0].Role == "system" {
@@ -65,11 +85,30 @@ func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []ch
 		}
 	}
 
-	tools := openAIToolsFromMCP(o.disco.allTools())
-	_ = sink.emit("started", map[string]any{
+	// Filter the tool list by the agent's whitelist if one's selected.
+	allTools := o.disco.allTools()
+	if agent != nil && !agent.allowsAll() {
+		filtered := allTools[:0]
+		for _, t := range allTools {
+			if agent.allows(t.NSName) {
+				filtered = append(filtered, t)
+			}
+		}
+		allTools = filtered
+	}
+	tools := openAIToolsFromMCP(allTools)
+
+	started := map[string]any{
 		"tools_available": len(tools),
 		"servers":         summarizeServers(o.disco.list()),
-	})
+	}
+	if agent != nil {
+		started["agent"] = map[string]any{
+			"id": agent.ID, "name": agent.Name, "icon": agent.Icon,
+			"tools_allowed": len(tools),
+		}
+	}
+	_ = sink.emit("started", started)
 
 	for iter := 1; iter <= maxIterations; iter++ {
 		resp, err := o.callAI(ctx, sink, messages, tools)

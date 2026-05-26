@@ -67,8 +67,9 @@ func main() {
 	cfg := newConfigStore(ratdURL, name, chatConfig{})
 	mcp := newMCPClient(ratdURL)
 	disco := newDiscoverer(ratdURL, mcp)
-	orch := newOrchestrator(ratdURL, mcp, disco)
-	a := newAPI(disco, orch, cfg)
+	agents := newAgentsClient(ratdURL)
+	orch := newOrchestrator(ratdURL, mcp, disco, agents)
+	a := newAPI(disco, orch, cfg, agents)
 	h := newHandler(name, "http://"+selfAddr+"/bundle.js")
 
 	mux := http.NewServeMux()

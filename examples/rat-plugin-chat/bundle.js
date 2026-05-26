@@ -509,6 +509,9 @@
     // the multi-turn loop). Cleared when the turn finalises (assistant_message
     // event) and a fresh bubble appears for the next iteration after tools run.
     var st7 = useState(null),  streamingBubble = st7[0], setStreamingBubble = st7[1];
+    var st8 = useState([]),    agents = st8[0], setAgents = st8[1];
+    // Selected agent id. "" = no agent (chat plugin's default prompt + all tools).
+    var st9 = useState(""),    agentID = st9[0], setAgentID = st9[1];
     var cancelRef = useRef(null);
     var scrollerRef = useRef(null);
     var streamingBufRef = useRef({ content: "", reasoning: "" });
@@ -519,11 +522,27 @@
       });
     }, []);
 
+    var refreshAgents = useCallback(function () {
+      reqJSON("GET", "/agents").then(function (d) {
+        var list = (d && d.agents) || [];
+        setAgents(list);
+        // If user hasn't picked an agent yet, default to "generalist" if
+        // it exists, otherwise the first one in the catalog.
+        setAgentID(function (cur) {
+          if (cur) return cur;
+          var gen = list.find(function (a) { return a.id === "generalist"; });
+          if (gen) return gen.id;
+          return list.length > 0 ? list[0].id : "";
+        });
+      });
+    }, []);
+
     useEffect(function () {
       refreshServers();
-      var t = setInterval(refreshServers, 10000);
+      refreshAgents();
+      var t = setInterval(function () { refreshServers(); refreshAgents(); }, 10000);
       return function () { clearInterval(t); };
-    }, [refreshServers]);
+    }, [refreshServers, refreshAgents]);
 
     useEffect(function () {
       // Auto-scroll to bottom when transcript grows.
@@ -549,7 +568,7 @@
       streamingBufRef.current = { content: "", reasoning: "" };
       setStreamingBubble(null);
 
-      cancelRef.current = streamChat({ messages: nextMsgs }, function (ev, data) {
+      cancelRef.current = streamChat({ messages: nextMsgs, agent_id: agentID }, function (ev, data) {
         if (ev === "assistant_delta") {
           // Per-token streaming. Append content / reasoning to the running
           // streamingBubble — the StreamingBubble component renders it live.
@@ -622,7 +641,7 @@
         setStreamingBubble(null);
         setBusy(false);
       });
-    }, [busy, input, msgs]);
+    }, [busy, input, msgs, agentID]);
 
     var cancelTurn = useCallback(function () {
       if (cancelRef.current) cancelRef.current();
@@ -662,6 +681,31 @@
         },
       },
         h("div", { style: { fontWeight: 700, fontSize: 14, letterSpacing: 1 } }, "CHAT"),
+        // Agent picker — the LLM persona for this conversation. Changing
+        // it mid-conversation just affects the *next* turn; we don't
+        // mutate prior messages. "(no agent)" means use the plugin's
+        // default system prompt + all tools.
+        agents.length > 0 && h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+          h("span", { style: { color: C.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: 1 } }, "agent"),
+          h("select", {
+            value: agentID,
+            onChange: function (e) { setAgentID(e.target.value); },
+            disabled: busy,
+            title: "Switching mid-conversation affects only the next turn",
+            style: {
+              padding: "4px 8px", background: C.card, color: C.fg,
+              border: "1px solid " + C.border, fontSize: 12, fontFamily: "inherit",
+              cursor: busy ? "not-allowed" : "pointer",
+            },
+          },
+            h("option", { value: "" }, "(no agent — defaults)"),
+            agents.map(function (a) {
+              var sel = a.allowed_tools && a.allowed_tools[0] === "*" ? "all tools" : a.allowed_tools.length + " tools";
+              return h("option", { key: a.id, value: a.id },
+                a.name + "  ·  " + sel);
+            }),
+          ),
+        ),
         h("div", { style: { color: C.muted, fontSize: 12 } },
           servers.length + " MCP server" + (servers.length === 1 ? "" : "s") + " · " + totalTools + " tools"),
         h("div", { style: { marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" } },

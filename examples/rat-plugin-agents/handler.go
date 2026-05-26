@@ -35,22 +35,23 @@ func (h *Handler) Describe(
 	return connect.NewResponse(&pluginv1.DescribeResponse{
 		Name:        h.name,
 		Version:     pluginVersion,
-		Description: "AI chat with pluggable MCP connectors — auto-discovers MCP servers wired through the interconnect and lets a model use them as tools",
+		Description: "Agent registry — named personas (system prompt + tool whitelist + model overrides) the chat plugin can switch between",
 		Routes: []*pluginv1.RouteDeclaration{
-			{Method: "GET", Path: "/servers", Description: "Discovered MCP servers + tool catalogs"},
-			{Method: "GET", Path: "/tools", Description: "Flattened, namespaced tool list as the LLM sees it"},
-			{Method: "GET", Path: "/agents", Description: "Available agents (proxy of rat-plugin-agents) for the header picker"},
-			{Method: "POST", Path: "/chat", Description: "Run one chat turn (SSE: started / assistant_delta / assistant_message / tool_call / tool_result / done). Accepts agent_id to scope tools + system prompt."},
-			{Method: "GET", Path: "/config", Description: "Effective chat config"},
+			{Method: "GET", Path: "/agents", Description: "List all agents"},
+			{Method: "GET", Path: "/agents/{id}", Description: "Get one agent"},
+			{Method: "POST", Path: "/agents", Description: "Create an agent"},
+			{Method: "PUT", Path: "/agents/{id}", Description: "Update an agent"},
+			{Method: "DELETE", Path: "/agents/{id}", Description: "Delete an agent"},
+			{Method: "POST", Path: "/agents/seed", Description: "Populate defaults if the catalog is empty"},
 		},
 		ConfigSchemaJson: configSchemaJSON,
 		Ui: &pluginv1.PluginUIDescriptor{
 			BundleUrl: h.bundleURL,
 			NavItems: []*pluginv1.UINavItem{
-				{Label: "Chat", Icon: "message-circle", Path: "/x/chat", Priority: 5},
+				{Label: "Agents", Icon: "users", Path: "/x/agents", Priority: 6},
 			},
 			Routes: []*pluginv1.UIRoute{
-				{Path: "/x/chat", ComponentName: "ChatApp"},
+				{Path: "/x/agents", ComponentName: "AgentsApp"},
 			},
 		},
 	}), nil
