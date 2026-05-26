@@ -29,7 +29,7 @@ func TestRunStatusCallback_ValidSuccess_Returns200(t *testing.T) {
 		Runs:     store,
 		Executor: mock,
 	}
-	router := api.NewRouter(srv)
+	router := api.NewInternalRouter(srv)
 
 	body := api.RunStatusUpdate{
 		RunID:       run.ID.String(),
@@ -51,7 +51,7 @@ func TestRunStatusCallback_ValidSuccess_Returns200(t *testing.T) {
 
 func TestRunStatusCallback_InvalidStatus_Returns400(t *testing.T) {
 	srv := &api.Server{}
-	router := api.NewRouter(srv)
+	router := api.NewInternalRouter(srv)
 
 	body := api.RunStatusUpdate{
 		RunID:  "some-id",
@@ -70,7 +70,7 @@ func TestRunStatusCallback_InvalidStatus_Returns400(t *testing.T) {
 
 func TestRunStatusCallback_MismatchedRunID_Returns400(t *testing.T) {
 	srv := &api.Server{}
-	router := api.NewRouter(srv)
+	router := api.NewInternalRouter(srv)
 
 	body := api.RunStatusUpdate{
 		RunID:  "different-id",
@@ -89,7 +89,7 @@ func TestRunStatusCallback_MismatchedRunID_Returns400(t *testing.T) {
 
 func TestRunStatusCallback_InvalidJSON_Returns400(t *testing.T) {
 	srv := &api.Server{}
-	router := api.NewRouter(srv)
+	router := api.NewInternalRouter(srv)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/internal/runs/some-id/status", bytes.NewReader([]byte("not json")))
 	req.Header.Set("Content-Type", "application/json")
@@ -106,7 +106,7 @@ func TestRunStatusCallback_ExecutorWithoutReceiver_Returns200(t *testing.T) {
 	srv := &api.Server{
 		Executor: mock,
 	}
-	router := api.NewRouter(srv)
+	router := api.NewInternalRouter(srv)
 
 	body := api.RunStatusUpdate{
 		RunID:  "some-id",
@@ -134,7 +134,7 @@ func TestRunStatusCallback_EmptyBodyRunID_UsesURLParam(t *testing.T) {
 	srv := &api.Server{
 		Executor: mock,
 	}
-	router := api.NewRouter(srv)
+	router := api.NewInternalRouter(srv)
 
 	// Body with empty run_id — should use URL param
 	body := api.RunStatusUpdate{
@@ -163,7 +163,7 @@ func TestRunStatusCallback_FailedStatusWithError_ForwardsError(t *testing.T) {
 	srv := &api.Server{
 		Executor: mock,
 	}
-	router := api.NewRouter(srv)
+	router := api.NewInternalRouter(srv)
 
 	body := api.RunStatusUpdate{
 		RunID:  "run-123",
@@ -188,7 +188,7 @@ func TestRunStatusCallback_NilExecutor_Returns200(t *testing.T) {
 	srv := &api.Server{
 		Executor: nil,
 	}
-	router := api.NewRouter(srv)
+	router := api.NewInternalRouter(srv)
 
 	body := api.RunStatusUpdate{
 		RunID:  "run-123",

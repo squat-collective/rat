@@ -353,7 +353,15 @@ type Server struct {
 	PipelineCache  *cache.Cache[string, *domain.Pipeline]     // key: "ns/layer/name"
 }
 
-// NewRouter creates a configured chi router with all API routes mounted.
+// NewRouter creates the PUBLIC chi router with end-user APIs mounted.
+//
+// Internal service-to-service routes (run-status callback, plugin phone-home)
+// are NOT mounted here — they live on a separate listener built via
+// NewInternalRouter. The two routers share the same *Server, but a 404 from
+// the public router on /api/v1/internal/* or /internal/* must never leak
+// that those routes exist on the internal listener.
+//
+// See main.go for the two-listener bootstrap and the trust-boundary doc.
 func NewRouter(srv *Server) chi.Router {
 	// Ensure SSE limiter is always available.
 	if srv.SSELimiter == nil {
@@ -429,14 +437,10 @@ func NewRouter(srv *Server) chi.Router {
 		})
 	}
 
-	// Internal service-to-service routes (no JWT required).
-	// Called by runner/plugins for push-based status updates.
-	MountInternalRoutes(r, srv)
-
-	// Plugin phone-home (no auth — plugins call this to self-register).
-	if srv.PluginManager != nil {
-		MountPluginInternalRoutes(r, srv)
-	}
+	// NOTE: Internal routes (MountInternalRoutes, MountPluginInternalRoutes)
+	// are intentionally NOT mounted here. They live on the private listener
+	// returned by NewInternalRouter, so an attacker on the public listener
+	// cannot reach them — they get a clean 404.
 
 	// API v1
 	r.Route("/api/v1", func(r chi.Router) {
@@ -510,6 +514,50 @@ func NewRouter(srv *Server) chi.Router {
 		// Always mount — handler returns 503 if PluginRegistry is nil.
 		MountPluginProxyRoutes(vr, srv)
 	})
+
+	return r
+}
+
+// NewInternalRouter creates the PRIVATE chi router for service-to-service
+// callbacks. It hosts ONLY internal endpoints:
+//
+//   - POST /api/v1/internal/runs/{runID}/status — runner posts terminal run status
+//   - POST /internal/plugins/register           — plugins phone home at boot
+//
+// SECURITY MODEL: this router has NO authentication. It assumes the caller is
+// trusted because the listener it serves on must be bound to a network the
+// public can't reach (loopback, the Docker bridge, a VPC private subnet…).
+// The operator is responsible for keeping the internal listener off the
+// public network. Never expose the internal port to the host or the internet.
+//
+// Health endpoints are mirrored here so a Docker/Kubernetes probe targeting
+// the internal port still works without round-tripping to 8080.
+func NewInternalRouter(srv *Server) chi.Router {
+	r := chi.NewRouter()
+
+	// Minimal middleware — no CORS, no auth, no rate limiting. The internal
+	// listener is for trusted in-cluster callers only.
+	r.Use(securityHeaders)
+	r.Use(RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(RequestLogger)
+	r.Use(middleware.Recoverer)
+
+	// Optional body-size cap so a runaway client can't blow up memory.
+	r.Use(limitJSONBody)
+
+	// Health (so container probes pointed at the internal port still work).
+	r.Get("/health", srv.HandleHealth)
+	r.Get("/health/live", srv.HandleHealthLive)
+	r.Get("/health/ready", srv.HandleHealthReady)
+
+	// Run-status callback from the runner.
+	MountInternalRoutes(r, srv)
+
+	// Plugin phone-home (plugins POST here at boot to register themselves).
+	if srv.PluginManager != nil {
+		MountPluginInternalRoutes(r, srv)
+	}
 
 	return r
 }

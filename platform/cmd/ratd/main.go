@@ -68,6 +68,13 @@ func validateEnv() []string {
 		}
 	}
 
+	// Validate internal listen address format (host:port).
+	if addr := os.Getenv("INTERNAL_LISTEN_ADDR"); addr != "" {
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			errs = append(errs, fmt.Sprintf("INTERNAL_LISTEN_ADDR=%q: must be host:port (%v)", addr, err))
+		}
+	}
+
 	// Validate PORT is numeric.
 	if port := os.Getenv("PORT"); port != "" {
 		if _, err := net.LookupPort("tcp", port); err != nil {
@@ -706,9 +713,10 @@ func main() {
 		slog.Info("rate limiting enabled", "rps", cfg.RequestsPerSecond, "burst", cfg.Burst)
 	}
 
-	router := api.NewRouter(srv)
+	publicRouter := api.NewRouter(srv)
+	internalRouter := api.NewInternalRouter(srv)
 
-	// Listen address: RAT_LISTEN_ADDR > PORT (legacy) > default 127.0.0.1:8080.
+	// Public listen address: RAT_LISTEN_ADDR > PORT (legacy) > default 127.0.0.1:8080.
 	// Default binds to localhost only — users must explicitly set 0.0.0.0:8080
 	// for network access, which triggers a security warning if no API key is set.
 	addr := "127.0.0.1:8080"
@@ -718,14 +726,37 @@ func main() {
 		addr = ":" + port
 	}
 
+	// Internal listen address: INTERNAL_LISTEN_ADDR > default 127.0.0.1:8090.
+	//
+	// This second listener hosts service-to-service callbacks (runner run-status
+	// callback, plugin phone-home) with NO authentication. Its trust model is
+	// "the network is the perimeter" — the operator MUST keep this port off the
+	// public internet and ideally off the host network too.
+	//
+	// In a Docker compose deployment the default is overridden to 0.0.0.0:8090
+	// so other containers on the bridge can reach it, while the port stays
+	// unpublished to the host (no `ports:` mapping for 8090).
+	internalAddr := "127.0.0.1:8090"
+	if v := os.Getenv("INTERNAL_LISTEN_ADDR"); v != "" {
+		internalAddr = v
+	}
+
 	// Warn if listening on all interfaces without authentication.
 	if strings.HasPrefix(addr, "0.0.0.0") && os.Getenv("RAT_API_KEY") == "" && !registry.AuthEnabled() {
 		slog.Warn("listening on 0.0.0.0 without RAT_API_KEY — API is unauthenticated and accessible from the network")
 	}
 
-	httpServer := &http.Server{
+	// Refuse to share a port between the public and internal listeners — that
+	// would defeat the whole point of separating them.
+	if internalAddr == addr {
+		slog.Error("INTERNAL_LISTEN_ADDR must not equal RAT_LISTEN_ADDR",
+			"public", addr, "internal", internalAddr)
+		os.Exit(1)
+	}
+
+	publicServer := &http.Server{
 		Addr:              addr,
-		Handler:           router,
+		Handler:           publicRouter,
 		ReadTimeout:       60 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      120 * time.Second,
@@ -735,22 +766,45 @@ func main() {
 		},
 	}
 
+	// The internal listener intentionally does NOT inherit TLS config — it is
+	// expected to live on a trusted internal network where plaintext is fine.
+	// Operators who want TLS on the internal listener can put a sidecar in
+	// front of it; the simpler default keeps service-to-service callbacks
+	// cheap and avoids cert rotation pain inside the container.
+	internalServer := &http.Server{
+		Addr:              internalAddr,
+		Handler:           internalRouter,
+		ReadTimeout:       60 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
 	// Start HTTP(S) server in a goroutine.
 	tlsCertFile := os.Getenv("TLS_CERT_FILE")
 	tlsKeyFile := os.Getenv("TLS_KEY_FILE")
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	if tlsCertFile != "" && tlsKeyFile != "" {
 		go func() {
-			errCh <- httpServer.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
+			errCh <- publicServer.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
 		}()
-		slog.Info("starting ratd (HTTPS)", "addr", addr, "version", "2.0.0-dev")
+		slog.Info("starting ratd public listener (HTTPS)", "addr", addr, "version", "2.0.0-dev")
 	} else {
 		go func() {
-			errCh <- httpServer.ListenAndServe()
+			errCh <- publicServer.ListenAndServe()
 		}()
-		slog.Info("starting ratd", "addr", addr, "version", "2.0.0-dev")
+		slog.Info("starting ratd public listener", "addr", addr, "version", "2.0.0-dev")
 	}
+
+	// The internal listener is always plaintext HTTP — see comment on
+	// internalServer above for rationale.
+	go func() {
+		errCh <- internalServer.ListenAndServe()
+	}()
+	slog.Info("starting ratd internal listener (service-to-service callbacks)",
+		"addr", internalAddr,
+		"warning", "do NOT expose this port to the public network")
 
 	// Wait for shutdown signal or server error.
 	sigCh := make(chan os.Signal, 1)
@@ -766,12 +820,15 @@ func main() {
 		}
 	}
 
-	// Graceful shutdown: drain HTTP connections (15s timeout).
+	// Graceful shutdown: drain HTTP connections on both listeners (15s timeout).
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		slog.Error("http shutdown error", "error", err)
+	if err := publicServer.Shutdown(shutdownCtx); err != nil {
+		slog.Error("public http shutdown error", "error", err)
+	}
+	if err := internalServer.Shutdown(shutdownCtx); err != nil {
+		slog.Error("internal http shutdown error", "error", err)
 	}
 
 	// Ordered cleanup: health loop → dispatcher → leader → executor → event bus → database pool.
