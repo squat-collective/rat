@@ -56,11 +56,10 @@ func (s *PluginStore) UpsertPlugin(ctx context.Context, entry domain.PluginEntry
 	if descriptor == nil {
 		descriptor = json.RawMessage("{}")
 	}
-	config := entry.Config
-	if config == nil {
-		config = json.RawMessage("{}")
-	}
-
+	// Leave config as nil when the caller didn't supply one so the SQL's
+	// COALESCE branch keeps whatever the plugin had persisted. The first
+	// INSERT for a brand-new plugin name still works because the column
+	// has a DEFAULT '{}' clause in the schema (migration 016).
 	row, err := s.q.UpsertPlugin(ctx, gen.UpsertPluginParams{
 		Name:       entry.Name,
 		Kind:       string(entry.Kind),
@@ -68,7 +67,7 @@ func (s *PluginStore) UpsertPlugin(ctx context.Context, entry domain.PluginEntry
 		Status:     string(entry.Status),
 		Error:      textOrNull(entry.Error),
 		Descriptor: descriptor,
-		Config:     config,
+		Config:     entry.Config,
 		Addr:       entry.Addr,
 		Healthy:    entry.Healthy,
 	})

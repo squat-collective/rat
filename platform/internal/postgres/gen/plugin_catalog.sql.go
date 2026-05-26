@@ -319,6 +319,12 @@ func (q *Queries) UpdatePluginStatus(ctx context.Context, arg UpdatePluginStatus
 }
 
 const upsertPlugin = `-- name: UpsertPlugin :one
+-- Registers or re-registers a plugin. Re-registration (the common case
+-- on container restart) must NOT clobber the persisted config — that
+-- field is owned by UpdatePluginConfig and tracks plugin-managed state
+-- (e.g. rat-plugin-secrets stores its encrypted secret list there).
+-- Pass config = NULL from the Go side on re-register; COALESCE keeps
+-- whatever the plugin previously persisted.
 INSERT INTO plugin_catalog (name, kind, version, status, error, descriptor, config, addr, healthy)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (name) DO UPDATE
@@ -327,7 +333,7 @@ SET kind = EXCLUDED.kind,
     status = EXCLUDED.status,
     error = EXCLUDED.error,
     descriptor = EXCLUDED.descriptor,
-    config = EXCLUDED.config,
+    config = COALESCE(EXCLUDED.config, plugin_catalog.config),
     addr = EXCLUDED.addr,
     healthy = EXCLUDED.healthy,
     updated_at = now()
