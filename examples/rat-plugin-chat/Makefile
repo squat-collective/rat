@@ -21,8 +21,14 @@ run:
 	docker rm -f chat 2>/dev/null || true
 	docker run -d --name chat --network infra_default \
 		-e RATD_URL="$(RATD_URL)" \
+		-v rat-chat-history:/data \
 		rat-plugin-chat
 
 clean:
 	docker rm -f chat 2>/dev/null || true
 	docker rmi rat-plugin-chat 2>/dev/null || true
+
+# Wipe persisted conversations (volume + container).
+clean-history:
+	docker rm -f chat 2>/dev/null || true
+	docker volume rm rat-chat-history 2>/dev/null || true

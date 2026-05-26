@@ -14,8 +14,11 @@ COPY . .
 RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /chat .
 
 FROM alpine:3.21
-RUN addgroup -S rat && adduser -S -G rat rat
+RUN addgroup -S rat && adduser -S -G rat rat \
+    && mkdir -p /data/conversations \
+    && chown -R rat:rat /data
 COPY --from=builder /chat /chat
 USER rat
+VOLUME ["/data"]
 EXPOSE 50095
 ENTRYPOINT ["/chat"]

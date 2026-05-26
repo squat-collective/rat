@@ -561,6 +561,13 @@
     var st8 = useState([]),    agents = st8[0], setAgents = st8[1];
     // Selected agent id. "" = no agent (chat plugin's default prompt + all tools).
     var st9 = useState(""),    agentID = st9[0], setAgentID = st9[1];
+    // Conversation state. conversationID is the persisted id (set when the
+    // server creates one mid-turn or when we load an existing one).
+    // conversations is the sidebar list (summaries, no messages).
+    var st10 = useState([]),   conversations = st10[0], setConversations = st10[1];
+    var st11 = useState(""),   conversationID = st11[0], setConversationID = st11[1];
+    var st12 = useState(""),   conversationTitle = st12[0], setConversationTitle = st12[1];
+    var st13 = useState(true), sidebarOpen = st13[0], setSidebarOpen = st13[1];
     var cancelRef = useRef(null);
     var scrollerRef = useRef(null);
     var streamingBufRef = useRef({ content: "", reasoning: "" });
@@ -586,12 +593,96 @@
       });
     }, []);
 
+    var refreshConversations = useCallback(function () {
+      reqJSON("GET", "/conversations").then(function (d) {
+        setConversations((d && d.conversations) || []);
+      });
+    }, []);
+
     useEffect(function () {
       refreshServers();
       refreshAgents();
-      var t = setInterval(function () { refreshServers(); refreshAgents(); }, 10000);
+      refreshConversations();
+      var t = setInterval(function () { refreshServers(); refreshAgents(); refreshConversations(); }, 10000);
       return function () { clearInterval(t); };
-    }, [refreshServers, refreshAgents]);
+    }, [refreshServers, refreshAgents, refreshConversations]);
+
+    // Load an existing conversation: pull full messages from the server,
+    // reconstruct the transcript view, set the agent + id + title.
+    var loadConversation = useCallback(function (id) {
+      if (cancelRef.current) cancelRef.current();
+      setError(null);
+      setStreamingBubble(null);
+      setBusy(false);
+      reqJSON("GET", "/conversations/" + id).then(function (c) {
+        if (!c || c.error) { setError((c && c.error) || "load failed"); return; }
+        setConversationID(c.id);
+        setConversationTitle(c.title || "");
+        if (c.agent_id) setAgentID(c.agent_id);
+        var allMessages = c.messages || [];
+        setMsgs(allMessages);
+        // Reconstruct the transcript: each user/assistant message is one
+        // bubble; tool messages attach to the previous assistant bubble as
+        // tool_call+result pairs.
+        var view = [];
+        for (var i = 0; i < allMessages.length; i++) {
+          var m = allMessages[i];
+          if (m.role === "user") {
+            view.push({ msg: m });
+          } else if (m.role === "assistant") {
+            var calls = (m.tool_calls || []).map(function (tc) { return { call: tc, result: null }; });
+            view.push({ msg: m, calls: calls });
+          } else if (m.role === "tool") {
+            // Attach to the closest preceding assistant bubble with a matching call id.
+            for (var j = view.length - 1; j >= 0; j--) {
+              if (view[j].msg && view[j].msg.role === "assistant" && view[j].calls) {
+                for (var k = 0; k < view[j].calls.length; k++) {
+                  if (view[j].calls[k].call.id === m.tool_call_id) {
+                    view[j].calls[k].result = {
+                      tool_call_id: m.tool_call_id, name: m.name,
+                      output: m.content, is_error: false,
+                    };
+                    break;
+                  }
+                }
+                break;
+              }
+            }
+          }
+        }
+        setTranscript(view);
+      });
+    }, []);
+
+    var newChat = useCallback(function () {
+      if (cancelRef.current) cancelRef.current();
+      setConversationID("");
+      setConversationTitle("");
+      setMsgs([]);
+      setTranscript([]);
+      setError(null);
+      setStreamingBubble(null);
+      setBusy(false);
+    }, []);
+
+    var renameConversation = useCallback(function (id, currentTitle) {
+      var next = window.prompt("Rename conversation:", currentTitle || "");
+      if (next === null) return;
+      next = next.trim();
+      if (!next) return;
+      reqJSON("PATCH", "/conversations/" + id, { title: next }).then(function () {
+        refreshConversations();
+        if (id === conversationID) setConversationTitle(next);
+      });
+    }, [conversationID, refreshConversations]);
+
+    var deleteConversation = useCallback(function (id, title) {
+      if (!window.confirm("Delete \"" + (title || id) + "\"? This can't be undone.")) return;
+      fetch(API + "/conversations/" + id, { method: "DELETE" }).then(function () {
+        refreshConversations();
+        if (id === conversationID) newChat();
+      });
+    }, [conversationID, newChat, refreshConversations]);
 
     useEffect(function () {
       // Auto-scroll to bottom when transcript grows.
@@ -617,7 +708,19 @@
       streamingBufRef.current = { content: "", reasoning: "" };
       setStreamingBubble(null);
 
-      cancelRef.current = streamChat({ messages: nextMsgs, agent_id: agentID }, function (ev, data) {
+      cancelRef.current = streamChat({
+        messages: nextMsgs, agent_id: agentID,
+        conversation_id: conversationID || undefined,
+      }, function (ev, data) {
+        if (ev === "conversation") {
+          if (data && data.id) {
+            setConversationID(data.id);
+            if (data.title) setConversationTitle(data.title);
+            // Refresh the sidebar so the new (or updated) row appears.
+            refreshConversations();
+          }
+          return;
+        }
         if (ev === "assistant_delta") {
           // Per-token streaming. Append content / reasoning to the running
           // streamingBubble — the StreamingBubble component renders it live.
@@ -690,7 +793,7 @@
         setStreamingBubble(null);
         setBusy(false);
       });
-    }, [busy, input, msgs, agentID]);
+    }, [busy, input, msgs, agentID, conversationID, refreshConversations]);
 
     var cancelTurn = useCallback(function () {
       if (cancelRef.current) cancelRef.current();
@@ -724,10 +827,116 @@
     var currentAgent = agentsById[agentID];
     var examples = (currentAgent && currentAgent.example_questions) || [];
 
+    // Format a date as a compact relative string for the sidebar.
+    function relativeTime(iso) {
+      if (!iso) return "";
+      var t = new Date(iso).getTime();
+      var diff = (Date.now() - t) / 1000;
+      if (diff < 60) return Math.round(diff) + "s";
+      if (diff < 3600) return Math.round(diff / 60) + "m";
+      if (diff < 86400) return Math.round(diff / 3600) + "h";
+      return Math.round(diff / 86400) + "d";
+    }
+
     return h("div", {
       style: {
-        display: "flex", flexDirection: "column", height: "calc(100vh - 60px)",
+        display: "flex", flexDirection: "row", height: "calc(100vh - 60px)",
         color: C.fg, background: C.bg,
+      },
+    },
+      // ── Conversation sidebar ──────────────────────────────
+      sidebarOpen && h("div", {
+        style: {
+          width: 240, borderRight: "1px solid " + C.border,
+          background: C.card, display: "flex", flexDirection: "column",
+        },
+      },
+        h("div", {
+          style: { padding: "10px 12px", borderBottom: "1px solid " + C.border, display: "flex", gap: 6 },
+        },
+          h("button", {
+            onClick: newChat,
+            style: {
+              flex: 1, padding: "6px 10px", background: C.primary, color: C.bg,
+              border: "none", cursor: "pointer", fontWeight: 700, letterSpacing: 0.5, fontSize: 12,
+            },
+          }, "+ NEW CHAT"),
+          h("button", {
+            onClick: function () { setSidebarOpen(false); },
+            title: "Hide sidebar",
+            style: {
+              padding: "6px 8px", background: "transparent", color: C.muted,
+              border: "1px solid " + C.border, cursor: "pointer", fontSize: 12,
+            },
+          }, "«"),
+        ),
+        h("div", { style: { flex: 1, overflow: "auto", padding: "6px 0" } },
+          conversations.length === 0 && h("div", {
+            style: { color: C.muted, fontSize: 11, padding: "10px 12px", lineHeight: 1.5 },
+          }, "No conversations yet. Send a message to start one — it'll appear here automatically."),
+          conversations.map(function (c) {
+            var selected = c.id === conversationID;
+            var ag = agentsById[c.agent_id];
+            return h("div", {
+              key: c.id,
+              onClick: function () { loadConversation(c.id); },
+              style: {
+                padding: "8px 12px", cursor: "pointer",
+                borderLeft: "3px solid " + (selected ? (ag && ag.color ? ag.color : C.primary) : "transparent"),
+                background: selected ? "rgba(255,255,255,0.04)" : "transparent",
+              },
+              onMouseEnter: function (e) { if (!selected) e.currentTarget.style.background = "rgba(255,255,255,0.02)"; },
+              onMouseLeave: function (e) { if (!selected) e.currentTarget.style.background = "transparent"; },
+            },
+              h("div", { style: { display: "flex", alignItems: "center", gap: 4 } },
+                ag && ag.color && h("span", {
+                  style: { width: 8, height: 8, borderRadius: 2, background: ag.color, display: "inline-block" },
+                }),
+                h("span", { style: { fontSize: 12, fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+                  c.title || "(untitled)"),
+                h("span", { style: { fontSize: 10, color: C.muted } }, relativeTime(c.updated_at)),
+              ),
+              h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 2 } },
+                h("span", { style: { fontSize: 10, color: C.muted, flex: 1 } },
+                  (ag ? ag.name : c.agent_id || "no agent") + " · " + c.message_count + " msg"),
+                h("button", {
+                  onClick: function (e) { e.stopPropagation(); renameConversation(c.id, c.title); },
+                  title: "Rename",
+                  style: {
+                    padding: "0 4px", background: "transparent", color: C.muted,
+                    border: "none", cursor: "pointer", fontSize: 11,
+                  },
+                }, "✎"),
+                h("button", {
+                  onClick: function (e) { e.stopPropagation(); deleteConversation(c.id, c.title); },
+                  title: "Delete",
+                  style: {
+                    padding: "0 4px", background: "transparent", color: C.danger,
+                    border: "none", cursor: "pointer", fontSize: 11,
+                  },
+                }, "×"),
+              ),
+            );
+          }),
+        ),
+      ),
+
+      // Show the toggle when sidebar is hidden.
+      !sidebarOpen && h("button", {
+        onClick: function () { setSidebarOpen(true); },
+        title: "Show conversation history",
+        style: {
+          position: "absolute", left: 0, top: 70, padding: "8px 6px",
+          background: C.card, color: C.muted, border: "1px solid " + C.border,
+          borderLeft: "none", cursor: "pointer", fontSize: 14, zIndex: 5,
+        },
+      }, "»"),
+
+    // ── Main chat column ────────────────────────────────────
+    h("div", {
+      style: {
+        flex: 1, display: "flex", flexDirection: "column",
+        color: C.fg, background: C.bg, minWidth: 0,
       },
     },
       // Header
@@ -738,6 +947,10 @@
         },
       },
         h("div", { style: { fontWeight: 700, fontSize: 14, letterSpacing: 1 } }, "CHAT"),
+        conversationTitle && h("div", {
+          style: { color: C.muted, fontSize: 12, fontStyle: "italic",
+                   maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+        }, "· " + conversationTitle),
         // Agent picker — the LLM persona for this conversation. Changing
         // it mid-conversation just affects the *next* turn; we don't
         // mutate prior messages. "(no agent)" means use the plugin's
@@ -775,12 +988,13 @@
           servers.map(function (s) { return h(ServerBadge, { key: s.capability, server: s }); }),
         ),
         h("button", {
-          onClick: resetConversation,
+          onClick: newChat,
+          title: "Start a new conversation",
           style: {
             marginLeft: 8, padding: "4px 10px", background: "transparent",
             border: "1px solid " + C.border, color: C.muted, cursor: "pointer", fontSize: 11,
           },
-        }, "reset"),
+        }, "new chat"),
       ),
 
       // Conversation scroller
@@ -863,8 +1077,9 @@
                 fontWeight: 700, letterSpacing: 1,
               },
             }, "SEND"),
-      ),
-    );
+      ), // end composer
+    ),   // end main chat column h("div")
+    );   // end outer flex-row h("div") + return
   }
 
   window.__RAT_REGISTER_PLUGIN("chat", {

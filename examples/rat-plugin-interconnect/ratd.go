@@ -7,8 +7,17 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
+
+// pluginCacheTTL is how long the broker keeps a snapshot of the plugin
+// list before hitting ratd again. Every invoke calls plugins() to verify
+// the provider is healthy, so without caching this hammers ratd at the
+// broker's own request rate (every MCP poll = +1 hit). 5 seconds is short
+// enough that a plugin going unhealthy is reflected almost immediately,
+// long enough to coalesce burst traffic into a single upstream call.
+const pluginCacheTTL = 5 * time.Second
 
 // pluginInfo is one plugin as ratd reports it on GET /api/v1/plugins — the
 // node list for the mesh.
@@ -25,6 +34,13 @@ type pluginInfo struct {
 type ratdClient struct {
 	baseURL string
 	http    *http.Client
+
+	// Plugin-list cache. plugins() is called on EVERY invoke for the
+	// health-check, so a steady stream of broker traffic would otherwise
+	// hammer ratd's /api/v1/plugins endpoint.
+	cacheMu     sync.Mutex
+	cachedList  []pluginInfo
+	cachedAt    time.Time
 }
 
 func newRatdClient(baseURL string) *ratdClient {
@@ -34,8 +50,41 @@ func newRatdClient(baseURL string) *ratdClient {
 	}
 }
 
-// plugins returns every plugin ratd currently knows about.
+// plugins returns every plugin ratd currently knows about, served from a
+// short TTL cache. See pluginCacheTTL.
 func (c *ratdClient) plugins(ctx context.Context) ([]pluginInfo, error) {
+	c.cacheMu.Lock()
+	if c.cachedList != nil && time.Since(c.cachedAt) < pluginCacheTTL {
+		out := c.cachedList
+		c.cacheMu.Unlock()
+		return out, nil
+	}
+	c.cacheMu.Unlock()
+
+	list, err := c.fetchPlugins(ctx)
+	if err != nil {
+		// On error, surface the most recent cache rather than failing the
+		// caller — better to route to a possibly-stale provider than to
+		// reject the broker call entirely.
+		c.cacheMu.Lock()
+		stale := c.cachedList
+		c.cacheMu.Unlock()
+		if stale != nil {
+			return stale, nil
+		}
+		return nil, err
+	}
+
+	c.cacheMu.Lock()
+	c.cachedList = list
+	c.cachedAt = time.Now()
+	c.cacheMu.Unlock()
+	return list, nil
+}
+
+// fetchPlugins is the raw GET — kept separate so plugins() can wrap it
+// with caching cleanly.
+func (c *ratdClient) fetchPlugins(ctx context.Context) ([]pluginInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/plugins", nil)
 	if err != nil {
 		return nil, err

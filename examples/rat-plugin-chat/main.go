@@ -69,7 +69,16 @@ func main() {
 	disco := newDiscoverer(ratdURL, mcp)
 	agents := newAgentsClient(ratdURL)
 	orch := newOrchestrator(ratdURL, mcp, disco, agents)
-	a := newAPI(disco, orch, cfg, agents)
+
+	convDir := envOr("CONVERSATIONS_DIR", "/data/conversations")
+	convs, err := newConversationStore(convDir)
+	if err != nil {
+		slog.Error("conversation store init failed", "dir", convDir, "error", err)
+		os.Exit(1)
+	}
+	slog.Info("conversation store ready", "dir", convDir, "loaded", len(convs.list()))
+
+	a := newAPI(disco, orch, cfg, agents, convs)
 	h := newHandler(name, "http://"+selfAddr+"/bundle.js")
 
 	mux := http.NewServeMux()
