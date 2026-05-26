@@ -20,16 +20,17 @@ import (
 )
 
 type api struct {
-	disco   *discoverer
-	orch    *orchestrator
-	cfg     *configStore
-	agents  *agentsClient
-	convs   *conversationStore
-	subRuns *subagentRunStore
+	disco         *discoverer
+	orch          *orchestrator
+	cfg           *configStore
+	agents        *agentsClient
+	convs         *conversationStore
+	subRuns       *subagentRunStore
+	continuations *continuationStore
 }
 
-func newAPI(disco *discoverer, orch *orchestrator, cfg *configStore, agents *agentsClient, convs *conversationStore, subRuns *subagentRunStore) *api {
-	return &api{disco: disco, orch: orch, cfg: cfg, agents: agents, convs: convs, subRuns: subRuns}
+func newAPI(disco *discoverer, orch *orchestrator, cfg *configStore, agents *agentsClient, convs *conversationStore, subRuns *subagentRunStore, continuations *continuationStore) *api {
+	return &api{disco: disco, orch: orch, cfg: cfg, agents: agents, convs: convs, subRuns: subRuns, continuations: continuations}
 }
 
 func (a *api) mux() *http.ServeMux {
@@ -44,6 +45,7 @@ func (a *api) mux() *http.ServeMux {
 	m.HandleFunc("DELETE /conversations/{id}", a.deleteConversation)
 	m.HandleFunc("GET /conversations/{id}/subagent-runs", a.listSubagentRuns)
 	m.HandleFunc("GET /subagent-runs/{id}", a.getSubagentRun)
+	m.HandleFunc("POST /conversations/{id}/continue", a.continueConversation)
 	m.HandleFunc("POST /chat", a.chat)
 	m.HandleFunc("GET /config", a.getConfig)
 	m.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
@@ -130,6 +132,18 @@ func (a *api) getSubagentRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+// continueConversation signals a paused chatTurn (waiting at its
+// iteration cap) that the user said yes to continuing. Returns 204 on
+// success or 404 if nothing's waiting on this conversation.
+func (a *api) continueConversation(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !a.continuations.signal(id) {
+		writeErr(w, http.StatusNotFound, "no chat waiting for continuation on this conversation")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // listAgents proxies the agents plugin's catalog so the chat UI can

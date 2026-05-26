@@ -47,6 +47,7 @@ func (h *Handler) Describe(
 			{Method: "DELETE", Path: "/conversations/{id}", Description: "Delete a conversation"},
 			{Method: "GET", Path: "/conversations/{id}/subagent-runs", Description: "List subagent invocations triggered by this conversation"},
 			{Method: "GET", Path: "/subagent-runs/{id}", Description: "Full event trace of one subagent invocation (for debugging hallucination etc.)"},
+			{Method: "POST", Path: "/conversations/{id}/continue", Description: "Signal a paused chat (at its max_iterations cap) that the user said yes — keep going"},
 			{Method: "POST", Path: "/chat", Description: "Run one chat turn (SSE: conversation / started / assistant_delta / assistant_message / tool_call / tool_result / done). Accepts conversation_id (server creates one if absent) + agent_id."},
 			{Method: "GET", Path: "/config", Description: "Effective chat config"},
 		},

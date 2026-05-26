@@ -47,24 +47,31 @@ type sseSink interface {
 // orchestrator wires the AI provider + the MCP discoverer together for one
 // turn of the chat.
 type orchestrator struct {
-	ratdURL  string
-	mcp      *mcpClient
-	disco    *discoverer
-	agents   *agentsClient
-	subRuns  *subagentRunStore // nil-safe: subagent traces just don't get persisted
-	http     *http.Client
+	ratdURL       string
+	mcp           *mcpClient
+	disco         *discoverer
+	agents        *agentsClient
+	subRuns       *subagentRunStore  // nil-safe: subagent traces just don't get persisted
+	continuations *continuationStore // nil-safe: chatTurn skips the prompt if absent
+	http          *http.Client
 }
 
-func newOrchestrator(ratdURL string, mcp *mcpClient, disco *discoverer, agents *agentsClient, subRuns *subagentRunStore) *orchestrator {
+func newOrchestrator(ratdURL string, mcp *mcpClient, disco *discoverer, agents *agentsClient, subRuns *subagentRunStore, continuations *continuationStore) *orchestrator {
 	return &orchestrator{
-		ratdURL: strings.TrimRight(ratdURL, "/"),
-		mcp:     mcp,
-		disco:   disco,
-		agents:  agents,
-		subRuns: subRuns,
-		http:    &http.Client{Timeout: 180 * time.Second},
+		ratdURL:       strings.TrimRight(ratdURL, "/"),
+		mcp:           mcp,
+		disco:         disco,
+		agents:        agents,
+		subRuns:       subRuns,
+		continuations: continuations,
+		http:          &http.Client{Timeout: 180 * time.Second},
 	}
 }
+
+// continuationTimeout is how long chatTurn waits for the UI to confirm
+// at the iteration cap before auto-continuing. 60s matches the Stop /
+// Continue banner the bundle.js renders.
+const continuationTimeout = 60 * time.Second
 
 // chatTurn runs the loop until the model is done. The depth parameter
 // counts subagent nesting (0 = top-level user request, 1 = called by
@@ -145,7 +152,31 @@ func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []ch
 	}
 	_ = sink.emit("started", started)
 
-	for iter := 1; iter <= maxIter; iter++ {
+	iter := 0
+	for {
+		iter++
+		// Continuation gate: at the top-level only (subagents don't
+		// prompt — they just hit their own cap and return). When we
+		// blow past the iteration budget, ask the UI before pushing
+		// on. Auto-yes after continuationTimeout.
+		if iter > maxIter {
+			if depth > 0 || o.continuations == nil {
+				break
+			}
+			_ = sink.emit("continuation_prompt", map[string]any{
+				"iteration":   iter - 1,
+				"max":         maxIter,
+				"timeout_sec": int(continuationTimeout / time.Second),
+				"agent_id":    agentID,
+			})
+			if !o.continuations.wait(ctx, parentConvID, continuationTimeout) {
+				_ = sink.emit("done", map[string]string{"finish_reason": "canceled_at_continuation"})
+				return nil
+			}
+			// User (or timeout) said continue — grant another batch.
+			_ = sink.emit("continuation_accepted", map[string]any{"granted": maxIter})
+			iter = 1
+		}
 		resp, err := o.callAI(ctx, sink, messages, tools, agent)
 		if err != nil {
 			_ = sink.emit("error", map[string]string{"error": err.Error()})
@@ -191,7 +222,9 @@ func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []ch
 		return nil
 	}
 
-	// Loop limit hit — emit a hint and stop.
+	// Only reached when a subagent (depth > 0) hits its cap — the
+	// continuation prompt is top-level only. Surface the same error
+	// the loop used to emit so the parent agent can decide what to do.
 	_ = sink.emit("error", map[string]string{
 		"error": fmt.Sprintf("max_iterations (%d) exceeded — the model kept calling tools without answering", maxIter),
 	})

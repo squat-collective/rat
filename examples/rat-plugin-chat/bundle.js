@@ -696,6 +696,11 @@
     var st11 = useState(""),   conversationID = st11[0], setConversationID = st11[1];
     var st12 = useState(""),   conversationTitle = st12[0], setConversationTitle = st12[1];
     var st13 = useState(true), sidebarOpen = st13[0], setSidebarOpen = st13[1];
+    // Continuation prompt: when the orchestrator hits max_iterations it
+    // emits `continuation_prompt` with iteration/max/timeout_sec.
+    // pendingContinuation is set to { iteration, max, deadline } while
+    // we're showing the banner; null otherwise.
+    var st14 = useState(null), pendingContinuation = st14[0], setPendingContinuation = st14[1];
     var cancelRef = useRef(null);
     var scrollerRef = useRef(null);
     var streamingBufRef = useRef({ content: "", reasoning: "" });
@@ -849,6 +854,20 @@
           }
           return;
         }
+        if (ev === "continuation_prompt") {
+          // Server hit max_iterations; ask the user. Auto-yes after the
+          // server-reported timeout.
+          setPendingContinuation({
+            iteration: data.iteration || 0,
+            max: data.max || 0,
+            deadline: Date.now() + (data.timeout_sec || 60) * 1000,
+          });
+          return;
+        }
+        if (ev === "continuation_accepted") {
+          setPendingContinuation(null);
+          return;
+        }
         if (ev === "assistant_delta") {
           // Per-token streaming. Append content / reasoning to the running
           // streamingBubble — the StreamingBubble component renders it live.
@@ -907,18 +926,22 @@
           });
         } else if (ev === "done") {
           setStreamingBubble(null);
+          setPendingContinuation(null);
           setBusy(false);
         } else if (ev === "error") {
           setError((data && data.error) || "unknown error");
           setStreamingBubble(null);
+          setPendingContinuation(null);
           setBusy(false);
         }
       }, function onDone() {
         setStreamingBubble(null);
+        setPendingContinuation(null);
         setBusy(false);
       }, function onError(msg) {
         setError(msg);
         setStreamingBubble(null);
+        setPendingContinuation(null);
         setBusy(false);
       });
     }, [busy, input, msgs, agentID, conversationID, refreshConversations]);
@@ -926,8 +949,18 @@
     var cancelTurn = useCallback(function () {
       if (cancelRef.current) cancelRef.current();
       setStreamingBubble(null);
+      setPendingContinuation(null);
       setBusy(false);
     }, []);
+
+    // Click "Continue now": POST /continue → server signals the
+    // waiting goroutine, which then resumes the loop.
+    var continueChat = useCallback(function () {
+      if (!conversationID) return;
+      fetch(API + "/conversations/" + conversationID + "/continue", { method: "POST" })
+        .then(function () { setPendingContinuation(null); })
+        .catch(function () { /* fall through — auto-yes will fire anyway */ });
+    }, [conversationID]);
 
     var resetConversation = useCallback(function () {
       if (cancelRef.current) cancelRef.current();
@@ -954,6 +987,55 @@
     var pickerAgents = agents.filter(function (a) { return !a.disabled; });
     var currentAgent = agentsById[agentID];
     var examples = (currentAgent && currentAgent.example_questions) || [];
+
+    // ContinuationBanner: 60-second countdown over the chat with two
+    // buttons. Self-updating clock via a 1s setInterval. When the
+    // server auto-yeses (or the user clicks Continue), the parent
+    // clears pendingContinuation and we unmount.
+    function ContinuationBanner(props) {
+      var stT = useState(Date.now()), now = stT[0], setNow = stT[1];
+      useEffect(function () {
+        var t = setInterval(function () { setNow(Date.now()); }, 1000);
+        return function () { clearInterval(t); };
+      }, []);
+      var remaining = Math.max(0, Math.ceil((props.deadline - now) / 1000));
+      return h("div", {
+        style: {
+          margin: "10px 0", padding: "10px 14px",
+          background: "rgba(245,158,11,0.10)", border: "1px solid " + C.warn,
+          color: C.fg, display: "flex", alignItems: "center", gap: 12,
+          flexWrap: "wrap",
+        },
+      },
+        h("div", { style: { fontSize: 12, lineHeight: 1.5, flex: 1, minWidth: 220 } },
+          h("strong", { style: { color: C.warn } }, "Iteration cap reached"),
+          " · ",
+          "used " + props.iteration + " / " + props.max + " iterations.",
+          h("div", { style: { color: C.muted, marginTop: 2 } },
+            "Auto-continuing in ",
+            h("strong", { style: { color: C.fg } }, remaining + "s"),
+            "."),
+        ),
+        h("div", { style: { display: "flex", gap: 6 } },
+          h("button", {
+            onClick: props.onStop,
+            style: {
+              padding: "4px 10px", background: "transparent",
+              border: "1px solid " + C.border, color: C.muted,
+              cursor: "pointer", fontSize: 11, letterSpacing: 0.5,
+            },
+          }, "Stop"),
+          h("button", {
+            onClick: props.onContinue,
+            style: {
+              padding: "4px 12px", background: C.warn, color: C.bg,
+              border: "none", cursor: "pointer", fontSize: 11,
+              fontWeight: 700, letterSpacing: 0.5,
+            },
+          }, "Continue now"),
+        ),
+      );
+    }
 
     // Format a date as a compact relative string for the sidebar.
     function relativeTime(iso) {
@@ -1165,6 +1247,13 @@
         }),
         streamingBubble && h(StreamingBubble, {
           content: streamingBubble.content, reasoning: streamingBubble.reasoning,
+        }),
+        pendingContinuation && h(ContinuationBanner, {
+          iteration: pendingContinuation.iteration,
+          max: pendingContinuation.max,
+          deadline: pendingContinuation.deadline,
+          onStop: cancelTurn,
+          onContinue: continueChat,
         }),
         error && h("div", {
           style: {

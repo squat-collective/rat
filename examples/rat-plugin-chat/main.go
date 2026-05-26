@@ -85,8 +85,9 @@ func main() {
 	}
 	slog.Info("subagent run store ready", "dir", subRunDir)
 
-	orch := newOrchestrator(ratdURL, mcp, disco, agents, subRuns)
-	a := newAPI(disco, orch, cfg, agents, convs, subRuns)
+	continuations := newContinuationStore()
+	orch := newOrchestrator(ratdURL, mcp, disco, agents, subRuns, continuations)
+	a := newAPI(disco, orch, cfg, agents, convs, subRuns, continuations)
 	h := newHandler(name, "http://"+selfAddr+"/bundle.js")
 
 	mux := http.NewServeMux()
