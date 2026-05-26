@@ -75,15 +75,20 @@ class QueryServiceImpl(query_pb2_grpc.QueryServiceServicer):
         self._namespace = namespace
         self._refresh_stop = threading.Event()
 
-        # Initial discovery + registration
+        # Initial discovery + registration. register_all_tables enumerates
+        # every namespace Nessie knows about; passing the constructor's
+        # `namespace` as an extra ensures the default tenant is still
+        # registered even on a fresh database where it hasn't shown up in
+        # Nessie yet.
         try:
-            self._catalog.register_tables(namespace)
+            self._catalog.register_all_tables(extra_namespaces=[namespace])
         except Exception:
             logger.exception("Initial catalog registration failed (will retry in background)")
 
         self._refresh_thread = threading.Thread(
             target=self._catalog.refresh_loop,
-            args=(namespace, self._refresh_stop),
+            args=(self._refresh_stop,),
+            kwargs={"extra_namespaces": [namespace]},
             daemon=True,
             name="catalog-refresh",
         )
@@ -222,7 +227,10 @@ class QueryServiceImpl(query_pb2_grpc.QueryServiceServicer):
         request: query_pb2.ListTablesRequest,
         context: grpc.ServicerContext,
     ) -> query_pb2.ListTablesResponse:
-        namespace = request.namespace or self._namespace
+        # Empty namespace means "no filter — list every namespace". The old
+        # code defaulted to self._namespace ("default"), which silently
+        # hid every other namespace's tables from /api/v1/tables.
+        namespace = request.namespace
         layer_filter = _LAYER_MAP.get(request.layer, "")
 
         tables = self._catalog.get_tables(namespace, layer_filter)
