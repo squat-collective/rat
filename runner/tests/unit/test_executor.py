@@ -530,7 +530,7 @@ class TestExecutePipelineBranches:
     @patch(f"{_EXEC_PREFIX}.write_iceberg")
     @patch(f"{_EXEC_PREFIX}.DuckDBEngine")
     @patch(f"{_EXEC_PREFIX}.read_s3_text")
-    def test_branch_creation_failure_falls_back_to_main(
+    def test_branch_creation_failure_fails_the_run(
         self,
         mock_read: MagicMock,
         mock_engine_cls: MagicMock,
@@ -543,6 +543,11 @@ class TestExecutePipelineBranches:
         s3_config: S3Config,
         nessie_config: NessieConfig,
     ):
+        # Behaviour change (was: falls back to main + SUCCESS): Nessie branch
+        # creation failure is now FATAL. Falling back to main caused concurrent
+        # runs to race on main and produced duplicate rows with no rollback path,
+        # so the only safe terminal state for Phase 0 is "branch ready" or "run
+        # failed". See _phase0_create_branch.
         mock_read.side_effect = lambda cfg, key: "SELECT 1" if key.endswith(".sql") else None
         mock_engine = MagicMock()
         mock_engine.query_arrow.return_value = pa.table({"x": [1]})
@@ -552,10 +557,185 @@ class TestExecutePipelineBranches:
         run = _make_run()
         execute_pipeline(run, s3_config, nessie_config)
 
-        # Falls back to main — still succeeds
+        assert run.status == RunStatus.FAILED
+        assert "branch creation failed" in run.error
+        assert "Nessie down" in run.error
+        # Run aborted before any writes — nothing touched main.
+        mock_write.assert_not_called()
+        mock_merge.assert_not_called()
+
+
+class TestBranchCreationRetry:
+    """Cover the retry/classification behaviour for Phase 0 branch creation.
+
+    These exercise the boundary between the Nessie client (which owns the
+    actual retry+backoff loop) and the executor (which translates the
+    final outcome into a run state). They drive the REAL retry decorator
+    via urllib mocks so the contract — 3 retries on transient, none on
+    permanent — is verified end-to-end inside the executor.
+    """
+
+    @staticmethod
+    def _http_error(code: int, msg: str = "err"):
+        import urllib.error
+
+        return urllib.error.HTTPError(
+            url="http://nessie/api/v2/trees",
+            code=code,
+            msg=msg,
+            hdrs=None,  # type: ignore[arg-type]
+            fp=None,
+        )
+
+    @staticmethod
+    def _url_error(reason: str = "Connection refused"):
+        import urllib.error
+
+        return urllib.error.URLError(reason=reason)
+
+    @patch("rat_runner.nessie.time.sleep")  # don't actually sleep in tests
+    @patch("rat_runner.nessie.urllib.request.urlopen")
+    @patch(f"{_EXEC_PREFIX}.write_iceberg")
+    @patch(f"{_EXEC_PREFIX}.DuckDBEngine")
+    @patch(f"{_EXEC_PREFIX}.read_s3_text")
+    def test_transient_error_three_times_exhausts_retries_and_fails_run(
+        self,
+        mock_read: MagicMock,
+        mock_engine_cls: MagicMock,
+        mock_write: MagicMock,
+        mock_urlopen: MagicMock,
+        mock_sleep: MagicMock,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+    ):
+        # Persistent network failure on EVERY urlopen call → the outer
+        # create_branch wrapper retries 3 times (4 attempts) then
+        # RuntimeError surfaces with our "branch creation failed after
+        # 4 attempts" message.
+        #
+        # Note: create_branch first calls _get_reference, which is itself
+        # decorated with @retry_on_transient — so the *raw* sleep count
+        # is higher than 3 (nested retries). The contract we care about
+        # is at the outer boundary: the run fails fatally, the message
+        # mentions our 4-attempt budget, and no data is written.
+        mock_urlopen.side_effect = self._url_error("Connection refused")
+        mock_read.side_effect = lambda cfg, key: "SELECT 1" if key.endswith(".sql") else None
+        mock_engine_cls.return_value = MagicMock()
+
+        run = _make_run()
+        execute_pipeline(run, s3_config, nessie_config)
+
+        assert run.status == RunStatus.FAILED
+        assert "branch creation failed after 4 attempts" in run.error
+        # At least one retry-backoff sleep occurred (otherwise nothing was
+        # retried). Exact count depends on nested retry stacking; the
+        # contract is "we DID retry, then gave up", not the precise N.
+        assert mock_sleep.call_count >= 3
+        # Run aborted before any writes — nothing touched main.
+        mock_write.assert_not_called()
+
+    @patch("rat_runner.nessie.time.sleep")
+    @patch("rat_runner.nessie.urllib.request.urlopen")
+    @patch(f"{_EXEC_PREFIX}.write_iceberg")
+    @patch(f"{_EXEC_PREFIX}.DuckDBEngine")
+    @patch(f"{_EXEC_PREFIX}.read_s3_text")
+    def test_permanent_error_fails_immediately_without_retry(
+        self,
+        mock_read: MagicMock,
+        mock_engine_cls: MagicMock,
+        mock_write: MagicMock,
+        mock_urlopen: MagicMock,
+        mock_sleep: MagicMock,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+    ):
+        # 400 Bad Request is a permanent 4xx → no retry, fail run on the
+        # first attempt.
+        mock_urlopen.side_effect = self._http_error(400, "Bad Request")
+        mock_read.side_effect = lambda cfg, key: "SELECT 1" if key.endswith(".sql") else None
+        mock_engine_cls.return_value = MagicMock()
+
+        run = _make_run()
+        execute_pipeline(run, s3_config, nessie_config)
+
+        assert run.status == RunStatus.FAILED
+        assert "branch creation failed" in run.error
+        mock_sleep.assert_not_called()  # zero retries
+        # Only the single failing call was made — no retry.
+        assert mock_urlopen.call_count == 1
+        mock_write.assert_not_called()
+
+    @patch("rat_runner.nessie.time.sleep")
+    @patch("rat_runner.nessie.urllib.request.urlopen")
+    @patch(f"{_EXEC_PREFIX}.has_error_failures", return_value=False)
+    @patch(f"{_EXEC_PREFIX}.run_quality_tests", return_value=[])
+    @patch(f"{_EXEC_PREFIX}.delete_branch")
+    @patch(f"{_EXEC_PREFIX}.merge_branch")
+    @patch(f"{_EXEC_PREFIX}.write_iceberg")
+    @patch(f"{_EXEC_PREFIX}.DuckDBEngine")
+    @patch(f"{_EXEC_PREFIX}.read_s3_text")
+    def test_succeeds_on_retry_attempt_two(
+        self,
+        mock_read: MagicMock,
+        mock_engine_cls: MagicMock,
+        mock_write: MagicMock,
+        mock_merge: MagicMock,
+        mock_delete: MagicMock,
+        mock_quality: MagicMock,
+        mock_has_fail: MagicMock,
+        mock_urlopen: MagicMock,
+        mock_sleep: MagicMock,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+    ):
+        # 1st attempt: transient 503 — sleeps once, retries
+        # 2nd attempt: succeeds (get reference + POST)
+        import json
+        import urllib.error
+
+        ok_ref = MagicMock()
+        ok_ref.read.return_value = json.dumps(
+            {"name": "main", "hash": "abc123", "type": "BRANCH"}
+        ).encode()
+        ok_ref.__enter__ = lambda s: s
+        ok_ref.__exit__ = MagicMock(return_value=False)
+
+        ok_create = MagicMock()
+        ok_create.read.return_value = json.dumps(
+            {"name": "run-r1", "hash": "def456", "type": "BRANCH"}
+        ).encode()
+        ok_create.__enter__ = lambda s: s
+        ok_create.__exit__ = MagicMock(return_value=False)
+
+        # Sequence of urlopen calls during create_branch:
+        # attempt 1: _get_reference → 503 (decorator restarts the whole call)
+        # attempt 2: _get_reference (ok_ref) → POST (ok_create)
+        mock_urlopen.side_effect = [
+            urllib.error.HTTPError(
+                url="http://nessie/api/v2/trees/main",
+                code=503,
+                msg="Service Unavailable",
+                hdrs=None,  # type: ignore[arg-type]
+                fp=None,
+            ),
+            ok_ref,
+            ok_create,
+        ]
+
+        mock_read.side_effect = lambda cfg, key: "SELECT 1" if key.endswith(".sql") else None
+        mock_engine = MagicMock()
+        mock_engine.query_arrow.return_value = pa.table({"x": [1]})
+        mock_engine_cls.return_value = mock_engine
+        mock_write.return_value = 1
+
+        run = _make_run()
+        execute_pipeline(run, s3_config, nessie_config)
+
+        # Branch was eventually created → run reaches SUCCESS via normal path.
         assert run.status == RunStatus.SUCCESS
-        assert run.branch == "main"
-        mock_merge.assert_not_called()  # no branch to merge
+        assert run.branch == f"run-{run.run_id}"
+        # Exactly one backoff sleep (0.5s) before the retry succeeded.
+        mock_sleep.assert_called_once_with(0.5)
 
 
 class TestExecutePipelineArchiveLandingZones:
@@ -785,10 +965,15 @@ class TestExecutePipelineVersionedReads:
         mock_read.assert_any_call(s3_config, sql_key)
 
 
-class TestNoBranchQualityFailure:
-    """Tests for quality gate when branch creation fails (no-branch path)."""
+class TestBranchCreationFailureAborts:
+    """When Nessie branch creation fails, the run aborts BEFORE any side effects.
 
-    @patch(f"{_EXEC_PREFIX}.has_error_failures", return_value=True)
+    This class replaces the old TestNoBranchQualityFailure — the "no branch"
+    code path was removed entirely (branch creation is now fatal), so the
+    quality-test and archive logic must never run when Phase 0 fails.
+    """
+
+    @patch(f"{_EXEC_PREFIX}.has_error_failures")
     @patch(f"{_EXEC_PREFIX}.run_quality_tests")
     @patch(f"{_EXEC_PREFIX}.delete_branch")
     @patch(f"{_EXEC_PREFIX}.merge_branch")
@@ -796,7 +981,7 @@ class TestNoBranchQualityFailure:
     @patch(f"{_EXEC_PREFIX}.write_iceberg")
     @patch(f"{_EXEC_PREFIX}.DuckDBEngine")
     @patch(f"{_EXEC_PREFIX}.read_s3_text")
-    def test_no_branch_quality_failure_marks_failed(
+    def test_branch_creation_failure_skips_quality_and_write(
         self,
         mock_read: MagicMock,
         mock_engine_cls: MagicMock,
@@ -814,29 +999,22 @@ class TestNoBranchQualityFailure:
         mock_engine.query_arrow.return_value = pa.table({"x": [1]})
         mock_engine_cls.return_value = mock_engine
         mock_write.return_value = 1
-        mock_quality.return_value = [
-            QualityTestResult(
-                test_name="not_null_id",
-                test_file="f1",
-                severity="error",
-                status="fail",
-                row_count=3,
-                message="3 violation(s) found",
-            )
-        ]
 
         run = _make_run()
         execute_pipeline(run, s3_config, nessie_config)
 
         assert run.status == RunStatus.FAILED
-        assert "Quality tests failed" in run.error
-        assert "not_null_id" in run.error
+        assert "branch creation failed" in run.error
+        # Nothing downstream of Phase 0 should have run.
+        mock_write.assert_not_called()
+        mock_quality.assert_not_called()
+        mock_has_fail.assert_not_called()
         mock_merge.assert_not_called()
 
     @patch(f"{_EXEC_PREFIX}.move_s3_keys")
     @patch(f"{_EXEC_PREFIX}.list_s3_keys")
     @patch(f"{_EXEC_PREFIX}.validate_landing_zones", return_value=[])
-    @patch(f"{_EXEC_PREFIX}.has_error_failures", return_value=True)
+    @patch(f"{_EXEC_PREFIX}.has_error_failures")
     @patch(f"{_EXEC_PREFIX}.run_quality_tests")
     @patch(f"{_EXEC_PREFIX}.delete_branch")
     @patch(f"{_EXEC_PREFIX}.merge_branch")
@@ -844,7 +1022,7 @@ class TestNoBranchQualityFailure:
     @patch(f"{_EXEC_PREFIX}.write_iceberg")
     @patch(f"{_EXEC_PREFIX}.DuckDBEngine")
     @patch(f"{_EXEC_PREFIX}.read_s3_text")
-    def test_no_branch_quality_failure_skips_archive(
+    def test_branch_creation_failure_skips_archive(
         self,
         mock_read: MagicMock,
         mock_engine_cls: MagicMock,
@@ -868,16 +1046,6 @@ SELECT * FROM read_csv_auto('{{ landing_zone('orders') }}/*.csv')"""
         mock_engine.query_arrow.return_value = pa.table({"id": [1]})
         mock_engine_cls.return_value = mock_engine
         mock_write.return_value = 1
-        mock_quality.return_value = [
-            QualityTestResult(
-                test_name="t1",
-                test_file="f1",
-                severity="error",
-                status="error",
-                row_count=0,
-                message="SQL error",
-            )
-        ]
 
         run = _make_run()
         execute_pipeline(run, s3_config, nessie_config)

@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
+# Public so callers (e.g. executor.py) can describe retry behaviour in
+# their own error messages without hard-coding a magic number.
+BRANCH_CREATE_MAX_RETRIES = 3
+
 
 def _is_transient_error(exc: Exception) -> bool:
     """Return True if the exception is a transient HTTP or connection error.
@@ -112,7 +116,7 @@ def _encode_branch(name: str) -> str:
     return urllib.parse.quote(name, safe="")
 
 
-@retry_on_transient()
+@retry_on_transient(max_retries=BRANCH_CREATE_MAX_RETRIES)
 def create_branch(
     nessie_config: NessieConfig,
     branch_name: str,
@@ -121,6 +125,9 @@ def create_branch(
     """Create a new Nessie branch from an existing branch.
 
     Returns the hash of the new branch head.
+    Retries transient errors (5xx / network / timeout) up to
+    BRANCH_CREATE_MAX_RETRIES times with exponential backoff; permanent
+    errors (4xx, invalid name) raise immediately.
     Idempotent: if the branch already exists (409 Conflict), returns its current hash.
     """
     _validate_branch_name(branch_name)

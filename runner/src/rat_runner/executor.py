@@ -43,7 +43,12 @@ from rat_runner.iceberg import (
 from rat_runner.log import RunLogger
 from rat_runner.maintenance import run_maintenance
 from rat_runner.models import MergeStrategy, PipelineConfig, QualityTestResult, RunState, RunStatus
-from rat_runner.nessie import create_branch, delete_branch, merge_branch
+from rat_runner.nessie import (
+    BRANCH_CREATE_MAX_RETRIES,
+    create_branch,
+    delete_branch,
+    merge_branch,
+)
 from rat_runner.python_exec import execute_python_pipeline
 from rat_runner.quality import has_error_failures, run_quality_tests
 from rat_runner.plugin_protocols import HookContext
@@ -82,9 +87,9 @@ class _PipelineContext:
     registry: PluginRegistry = field(default_factory=PluginRegistry)
     published_versions: dict[str, str] = field(default_factory=dict)
 
-    # Set during Phase 0
+    # Set during Phase 0. The branch is created OR the run fails — there is
+    # no path where a run proceeds with branch_name still empty/main.
     branch_name: str = ""
-    branch_created: bool = False
 
     # Set during Phase 1
     # "python", "sql", or the name of a plugin-provided pipeline type.
@@ -163,20 +168,30 @@ def _read_versioned(
 def _phase0_create_branch(ctx: _PipelineContext) -> None:
     """Create an ephemeral Nessie branch for isolation.
 
-    Falls back to writing directly to main if branch creation fails.
+    Branch creation is REQUIRED — failure here aborts the run. The Nessie
+    client itself retries transient errors (5xx / network / timeout) up to
+    BRANCH_CREATE_MAX_RETRIES times with exponential backoff; permanent
+    errors (4xx, invalid name) fail immediately. If we reach the except
+    clause, retries are already exhausted or the error was non-transient.
+
+    Falling back to main was the previous behaviour but caused concurrent
+    runs to race and produce duplicate rows on main, with no rollback
+    possible when quality tests later failed.
     """
     _check_cancelled(ctx.run)
     ctx.branch_name = f"run-{ctx.run.run_id}"
     ctx.log.info(f"Creating ephemeral branch '{ctx.branch_name}'")
     try:
         create_branch(ctx.nessie_config, ctx.branch_name, from_branch="main")
-        ctx.branch_created = True
-        ctx.run.branch = ctx.branch_name
-        ctx.log.info(f"Branch '{ctx.branch_name}' created")
     except Exception as e:
-        ctx.log.warn(f"Branch creation failed ({e}), writing to main")
-        ctx.branch_name = "main"
-        ctx.run.branch = "main"
+        # Re-raise with a clear, attributable error message. The Nessie
+        # client has already exhausted retries for transient errors.
+        attempts = BRANCH_CREATE_MAX_RETRIES + 1
+        raise RuntimeError(
+            f"branch creation failed after {attempts} attempts: {e}"
+        ) from e
+    ctx.run.branch = ctx.branch_name
+    ctx.log.info(f"Branch '{ctx.branch_name}' created")
 
 
 # ── Phase 1: Detect pipeline type + read config ─────────────────────
@@ -537,18 +552,10 @@ def _phase4_quality_tests(ctx: _PipelineContext) -> list[QualityTestResult]:
 def _phase5_resolve_branch(ctx: _PipelineContext, quality_results: list[QualityTestResult]) -> None:
     """Merge or discard the ephemeral branch based on quality test results.
 
-    On quality failure with branch isolation, the branch is deleted (no data
-    reaches main). Without branch isolation, data is already on main and we
-    can only report the failure.
+    Since Phase 0 guarantees branch creation succeeded (or aborted the run),
+    there is always an ephemeral branch to resolve here: merge to main on
+    quality pass, delete on quality failure.
     """
-    if ctx.branch_created:
-        _resolve_with_branch(ctx, quality_results)
-    else:
-        _resolve_without_branch(ctx, quality_results)
-
-
-def _resolve_with_branch(ctx: _PipelineContext, quality_results: list[QualityTestResult]) -> None:
-    """Handle branch resolution when an ephemeral branch was created."""
     if has_error_failures(quality_results):
         ctx.log.error("Quality tests failed — discarding branch (no data on main)")
         try:
@@ -567,19 +574,6 @@ def _resolve_with_branch(ctx: _PipelineContext, quality_results: list[QualityTes
         ctx.log.error(f"Branch merge failed: {e}")
         ctx.run.status = RunStatus.FAILED
         ctx.run.error = f"Branch merge failed: {e}"
-        return
-
-    _post_success(ctx)
-
-
-def _resolve_without_branch(
-    ctx: _PipelineContext, quality_results: list[QualityTestResult]
-) -> None:
-    """Handle resolution when no ephemeral branch was created (direct main writes)."""
-    if has_error_failures(quality_results):
-        ctx.run.status = RunStatus.FAILED
-        ctx.run.error = _format_quality_error(quality_results)
-        ctx.log.error("Quality tests failed (data already on main — no rollback available)")
         return
 
     _post_success(ctx)
@@ -718,14 +712,17 @@ def execute_pipeline(
         log.error(f"Pipeline failed: {e}")
 
     finally:
-        # Cleanup: delete ephemeral branch if still exists
-        if ctx.branch_created and ctx.branch_name != "main":
+        # Cleanup: delete ephemeral branch if Phase 0 created one.
+        # We use run.branch (set after create_branch succeeds) as the
+        # signal — guarantees we never try to delete "main" or an
+        # uninitialised branch name.
+        if run.branch and run.branch != "main":
             try:
-                delete_branch(nessie_config, ctx.branch_name)
+                delete_branch(nessie_config, run.branch)
             except Exception:
                 logger.warning(
                     "Failed to delete ephemeral branch '%s'",
-                    ctx.branch_name,
+                    run.branch,
                     exc_info=True,
                 )
 
