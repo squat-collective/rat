@@ -3,6 +3,7 @@
 ROOT := $(shell cd ../.. && pwd)
 
 RATD_URL ?= http://ratd:8080
+RATD_INTERNAL_URL ?= http://ratd:8090
 
 build:
 	cd $(ROOT) && docker build \
@@ -21,6 +22,7 @@ test:
 run:
 	docker run -d --name docs-assistant --network infra_default \
 		-e RATD_URL="$(RATD_URL)" \
+		-e RATD_INTERNAL_URL="$(RATD_INTERNAL_URL)" \
 		rat-plugin-docs-assistant
 
 clean:

@@ -4,7 +4,8 @@ ROOT := $(shell cd ../.. && pwd)
 
 # Override on the command line, e.g.
 #   make run OPENAI_BASE_URL=http://10.2.1.1:11434/v1 AI_MODEL=gpt-oss:20b
-RATD_URL        ?= http://ratd:8080
+RATD_URL          ?= http://ratd:8080
+RATD_INTERNAL_URL ?= http://ratd:8090
 OPENAI_BASE_URL ?= http://10.2.1.1:11434/v1
 AI_MODEL        ?= gpt-oss:20b
 
@@ -29,6 +30,7 @@ test:
 run:
 	docker run -d --name ai-provider --network infra_default \
 		-e RATD_URL="$(RATD_URL)" \
+		-e RATD_INTERNAL_URL="$(RATD_INTERNAL_URL)" \
 		-e OPENAI_BASE_URL="$(OPENAI_BASE_URL)" \
 		-e AI_MODEL="$(AI_MODEL)" \
 		rat-plugin-ai-provider

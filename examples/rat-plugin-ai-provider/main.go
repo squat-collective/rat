@@ -12,6 +12,7 @@
 // Environment (initial defaults — change them live in the portal settings):
 //
 //	RATD_URL         ratd base URL                (default http://ratd:8080)
+//	RATD_INTERNAL_URL ratd internal base URL      (default = RATD_URL)
 //	OPENAI_BASE_URL  initial API base URL         (default empty)
 //	OPENAI_API_KEY   initial API key              (default "ollama")
 //	AI_MODEL         initial model name           (default empty)
@@ -63,6 +64,7 @@ func main() {
 	port := envOr("GRPC_PORT", "50094")
 	selfAddr := envOr("PLUGIN_ADDR", "ai-provider:50094")
 	ratdURL := envOr("RATD_URL", "http://ratd:8080")
+	ratdInternalURL := envOr("RATD_INTERNAL_URL", ratdURL)
 
 	// Initial config defaults from env. Anything set in the portal's plugin
 	// settings overrides these (picked up by the config poll).
@@ -90,7 +92,7 @@ func main() {
 
 	slog.Info("starting ai-provider plugin", "port", port, "ratd_url", ratdURL)
 
-	go phoneHome(ratdURL, name, selfAddr)
+	go phoneHome(ratdInternalURL, name, selfAddr)
 	// Poll ratd for this plugin's config — RAT stores config but does not push
 	// it, so a configurable plugin pulls its own.
 	go cfg.poll(context.Background(), 15*time.Second)

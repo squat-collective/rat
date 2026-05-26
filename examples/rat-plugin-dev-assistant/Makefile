@@ -3,6 +3,7 @@
 ROOT := $(shell cd ../.. && pwd)
 
 RATD_URL ?= http://ratd:8080
+RATD_INTERNAL_URL ?= http://ratd:8090
 
 # Build the plugin image (platform module passed as a named build context).
 build:
@@ -24,6 +25,7 @@ test:
 run:
 	docker run -d --name dev-assistant --network infra_default \
 		-e RATD_URL="$(RATD_URL)" \
+		-e RATD_INTERNAL_URL="$(RATD_INTERNAL_URL)" \
 		rat-plugin-dev-assistant
 
 clean:

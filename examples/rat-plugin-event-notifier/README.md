@@ -28,7 +28,8 @@ implementing `PluginService`:
 `Authenticate` / `Authorize` are left to the embedded `Unimplemented` handler —
 a plugin implements only what it needs.
 
-On startup the plugin **phones home**: `POST {RATD_URL}/internal/plugins/register`
+On startup the plugin **phones home**: `POST {RATD_INTERNAL_URL}/internal/plugins/register`
+(defaults to `RATD_URL`; ratd's internal listener defaults to `http://ratd:8090`)
 with `{name, addr}`. ratd then calls back `HealthCheck` + `Describe` and adds it
 to the open registry. It also serves a plain-HTTP `/events` route, which ratd
 proxies at `/api/v1/x/event-notifier/events`.

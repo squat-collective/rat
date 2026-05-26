@@ -14,6 +14,7 @@
 // Environment:
 //
 //	RATD_URL          ratd base URL              (default http://ratd:8080)
+//	RATD_INTERNAL_URL ratd internal base URL     (default = RATD_URL)
 //	GRPC_PORT         HTTP port to serve on      (default 50099)
 //	PLUGIN_NAME       registered plugin name     (default secrets)
 //	PLUGIN_ADDR       address ratd dials back    (default secrets:50099)
@@ -64,6 +65,7 @@ func main() {
 	port := envOr("GRPC_PORT", "50099")
 	selfAddr := envOr("PLUGIN_ADDR", "secrets:50099")
 	ratdURL := envOr("RATD_URL", "http://ratd:8080")
+	ratdInternalURL := envOr("RATD_INTERNAL_URL", ratdURL)
 	keyFile := envOr("SECRETS_KEY_FILE", "/data/secrets.key")
 
 	key, err := loadOrCreateKey(os.Getenv("RAT_SECRETS_KEY"), keyFile)
@@ -96,7 +98,7 @@ func main() {
 
 	ctx := context.Background()
 	go func() {
-		phoneHome(ratdURL, name, selfAddr)
+		phoneHome(ratdInternalURL, name, selfAddr)
 		cfg.refresh(ctx) // pull encrypted list ASAP so /resolve can work pre-poll
 		cfg.poll(ctx, 15*time.Second)
 	}()

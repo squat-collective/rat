@@ -13,7 +13,8 @@
 //
 // Environment:
 //
-//	RATD_URL     ratd base URL              (default http://ratd:8080)
+//	RATD_URL          ratd base URL              (default http://ratd:8080)
+//	RATD_INTERNAL_URL ratd internal base URL     (default = RATD_URL)
 //	GRPC_PORT    HTTP port to serve on      (default 50098)
 //	PLUGIN_NAME  registered plugin name     (default lineage)
 //	PLUGIN_ADDR  address ratd dials back    (default lineage:50098)
@@ -62,6 +63,7 @@ func main() {
 	port := envOr("GRPC_PORT", "50098")
 	selfAddr := envOr("PLUGIN_ADDR", "lineage:50098")
 	ratdURL := envOr("RATD_URL", "http://ratd:8080")
+	ratdInternalURL := envOr("RATD_INTERNAL_URL", ratdURL)
 
 	rat := newRatdClient(ratdURL)
 	svc := newLineageService(rat)
@@ -78,7 +80,7 @@ func main() {
 
 	slog.Info("starting lineage plugin", "port", port, "ratd_url", ratdURL, "bundle_bytes", len(bundleJS))
 
-	go phoneHome(ratdURL, name, selfAddr)
+	go phoneHome(ratdInternalURL, name, selfAddr)
 
 	server := &http.Server{Addr: ":" + port, Handler: h2c.NewHandler(mux, &http2.Server{})}
 	if err := server.ListenAndServe(); err != nil {

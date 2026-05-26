@@ -12,7 +12,8 @@
 //
 // Environment:
 //
-//	RATD_URL     ratd base URL                 (default http://ratd:8080)
+//	RATD_URL          ratd base URL              (default http://ratd:8080)
+//	RATD_INTERNAL_URL ratd internal base URL     (default = RATD_URL)
 //	GRPC_PORT    HTTP port to serve on         (default 50100)
 //	PLUGIN_NAME  registered plugin name        (default mcp-docs)
 //	PLUGIN_ADDR  address ratd dials back       (default mcp-docs:50100)
@@ -47,6 +48,7 @@ func main() {
 	port := envOr("GRPC_PORT", "50100")
 	selfAddr := envOr("PLUGIN_ADDR", "mcp-docs:50100")
 	ratdURL := envOr("RATD_URL", "http://ratd:8080")
+	ratdInternalURL := envOr("RATD_INTERNAL_URL", ratdURL)
 
 	rat := newRatdClient(ratdURL)
 	mcp := NewServer(name, pluginVersion)
@@ -64,7 +66,7 @@ func main() {
 
 	slog.Info("starting mcp-docs", "port", port, "ratd_url", ratdURL, "tools", len(mcp.tools))
 
-	go phoneHome(ratdURL, name, selfAddr)
+	go phoneHome(ratdInternalURL, name, selfAddr)
 	go registerWithInterconnect(ratdURL, name)
 
 	server := &http.Server{Addr: ":" + port, Handler: h2c.NewHandler(mux, &http2.Server{})}

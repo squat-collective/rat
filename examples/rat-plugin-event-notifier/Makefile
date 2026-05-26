@@ -3,6 +3,9 @@
 # Repo root (examples/<plugin>/ -> ../../)
 ROOT := $(shell cd ../.. && pwd)
 
+RATD_URL ?= http://ratd:8080
+RATD_INTERNAL_URL ?= http://ratd:8090
+
 # Build the plugin image. The platform module is passed as a named build
 # context so the repo-root .dockerignore does not exclude it.
 build:
@@ -23,6 +26,8 @@ test:
 # Run the plugin on ratd's Docker network (phone-home + callbacks).
 run:
 	docker run -d --name event-notifier --network infra_default \
+		-e RATD_URL="$(RATD_URL)" \
+		-e RATD_INTERNAL_URL="$(RATD_INTERNAL_URL)" \
 		rat-plugin-event-notifier
 
 clean:

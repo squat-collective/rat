@@ -14,7 +14,8 @@
 //
 // Environment:
 //
-//	RATD_URL     ratd base URL                 (default http://ratd:8080)
+//	RATD_URL          ratd base URL              (default http://ratd:8080)
+//	RATD_INTERNAL_URL ratd internal base URL     (default = RATD_URL)
 //	GRPC_PORT    HTTP port to serve on         (default 50095)
 //	PLUGIN_NAME  registered plugin name        (default chat)
 //	PLUGIN_ADDR  address ratd dials back       (default chat:50095)
@@ -63,6 +64,7 @@ func main() {
 	port := envOr("GRPC_PORT", "50095")
 	selfAddr := envOr("PLUGIN_ADDR", "chat:50095")
 	ratdURL := envOr("RATD_URL", "http://ratd:8080")
+	ratdInternalURL := envOr("RATD_INTERNAL_URL", ratdURL)
 
 	cfg := newConfigStore(ratdURL, name, chatConfig{})
 	mcp := newMCPClient(ratdURL)
@@ -102,7 +104,7 @@ func main() {
 	slog.Info("starting chat plugin", "port", port, "ratd_url", ratdURL)
 
 	ctx := context.Background()
-	go phoneHome(ratdURL, name, selfAddr)
+	go phoneHome(ratdInternalURL, name, selfAddr)
 	go cfg.poll(ctx, 15*time.Second)
 	// Initial discovery is fast (no MCP servers yet means an empty loop) and
 	// re-runs every 15s so new MCP servers show up live without restarting.

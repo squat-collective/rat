@@ -45,6 +45,7 @@ func main() {
 	port := envOr("GRPC_PORT", "50101")
 	selfAddr := envOr("PLUGIN_ADDR", "diff:50101")
 	ratdURL := envOr("RATD_URL", "http://ratd:8080")
+	ratdInternalURL := envOr("RATD_INTERNAL_URL", ratdURL)
 	nessieURL := envOr("NESSIE_URL", "http://nessie:19120")
 	pollSecs := 15
 	if v := os.Getenv("DIFF_POLL_SECS"); v != "" {
@@ -78,7 +79,7 @@ func main() {
 
 	ctx := context.Background()
 	go func() {
-		phoneHome(ratdURL, name, selfAddr)
+		phoneHome(ratdInternalURL, name, selfAddr)
 		cfg.refresh(ctx)
 		go p.run(ctx)
 		cfg.poll(ctx, 30*time.Second)

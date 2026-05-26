@@ -9,7 +9,8 @@
 //
 // Environment:
 //
-//	RATD_URL     ratd base URL                (default http://ratd:8080)
+//	RATD_URL          ratd base URL              (default http://ratd:8080)
+//	RATD_INTERNAL_URL ratd internal base URL     (default = RATD_URL)
 //	GRPC_PORT    port to serve on             (default 50093)
 //	PLUGIN_NAME  registered plugin name       (default interconnect)
 //	PLUGIN_ADDR  address ratd dials back      (default interconnect:50093)
@@ -58,6 +59,7 @@ func main() {
 	port := envOr("GRPC_PORT", "50093")
 	selfAddr := envOr("PLUGIN_ADDR", "interconnect:50093")
 	ratdURL := envOr("RATD_URL", "http://ratd:8080")
+	ratdInternalURL := envOr("RATD_INTERNAL_URL", ratdURL)
 
 	st := newStore()
 	// Self-register one capability so the broker is testable out of the box —
@@ -87,7 +89,7 @@ func main() {
 
 	slog.Info("starting interconnect plugin", "port", port, "ratd_url", ratdURL)
 
-	go phoneHome(ratdURL, name, selfAddr)
+	go phoneHome(ratdInternalURL, name, selfAddr)
 
 	server := &http.Server{Addr: ":" + port, Handler: h2c.NewHandler(mux, &http2.Server{})}
 	if err := server.ListenAndServe(); err != nil {

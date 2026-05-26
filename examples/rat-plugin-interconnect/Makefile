@@ -4,6 +4,7 @@ ROOT := $(shell cd ../.. && pwd)
 
 # Override on the command line, e.g. make run RATD_URL=http://ratd:8080
 RATD_URL ?= http://ratd:8080
+RATD_INTERNAL_URL ?= http://ratd:8090
 
 # Build the plugin image (platform module passed as a named build context).
 build:
@@ -25,6 +26,7 @@ test:
 run:
 	docker run -d --name interconnect --network infra_default \
 		-e RATD_URL="$(RATD_URL)" \
+		-e RATD_INTERNAL_URL="$(RATD_INTERNAL_URL)" \
 		rat-plugin-interconnect
 
 clean:

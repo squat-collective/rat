@@ -16,7 +16,8 @@
 //
 // Environment:
 //
-//	RATD_URL     ratd base URL                 (default http://ratd:8080)
+//	RATD_URL          ratd base URL              (default http://ratd:8080)
+//	RATD_INTERNAL_URL ratd internal base URL     (default = RATD_URL)
 //	GRPC_PORT    HTTP port to serve on         (default 50096)
 //	PLUGIN_NAME  registered plugin name        (default agents)
 //	PLUGIN_ADDR  address ratd dials back       (default agents:50096)
@@ -65,6 +66,7 @@ func main() {
 	port := envOr("GRPC_PORT", "50096")
 	selfAddr := envOr("PLUGIN_ADDR", "agents:50096")
 	ratdURL := envOr("RATD_URL", "http://ratd:8080")
+	ratdInternalURL := envOr("RATD_INTERNAL_URL", ratdURL)
 
 	cfg := newConfigStore(ratdURL, name)
 	st := newStore(cfg)
@@ -90,7 +92,7 @@ func main() {
 	// path writes back to ratd and only works once we're in the registry.
 	// We chain them in one goroutine so the order is explicit.
 	go func() {
-		phoneHome(ratdURL, name, selfAddr)
+		phoneHome(ratdInternalURL, name, selfAddr)
 		cfg.refresh(ctx)
 		seedIfEmpty(ctx, st)
 		cfg.poll(ctx, 15*time.Second)

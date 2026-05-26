@@ -11,7 +11,8 @@
 //	GRPC_PORT    port to serve on            (default 50090)
 //	PLUGIN_NAME  registered plugin name      (default event-notifier)
 //	PLUGIN_ADDR  address ratd dials back     (default event-notifier:50090)
-//	RATD_URL     ratd base URL for phone-home (default http://ratd:8080)
+//	RATD_URL          ratd base URL              (default http://ratd:8080)
+//	RATD_INTERNAL_URL ratd internal base URL for phone-home (default = RATD_URL)
 //	WEBHOOK_URL  initial webhook URL — override it (and the other settings)
 //	             live in the portal's plugin configuration
 package main
@@ -49,8 +50,9 @@ func main() {
 		name       = envOr("PLUGIN_NAME", "event-notifier")
 		port       = envOr("GRPC_PORT", "50090")
 		selfAddr   = envOr("PLUGIN_ADDR", "event-notifier:50090")
-		ratdURL    = envOr("RATD_URL", "http://ratd:8080")
-		webhookURL = os.Getenv("WEBHOOK_URL")
+		ratdURL         = envOr("RATD_URL", "http://ratd:8080")
+		ratdInternalURL = envOr("RATD_INTERNAL_URL", ratdURL)
+		webhookURL      = os.Getenv("WEBHOOK_URL")
 	)
 
 	// WEBHOOK_URL is only the initial default — the webhook URL, buffer size
@@ -77,7 +79,7 @@ func main() {
 		"port", port, "ratd_url", ratdURL, "webhook_configured", webhookURL != "")
 
 	// Register with ratd once the server is up (runs concurrently with Serve).
-	go phoneHome(ratdURL, name, selfAddr)
+	go phoneHome(ratdInternalURL, name, selfAddr)
 	// Poll ratd for this plugin's config — RAT stores config but does not
 	// push it, so a configurable plugin pulls its own.
 	go cfg.poll(context.Background(), 15*time.Second)
