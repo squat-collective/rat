@@ -257,11 +257,11 @@ func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []ch
 		// finish_reason == "stop" (or anything else terminal) — we're done.
 		//
 		// Edge case: the model can stop with finish_reason=stop AND
-		// content="" (no tool_calls either). gpt-oss does this sometimes
-		// when the system prompt is restrictive. For a subagent this
-		// leaves the parent with nothing useful, so force a wrap-up to
-		// extract a textual summary from the conversation so far.
-		if depth > 0 && resp.Message.Content == "" && len(resp.Message.ToolCalls) == 0 {
+		// content="" (no tool_calls either). gpt-oss does this when a
+		// strict system prompt makes it unsure how to respond. We apply
+		// the same wrap-up fallback at every depth — without it, the
+		// user just sees no final message at all.
+		if resp.Message.Content == "" && len(resp.Message.ToolCalls) == 0 {
 			summary := o.wrapupSubagent(ctx, messages, tools, agent)
 			if summary != "" {
 				_ = sink.emit("assistant_message", chatMessage{Role: "assistant", Content: summary})
