@@ -7,6 +7,13 @@ gRPC calls every 5 seconds. ratd's poll loop is reduced to a 60-second fallback
 safety net for missed callbacks (e.g., network blips, runner crashes).
 
 Endpoint: POST {RATD_CALLBACK_URL}/api/v1/internal/runs/{run_id}/status
+
+The callback hits ratd's PRIVATE listener (default :8090, set via
+INTERNAL_LISTEN_ADDR on the ratd container), NOT the public API listener
+(:8080). The private listener has no authentication and must stay on the
+container network. In docker-compose this is wired as
+RATD_CALLBACK_URL=http://ratd:8090.
+
 Payload: JSON with run_id, status, error, duration_ms, rows_written, archived_landing_zones
 """
 
@@ -24,7 +31,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Base URL for ratd status callback. Example: "http://ratd:8080"
+# Base URL for ratd's PRIVATE listener. Example: "http://ratd:8090"
+# (NOT the public 8080 — that listener does not expose the callback route.)
 # When empty/unset, callbacks are disabled and ratd falls back to polling.
 RATD_CALLBACK_URL = os.environ.get("RATD_CALLBACK_URL", "")
 

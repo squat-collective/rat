@@ -37,6 +37,13 @@ services:
     environment:
       # Listen on all interfaces inside the container (required for Docker port mapping)
       RAT_LISTEN_ADDR: "0.0.0.0:8080"
+      # Private listener for service-to-service callbacks (run-status from the
+      # runner, plugin phone-home). Bind to 0.0.0.0 inside the container so
+      # other containers on the bridge can reach it, but DO NOT publish this
+      # port to the host — that would defeat the trust boundary. The internal
+      # listener has NO authentication; its security model is "the network is
+      # the perimeter".
+      INTERNAL_LISTEN_ADDR: "0.0.0.0:8090"
       # Postgres
       DATABASE_URL: postgres://${POSTGRES_USER:-rat}:${POSTGRES_PASSWORD:-rat}@postgres:5432/rat?sslmode=disable
       # S3 (MinIO) — required for file storage (editor, upload, pipeline code)
@@ -132,9 +139,11 @@ services:
     # gRPC port 50052 is internal-only (container network)
     environment:
       GRPC_PORT: "50052"
-      # Push-based status callbacks — runner POSTs terminal status to ratd
-      # instead of waiting for ratd to poll. Eliminates N gRPC calls/interval.
-      RATD_CALLBACK_URL: http://ratd:8080
+      # Push-based status callbacks — runner POSTs terminal status to ratd's
+      # PRIVATE listener (8090, not the public 8080). Eliminates N gRPC
+      # calls/interval. The private listener has no auth and must never be
+      # exposed beyond the container network.
+      RATD_CALLBACK_URL: http://ratd:8090
       # S3 — same creds as ratd, for pipeline writes to Iceberg/Parquet
       <<: *s3-credentials
       NESSIE_URL: http://nessie:19120/api/v1
