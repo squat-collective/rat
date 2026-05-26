@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useRun, useRunLogs } from "@/hooks/use-api";
+import { useRun, useRunLogs, usePipelines } from "@/hooks/use-api";
 import { useRunLogsSSE } from "@/hooks/use-sse";
 import { useApiClient } from "@/providers/api-provider";
 import { Loading } from "@/components/loading";
@@ -97,6 +97,13 @@ export default function RunDetailPage() {
   const api = useApiClient();
   const { data: run, isLoading, error, mutate: mutateRun } = useRun(params.id);
   const { data: logsData } = useRunLogs(params.id);
+  // Pipeline lookup so the detail page can reference the pipeline this run
+  // belongs to — runs only carry pipeline_id otherwise.
+  const { data: pipelinesData } = usePipelines();
+  const runPipeline = useMemo(() => {
+    if (!run?.pipeline_id || !pipelinesData?.pipelines) return null;
+    return pipelinesData.pipelines.find((p) => p.id === run.pipeline_id) ?? null;
+  }, [run?.pipeline_id, pipelinesData]);
   const [cancelling, setCancelling] = useState(false);
   const [selectedTest, setSelectedTest] = useState<ParsedQualityResult | null>(null);
 
@@ -151,16 +158,33 @@ export default function RunDetailPage() {
           <ArrowLeft className="h-3 w-3" /> Back to runs
         </Link>
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h1 className="text-sm font-bold tracking-wider font-mono">
-              {STATUS_EMOJI[run.status] || ""} {run.id.slice(0, 12)}
-            </h1>
-            <Badge
-              variant="outline"
-              className={cn("text-[9px]", STATUS_COLORS[run.status] || "")}
-            >
-              {run.status}
-            </Badge>
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-sm font-bold tracking-wider font-mono">
+                {STATUS_EMOJI[run.status] || ""} {run.id.slice(0, 12)}
+              </h1>
+              <Badge
+                variant="outline"
+                className={cn("text-[9px]", STATUS_COLORS[run.status] || "")}
+              >
+                {run.status}
+              </Badge>
+            </div>
+            {runPipeline ? (
+              <Link
+                href={`/pipelines/${runPipeline.namespace}/${runPipeline.layer}/${runPipeline.name}`}
+                className="text-[11px] font-mono text-muted-foreground hover:text-primary mt-1 inline-block"
+              >
+                pipeline:{" "}
+                <span className="text-foreground/80">
+                  {runPipeline.namespace}.{runPipeline.layer}.{runPipeline.name}
+                </span>
+              </Link>
+            ) : run.pipeline_id ? (
+              <span className="text-[11px] font-mono text-muted-foreground/50 mt-1 inline-block">
+                pipeline_id: {run.pipeline_id.slice(0, 8)}…
+              </span>
+            ) : null}
           </div>
           {canCancel && (
             <Button

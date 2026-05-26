@@ -1,7 +1,8 @@
 "use client";
 
+import { useMemo } from "react";
 import Link from "next/link";
-import { useRuns } from "@/hooks/use-api";
+import { useRuns, usePipelines } from "@/hooks/use-api";
 import { Loading } from "@/components/loading";
 import { ErrorAlert } from "@/components/error-alert";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +11,17 @@ import { STATUS_COLORS, STATUS_EMOJI } from "@/lib/constants";
 
 export default function RunsPage() {
   const { data, isLoading, error } = useRuns();
+  // Runs only carry pipeline_id; the list looks naked without the
+  // pipeline reference. Fetch the pipelines list once and look up the
+  // ns.layer.name client-side so every row links straight to its pipeline.
+  const { data: pipelinesData } = usePipelines();
+  const pipelinesById = useMemo(() => {
+    const m = new Map<string, { namespace: string; layer: string; name: string }>();
+    for (const p of pipelinesData?.pipelines ?? []) {
+      m.set(p.id, { namespace: p.namespace, layer: p.layer, name: p.name });
+    }
+    return m;
+  }, [pipelinesData]);
 
   if (isLoading) return <Loading text="Loading runs..." />;
   if (error) return <ErrorAlert error={error} prefix="Failed to load runs" />;
@@ -34,6 +46,9 @@ export default function RunsPage() {
               </th>
               <th className="whitespace-nowrap px-3 py-2.5 text-left text-[10px] font-bold tracking-wider text-muted-foreground border-b-2 border-primary/30">
                 Status
+              </th>
+              <th className="whitespace-nowrap px-3 py-2.5 text-left text-[10px] font-bold tracking-wider text-muted-foreground border-b-2 border-primary/30">
+                Pipeline
               </th>
               <th className="whitespace-nowrap px-3 py-2.5 text-left text-[10px] font-bold tracking-wider text-muted-foreground border-b-2 border-primary/30">
                 Run ID
@@ -72,6 +87,25 @@ export default function RunsPage() {
                   >
                     {STATUS_EMOJI[run.status] || ""} {run.status}
                   </Badge>
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 font-mono text-[11px]">
+                  {(() => {
+                    const p = pipelinesById.get(run.pipeline_id);
+                    return p ? (
+                      <Link
+                        href={`/pipelines/${p.namespace}/${p.layer}/${p.name}`}
+                        className="hover:text-primary"
+                      >
+                        <span className="text-muted-foreground">{p.namespace}.</span>
+                        <span className="text-muted-foreground">{p.layer}.</span>
+                        {p.name}
+                      </Link>
+                    ) : (
+                      <span className="text-muted-foreground/60">
+                        {run.pipeline_id.slice(0, 8)}…
+                      </span>
+                    );
+                  })()}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2">
                   <Link
