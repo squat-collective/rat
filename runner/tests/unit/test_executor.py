@@ -693,16 +693,18 @@ class TestBranchCreationRetry:
         import json
         import urllib.error
 
+        # Nessie 0.99.x wraps reference responses under a top-level
+        # "reference" key for both GET /trees/{ref} and POST /trees.
         ok_ref = MagicMock()
         ok_ref.read.return_value = json.dumps(
-            {"name": "main", "hash": "abc123", "type": "BRANCH"}
+            {"reference": {"name": "main", "hash": "abc123", "type": "BRANCH"}}
         ).encode()
         ok_ref.__enter__ = lambda s: s
         ok_ref.__exit__ = MagicMock(return_value=False)
 
         ok_create = MagicMock()
         ok_create.read.return_value = json.dumps(
-            {"name": "run-r1", "hash": "def456", "type": "BRANCH"}
+            {"reference": {"name": "run-r1", "hash": "def456", "type": "BRANCH"}}
         ).encode()
         ok_create.__enter__ = lambda s: s
         ok_create.__exit__ = MagicMock(return_value=False)
