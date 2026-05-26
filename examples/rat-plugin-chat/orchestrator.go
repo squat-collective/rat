@@ -28,7 +28,16 @@ import (
 
 // safety cap on iterations — even a runaway model can't burn forever.
 // Agents can override via Agent.MaxIterations; this is the fallback.
-const defaultMaxIterations = 8
+// 12 (was 8) gives a typical "schema → sample → query → maybe fix →
+// final" loop comfortable room without needing to extend.
+const defaultMaxIterations = 12
+
+// subagentHardCapMultiplier caps how far a subagent can extend itself
+// past its configured max_iterations. Subagents auto-extend silently
+// (no UI prompt — the user shouldn't see N prompts during one parent
+// turn) but stop at maxIter × this. After that, they do a wrap-up LLM
+// call to produce text feedback for the parent.
+const subagentHardCapMultiplier = 3
 
 // maxSubagentDepth bounds A→B→C delegation chains. Even within the depth
 // cap, the orchestrator's per-iteration cap still applies at each level.
@@ -152,30 +161,58 @@ func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []ch
 	}
 	_ = sink.emit("started", started)
 
+	// budget grows as we extend; iter monotonically increases. For
+	// depth==0 the user is prompted to extend; for depth>0 we
+	// silently extend up to subagentHardCap, then wrap up.
+	budget := maxIter
+	subagentHardCap := maxIter * subagentHardCapMultiplier
+
 	iter := 0
 	for {
 		iter++
-		// Continuation gate: at the top-level only (subagents don't
-		// prompt — they just hit their own cap and return). When we
-		// blow past the iteration budget, ask the UI before pushing
-		// on. Auto-yes after continuationTimeout.
-		if iter > maxIter {
-			if depth > 0 || o.continuations == nil {
-				break
-			}
-			_ = sink.emit("continuation_prompt", map[string]any{
-				"iteration":   iter - 1,
-				"max":         maxIter,
-				"timeout_sec": int(continuationTimeout / time.Second),
-				"agent_id":    agentID,
-			})
-			if !o.continuations.wait(ctx, parentConvID, continuationTimeout) {
-				_ = sink.emit("done", map[string]string{"finish_reason": "canceled_at_continuation"})
+		if iter > budget {
+			if depth == 0 && o.continuations != nil {
+				// Top-level: ask the UI before pushing on. Auto-yes
+				// after continuationTimeout.
+				_ = sink.emit("continuation_prompt", map[string]any{
+					"iteration":   iter - 1,
+					"max":         budget,
+					"timeout_sec": int(continuationTimeout / time.Second),
+					"agent_id":    agentID,
+				})
+				if !o.continuations.wait(ctx, parentConvID, continuationTimeout) {
+					_ = sink.emit("done", map[string]string{"finish_reason": "canceled_at_continuation"})
+					return nil
+				}
+				_ = sink.emit("continuation_accepted", map[string]any{"granted": maxIter})
+				budget += maxIter
+			} else if depth > 0 {
+				// Subagent: silently extend until we hit the hard cap.
+				// Beyond that, force a wrap-up so the parent gets
+				// something useful instead of "no content".
+				if budget >= subagentHardCap {
+					summary := o.wrapupSubagent(ctx, messages, tools, agent)
+					if summary != "" {
+						msg := chatMessage{Role: "assistant", Content: summary}
+						_ = sink.emit("assistant_message", msg)
+					}
+					_ = sink.emit("done", map[string]string{
+						"finish_reason": "subagent_wrapped_up_at_cap",
+					})
+					return nil
+				}
+				budget += maxIter
+				_ = sink.emit("subagent_extended", map[string]any{
+					"iteration": iter, "new_budget": budget, "hard_cap": subagentHardCap,
+				})
+			} else {
+				// depth==0 with no continuation store (e.g. tests).
+				// Hard stop with the original error.
+				_ = sink.emit("error", map[string]string{
+					"error": fmt.Sprintf("max_iterations (%d) exceeded — the model kept calling tools without answering", maxIter),
+				})
 				return nil
 			}
-			// User (or timeout) said continue — grant another batch.
-			_ = sink.emit("continuation_accepted", map[string]any{"granted": maxIter})
-			iter = 1
 		}
 		resp, err := o.callAI(ctx, sink, messages, tools, agent)
 		if err != nil {
@@ -218,17 +255,80 @@ func (o *orchestrator) chatTurn(ctx context.Context, sink sseSink, messages []ch
 		}
 
 		// finish_reason == "stop" (or anything else terminal) — we're done.
+		//
+		// Edge case: the model can stop with finish_reason=stop AND
+		// content="" (no tool_calls either). gpt-oss does this sometimes
+		// when the system prompt is restrictive. For a subagent this
+		// leaves the parent with nothing useful, so force a wrap-up to
+		// extract a textual summary from the conversation so far.
+		if depth > 0 && resp.Message.Content == "" && len(resp.Message.ToolCalls) == 0 {
+			summary := o.wrapupSubagent(ctx, messages, tools, agent)
+			if summary != "" {
+				_ = sink.emit("assistant_message", chatMessage{Role: "assistant", Content: summary})
+			}
+		}
 		_ = sink.emit("done", map[string]string{"finish_reason": resp.FinishReason})
 		return nil
 	}
+}
 
-	// Only reached when a subagent (depth > 0) hits its cap — the
-	// continuation prompt is top-level only. Surface the same error
-	// the loop used to emit so the parent agent can decide what to do.
-	_ = sink.emit("error", map[string]string{
-		"error": fmt.Sprintf("max_iterations (%d) exceeded — the model kept calling tools without answering", maxIter),
-	})
-	return nil
+// wrapupSubagent runs ONE final LLM call with no tools and a hard
+// instruction to summarise what was found. Called when a subagent
+// has exhausted its hard cap without producing a final text answer.
+// We do this so the parent agent gets useful information ("I couldn't
+// find a tracks table; the namespace has gigs and attendees only")
+// instead of the cryptic "subagent returned no content" hint.
+//
+// Uses callOverrides directly against ai-provider's blocking
+// /chat-with-tools endpoint — the orchestrator's streaming variant
+// would also work but isn't necessary; we don't surface this turn to
+// the UI as deltas.
+func (o *orchestrator) wrapupSubagent(ctx context.Context, messages []chatMessage, _ []openAITool, agent *Agent) string {
+	wrapPrompt := chatMessage{
+		Role: "user",
+		Content: "[ITERATION LIMIT REACHED — wrap up] You cannot call any more tools. " +
+			"In one short paragraph: summarise what you learned, the conclusion you can give the parent agent, and any blockers you hit (e.g. a table you couldn't find). " +
+			"Do not request more tools.",
+	}
+	payload := map[string]any{
+		"messages": append(messages, wrapPrompt),
+		// Empty tools array — the model has no choice but to write text.
+		"tools": []any{},
+	}
+	if agent != nil {
+		if agent.Model != "" {
+			payload["model"] = agent.Model
+		}
+		if agent.Temperature > 0 {
+			payload["temperature"] = agent.Temperature
+		}
+	}
+	body, _ := json.Marshal(payload)
+
+	wrapCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(wrapCtx, http.MethodPost,
+		o.ratdURL+"/api/v1/x/ai-provider/chat-with-tools", bytes.NewReader(body))
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := o.http.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if resp.StatusCode >= 300 {
+		return ""
+	}
+	var ar struct {
+		Message chatMessage `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &ar); err != nil {
+		return ""
+	}
+	return ar.Message.Content
 }
 
 // subagentTools builds one tool declaration per agent in agent.Subagents
