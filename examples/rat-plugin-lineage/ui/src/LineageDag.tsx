@@ -3,7 +3,7 @@
 // contained styling palette and no @squat-collective/rat-client type
 // import.
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   ReactFlow,
   Background,
@@ -58,8 +58,19 @@ export function LineageDag({ graph }: Props) {
     return layoutGraph(rawNodes, rawEdges);
   }, [graph]);
 
-  const [nodes, , onNodesChange] = useNodesState(initialNodes);
-  const [edges, , onEdgesChange] = useEdgesState(initialEdges);
+  // useNodesState / useEdgesState only set their state from the
+  // initial value on first render — when `graph` changes (e.g. the
+  // user picks a different namespace), the props update but the
+  // internal state would otherwise stay stale. Sync via setNodes /
+  // setEdges whenever the recomputed initial values change. This is
+  // the same bug that affected the old portal page; fixed once here
+  // in the plugin.
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  useEffect(() => {
+    setNodes(initialNodes);
+    setEdges(initialEdges);
+  }, [initialNodes, initialEdges, setNodes, setEdges]);
 
   // Click-through navigation. We use a plain history pushState +
   // popstate event so we don't depend on next/navigation (which we
