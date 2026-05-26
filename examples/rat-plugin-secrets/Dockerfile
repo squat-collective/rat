@@ -1,0 +1,24 @@
+# RAT secrets plugin. Build from the repo root:
+#
+#   docker build --build-context platform=platform \
+#     -f examples/rat-plugin-secrets/Dockerfile \
+#     -t rat-plugin-secrets examples/rat-plugin-secrets
+#
+# Or `make build` from this directory.
+FROM golang:1.24-alpine AS builder
+WORKDIR /build
+
+COPY --from=platform . /platform/
+COPY . .
+
+RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /secrets .
+
+FROM alpine:3.21
+RUN addgroup -S rat && adduser -S -G rat rat \
+    && mkdir -p /data \
+    && chown -R rat:rat /data
+COPY --from=builder /secrets /secrets
+USER rat
+VOLUME ["/data"]
+EXPOSE 50099
+ENTRYPOINT ["/secrets"]
