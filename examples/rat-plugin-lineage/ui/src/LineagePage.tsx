@@ -152,7 +152,10 @@ export function LineageApp() {
       )}
 
       {graph && graph.nodes.length > 0 ? (
-        <LineageDag graph={graph} />
+        // key forces a full remount when the namespace changes — defence
+        // in depth against React Flow's internal state holding the old
+        // graph even after we setNodes/setEdges in LineageDag.
+        <LineageDag key={namespace || "__all__"} graph={graph} />
       ) : (
         !error &&
         !loading && (

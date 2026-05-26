@@ -54,7 +54,13 @@ func (srv *Server) HandlePluginBundle(w http.ResponseWriter, r *http.Request) {
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			resp.Header.Set("Content-Type", "application/javascript")
-			resp.Header.Set("Cache-Control", "public, max-age=300")
+			// Plugin bundles are mutable artifacts — they change every
+			// time the plugin is rebuilt. A 5-minute max-age makes
+			// rebuilds invisible to the user (their browser keeps
+			// serving the old bundle until the cache expires). Switch
+			// to "no-cache" so the browser revalidates every load, but
+			// still allows 304s if we ever add ETag support.
+			resp.Header.Set("Cache-Control", "no-cache, must-revalidate")
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
