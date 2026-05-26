@@ -396,8 +396,9 @@
     );
   }
 
-  window.__RAT_REGISTER_PLUGIN({
-    name: "chat",
-    components: { ChatApp: ChatApp },
+  window.__RAT_REGISTER_PLUGIN("chat", {
+    navItems: [{ label: "Chat", icon: "message-circle", href: "/x/chat", priority: 5 }],
+    routes: [{ path: "/x/chat", component: ChatApp }],
   });
+  console.info("[chat] registered with the portal");
 })();
