@@ -142,6 +142,11 @@ func (srv *Server) HandlePluginProxy(w http.ResponseWriter, r *http.Request) {
 			req.URL.RawQuery = r.URL.RawQuery
 			req.Host = target.Host
 
+			// Strip any inbound X-RAT-Plugin-Token before we forward.
+			// A client must not be able to spoof the token by setting
+			// the header themselves; only ratd's proxy may set it.
+			req.Header.Del("X-RAT-Plugin-Token")
+
 			// Forward X-Request-ID for tracing.
 			if reqID := r.Header.Get("X-Request-ID"); reqID != "" {
 				req.Header.Set("X-Request-ID", reqID)
@@ -149,6 +154,15 @@ func (srv *Server) HandlePluginProxy(w http.ResponseWriter, r *http.Request) {
 			// Forward the authenticated user ID for plugins that need it.
 			if reqID := r.Header.Get("X-Forwarded-User"); reqID != "" {
 				req.Header.Set("X-Forwarded-User", reqID)
+			}
+			// Inject the per-startup platform token if the plugin
+			// advertised one in Describe. Plugins that opt in (empty
+			// token means opted out — backward compat) reject any
+			// inbound REST request that doesn't carry this header, so
+			// a direct peer-to-peer call on the docker network gets
+			// 401 while calls via this proxy keep working.
+			if p.Token != "" {
+				req.Header.Set("X-RAT-Plugin-Token", p.Token)
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {

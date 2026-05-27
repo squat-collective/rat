@@ -207,8 +207,15 @@ type DescribeResponse struct {
 	ProvidesWorker     bool                   `protobuf:"varint,7,opt,name=provides_worker,json=providesWorker,proto3" json:"provides_worker,omitempty"`            // true if the plugin runs background work
 	Ui                 *PluginUIDescriptor    `protobuf:"bytes,8,opt,name=ui,proto3" json:"ui,omitempty"`                                                           // portal UI integration metadata
 	ConfigSchemaJson   string                 `protobuf:"bytes,9,opt,name=config_schema_json,json=configSchemaJson,proto3" json:"config_schema_json,omitempty"`     // JSON Schema for the plugin's config object
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Per-startup random token. When present, ratd's reverse proxy sends
+	// it as X-RAT-Plugin-Token on every forwarded request, and the plugin
+	// MUST reject inbound requests without the matching token. Lets the
+	// plugin distinguish "request via ratd proxy" from direct peer calls
+	// on the docker network. Regenerated on every plugin startup; ratd
+	// refreshes its copy via Describe on each re-registration.
+	PlatformToken string `protobuf:"bytes,10,opt,name=platform_token,json=platformToken,proto3" json:"platform_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DescribeResponse) Reset() {
@@ -300,6 +307,13 @@ func (x *DescribeResponse) GetUi() *PluginUIDescriptor {
 func (x *DescribeResponse) GetConfigSchemaJson() string {
 	if x != nil {
 		return x.ConfigSchemaJson
+	}
+	return ""
+}
+
+func (x *DescribeResponse) GetPlatformToken() string {
+	if x != nil {
+		return x.PlatformToken
 	}
 	return ""
 }
@@ -1040,7 +1054,7 @@ const file_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x13HealthCheckResponse\x125\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x1d.ratatouille.plugin.v1.StatusR\x06status\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"\x11\n" +
-	"\x0fDescribeRequest\"\x8a\x03\n" +
+	"\x0fDescribeRequest\"\xb1\x03\n" +
 	"\x10DescribeResponse\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
@@ -1050,7 +1064,9 @@ const file_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x13event_subscriptions\x18\x06 \x03(\tR\x12eventSubscriptions\x12'\n" +
 	"\x0fprovides_worker\x18\a \x01(\bR\x0eprovidesWorker\x129\n" +
 	"\x02ui\x18\b \x01(\v2).ratatouille.plugin.v1.PluginUIDescriptorR\x02ui\x12,\n" +
-	"\x12config_schema_json\x18\t \x01(\tR\x10configSchemaJson\"\x85\x01\n" +
+	"\x12config_schema_json\x18\t \x01(\tR\x10configSchemaJson\x12%\n" +
+	"\x0eplatform_token\x18\n" +
+	" \x01(\tR\rplatformToken\"\x85\x01\n" +
 	"\x10RouteDeclaration\x12\x16\n" +
 	"\x06method\x18\x01 \x01(\tR\x06method\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12#\n" +

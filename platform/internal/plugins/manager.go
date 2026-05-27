@@ -231,6 +231,7 @@ func (m *Manager) Register(ctx context.Context, name, addr string) error {
 		Descriptor:   descriptor,
 		PluginClient: pluginClient,
 		HTTPClient:   m.httpClient,
+		Token:        platformTokenFromDescriptor(descriptor),
 	}
 
 	// 4. Register in memory (validates capability conflicts)
@@ -414,6 +415,7 @@ func (m *Manager) reconnectPlugin(ctx context.Context, entry domain.PluginEntry)
 		Descriptor:   descriptor,
 		PluginClient: pluginClient,
 		HTTPClient:   m.httpClient,
+		Token:        platformTokenFromDescriptor(descriptor),
 	}
 
 	if err := m.registry.Register(p); err != nil {
@@ -422,6 +424,18 @@ func (m *Manager) reconnectPlugin(ctx context.Context, entry domain.PluginEntry)
 
 	m.fireCallbacks(capabilities)
 	return nil
+}
+
+// platformTokenFromDescriptor extracts the platform token from a
+// DescribeResponse, returning "" if the plugin didn't advertise one.
+// A nil descriptor (legacy plugin that returned Unimplemented on
+// Describe) yields "" so legacy plugins keep working with no header
+// injection.
+func platformTokenFromDescriptor(d *pluginv1.DescribeResponse) string {
+	if d == nil {
+		return ""
+	}
+	return d.PlatformToken
 }
 
 // describePlugin calls the Describe RPC. Falls back to name-based inference

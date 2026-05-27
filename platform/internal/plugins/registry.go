@@ -36,6 +36,13 @@ type Plugin struct {
 	Descriptor   *pluginv1.DescribeResponse
 	PluginClient pluginv1connect.PluginServiceClient
 	HTTPClient   connect.HTTPClient
+	// Token is the plugin's per-startup random shared secret, advertised
+	// in DescribeResponse.platform_token. When non-empty, the plugin
+	// proxy injects it as X-RAT-Plugin-Token on every forwarded request,
+	// and the plugin's middleware rejects any inbound request that lacks
+	// the matching value. Empty string means the plugin opted out (legacy
+	// behaviour — no header injected, no validation expected).
+	Token string
 }
 
 // HasCapability returns true if the plugin declares the given capability.

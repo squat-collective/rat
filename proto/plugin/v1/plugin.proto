@@ -64,6 +64,13 @@ message DescribeResponse {
   bool provides_worker = 7;                  // true if the plugin runs background work
   PluginUIDescriptor ui = 8;                 // portal UI integration metadata
   string config_schema_json = 9;             // JSON Schema for the plugin's config object
+  // Per-startup random token. When present, ratd's reverse proxy sends
+  // it as X-RAT-Plugin-Token on every forwarded request, and the plugin
+  // MUST reject inbound requests without the matching token. Lets the
+  // plugin distinguish "request via ratd proxy" from direct peer calls
+  // on the docker network. Regenerated on every plugin startup; ratd
+  // refreshes its copy via Describe on each re-registration.
+  string platform_token = 10;
 }
 
 // RouteDeclaration describes an HTTP route the plugin exposes.
