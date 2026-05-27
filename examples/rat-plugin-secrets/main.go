@@ -11,6 +11,21 @@
 // rat-plugin-agents. Losing the key bricks the ciphertexts, which is
 // the correct behaviour for a secret store.
 //
+// Platform-token auth (see DescribeResponse.platform_token in
+// proto/plugin/v1/plugin.proto): on startup we generate a fresh
+// 32-byte hex token, advertise it via Describe, and wrap the REST mux
+// with middleware that rejects any inbound request lacking the
+// matching X-RAT-Plugin-Token header. ratd's reverse proxy reads the
+// token from the registry and injects it on every forwarded call, so
+// browser/CLI/portal traffic via /api/v1/x/secrets/* keeps working —
+// but a direct peer-to-peer hit like `curl http://secrets:50099/resolve`
+// from another container on the docker network now gets 401. The
+// token regenerates on every plugin startup; brief 401 window during
+// restart is acceptable (callers retry). /bundle.js, /health, and the
+// ConnectRPC plugin-service paths stay unauthenticated — the first so
+// the portal's <script> tag can fetch the bundle, the second for
+// liveness, the third because that's how ratd LEARNS the token.
+//
 // Environment:
 //
 //	RATD_URL          ratd base URL              (default http://ratd:8080)
@@ -25,9 +40,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -59,6 +76,45 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// randomToken returns a fresh 32-byte hex secret for the
+// X-RAT-Plugin-Token contract documented at the top of this file.
+func randomToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failing is a critical OS-level problem; we
+		// cannot safely continue without a real secret.
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
+
+// tokenAuth wraps the REST mux. It rejects any request lacking the
+// expected X-RAT-Plugin-Token header EXCEPT for /bundle.js (the
+// portal's <script> tag can't add custom headers) and /health (used
+// by container orchestration for liveness). The ConnectRPC
+// plugin-service paths are NOT routed through this middleware — they
+// are registered on their own subtree above and reached by ratd via
+// direct gRPC, not the reverse proxy.
+//
+// expected == "" disables the check (opt-out). Our plugins always
+// pass a non-empty token so this branch is mostly a safety net.
+func tokenAuth(expected string, next http.Handler) http.Handler {
+	if expected == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/bundle.js" || r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Header.Get("X-RAT-Plugin-Token") != expected {
+			http.Error(w, "missing or invalid platform token", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -95,17 +151,27 @@ func main() {
 	}
 	cfg.onChange(st.hydrate)
 
+	platformToken := randomToken()
+
 	a := newAPI(st)
-	h := newHandler(name, "http://"+selfAddr+"/bundle.js", bundleHash)
+	h := newHandler(name, "http://"+selfAddr+"/bundle.js", bundleHash, platformToken)
 
 	mux := http.NewServeMux()
 	pluginPath, pluginHTTP := pluginv1connect.NewPluginServiceHandler(h)
+	// ConnectRPC plugin-service paths — NOT wrapped: ratd reaches
+	// these via direct gRPC, not the reverse proxy, and learns the
+	// token from Describe over this very channel.
 	mux.Handle(pluginPath, pluginHTTP)
+	// Bundle endpoint — NOT wrapped: the portal's <script> tag fetches
+	// the bundle via ratd's proxy and the browser can't add custom
+	// headers to script-tag requests.
 	mux.HandleFunc("/bundle.js", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
 		_, _ = w.Write(bundleJS)
 	})
-	mux.Handle("/", a.mux())
+	// REST endpoints — wrapped. /health inside this mux is allow-listed
+	// by tokenAuth so container liveness probes still work.
+	mux.Handle("/", tokenAuth(platformToken, a.mux()))
 
 	slog.Info("starting secrets plugin", "port", port, "ratd_url", ratdURL)
 

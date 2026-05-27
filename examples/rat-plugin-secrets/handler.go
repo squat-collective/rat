@@ -13,13 +13,14 @@ const pluginVersion = "0.1.0"
 type Handler struct {
 	pluginv1connect.UnimplementedPluginServiceHandler
 
-	name       string
-	bundleURL  string
-	bundleHash string // SRI format ("sha256-<base64>") — surfaced in Describe so the portal can set <script integrity>
+	name          string
+	bundleURL     string
+	bundleHash    string // SRI format ("sha256-<base64>") — surfaced in Describe so the portal can set <script integrity>
+	platformToken string // per-startup random — advertised in Describe; ratd's proxy then injects it as X-RAT-Plugin-Token
 }
 
-func newHandler(name, bundleURL, bundleHash string) *Handler {
-	return &Handler{name: name, bundleURL: bundleURL, bundleHash: bundleHash}
+func newHandler(name, bundleURL, bundleHash, platformToken string) *Handler {
+	return &Handler{name: name, bundleURL: bundleURL, bundleHash: bundleHash, platformToken: platformToken}
 }
 
 func (h *Handler) HealthCheck(
@@ -44,6 +45,7 @@ func (h *Handler) Describe(
 			{Method: "POST", Path: "/resolve", Description: "Resolve a name to its plaintext value (consumer plugins use this via the interconnect 'secrets.get' capability)"},
 		},
 		ConfigSchemaJson: configSchemaJSON,
+		PlatformToken:    h.platformToken,
 		Ui: &pluginv1.PluginUIDescriptor{
 			BundleUrl:  h.bundleURL,
 			BundleHash: h.bundleHash,
