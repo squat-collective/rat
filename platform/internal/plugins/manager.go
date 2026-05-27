@@ -93,6 +93,7 @@ type Manager struct {
 	OnAuthChanged        func(*Registry)
 	OnExecutorChanged    func(*Registry)
 	OnEnforcementChanged func(*Registry)
+	OnCloudChanged       func(*Registry)
 }
 
 // NewManager creates a plugin Manager. Pass nil catalog for no persistence (tests).
@@ -649,6 +650,10 @@ func (m *Manager) fireCallbacks(capabilities []string) {
 		case CapEnforcement:
 			if m.OnEnforcementChanged != nil {
 				m.OnEnforcementChanged(m.registry)
+			}
+		case CapCloud:
+			if m.OnCloudChanged != nil {
+				m.OnCloudChanged(m.registry)
 			}
 		}
 	}

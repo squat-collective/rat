@@ -273,6 +273,15 @@ func main() {
 			slog.Info("enforcement authorizer re-wired (plugin change)")
 		}
 	}
+	mgr.OnCloudChanged = func(reg *plugins.Registry) {
+		if reg.CloudEnabled() {
+			srv.Cloud = reg
+			slog.Info("cloud provider re-wired (plugin change)")
+		} else {
+			srv.Cloud = nil
+			slog.Info("cloud provider unregistered (no plugin with capability \"cloud\")")
+		}
+	}
 
 	// Decode license key for display (no validation — enforcement is in plugins).
 	if licenseKey := os.Getenv("RAT_LICENSE_KEY"); licenseKey != "" {
@@ -478,12 +487,14 @@ func main() {
 		slog.Warn("S3_ENDPOINT not set, running without storage")
 	}
 
-	// Cloud provider: the new registry does not implement CloudProvider directly.
-	// Cloud credentials will be accessed via the plugin proxy (/api/v1/x/cloud/...)
-	// once the cloud plugin is updated. For now, cloud credential injection in
-	// runs.go is skipped when srv.Cloud is nil (falls back to default S3 creds).
+	// Cloud provider: the registry implements api.CloudProvider directly via
+	// the cloudv1 proto. Wire it now if a cloud plugin was registered at boot;
+	// runtime registration/unregistration is handled by OnCloudChanged above.
+	// Runner integration (passing creds into pipeline execution) is deferred —
+	// see ADR-018.
 	if registry.CloudEnabled() {
-		slog.Info("cloud plugin registered (credentials via plugin proxy)")
+		srv.Cloud = registry
+		slog.Info("cloud provider wired (capability \"cloud\")")
 	}
 
 	// Wire executor: AtomicExecutor provides thread-safe dynamic swapping.

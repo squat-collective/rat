@@ -25,7 +25,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	cloudv1 "github.com/rat-data/rat/platform/gen/cloud/v1"
 	"github.com/rat-data/rat/platform/internal/cache"
 	"github.com/rat-data/rat/platform/internal/domain"
 	"github.com/rat-data/rat/platform/internal/plugins"
@@ -265,10 +264,13 @@ type RunnerPluginLister interface {
 }
 
 // CloudProvider vends scoped cloud credentials for pipeline runs.
-// Implemented by the plugins.Registry when the cloud plugin is loaded.
+// Implemented by the plugins.Registry when a plugin with capability "cloud"
+// is loaded. Mirrors the GetCredentials RPC declared in proto/cloud/v1/cloud.proto
+// while exchanging the platform domain type instead of the wire proto so
+// callers and tests stay decoupled from generated code.
 type CloudProvider interface {
 	CloudEnabled() bool
-	GetCredentials(ctx context.Context, userID, namespace string) (*cloudv1.GetCredentialsResponse, error)
+	GetCredentials(ctx context.Context, userID, namespace string) (*domain.CloudCredentials, error)
 }
 
 // securityHeaders adds standard HTTP security headers to every response.
@@ -500,6 +502,10 @@ func NewRouter(srv *Server) chi.Router {
 		// Identity management endpoints (authenticated).
 		// Handlers check for identity provider internally.
 		MountIdentityRoutes(vr, srv)
+
+		// Cloud credential vending (authenticated).
+		// Handler returns 501 when no plugin with capability "cloud" is registered.
+		MountCloudRoutes(vr, srv)
 
 		// Plugin management endpoints (authenticated).
 		if srv.PluginManager != nil {

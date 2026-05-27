@@ -206,20 +206,22 @@ func (s *Server) HandleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Inject cloud credentials if cloud plugin is available
+	// Inject cloud credentials if cloud plugin is available.
+	// Out of scope for the platform-side handler commit: passing these to the
+	// executor as env overrides for the runner container is a follow-up
+	// requiring executor plugin changes (see ADR-018).
 	if s.Cloud != nil && s.Cloud.CloudEnabled() {
 		user := plugins.UserFromContext(r.Context())
 		if user != nil {
 			creds, err := s.Cloud.GetCredentials(r.Context(), user.UserID, req.Namespace)
 			if err != nil {
 				slog.Warn("cloud credentials unavailable, using defaults", "error", err)
-			} else {
+			} else if creds != nil {
 				run.S3Overrides = map[string]string{
-					"ACCESS_KEY":     creds.AccessKey,
-					"SECRET_KEY":     creds.SecretKey,
-					"SESSION_TOKEN":  creds.SessionToken,
-					"ENDPOINT":       creds.Endpoint,
-					"BUCKET":         creds.Bucket,
+					"ACCESS_KEY":    creds.AccessKey,
+					"SECRET_KEY":    creds.SecretKey,
+					"SESSION_TOKEN": creds.SessionToken,
+					"REGION":        creds.Region,
 				}
 			}
 		}

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	connect "connectrpc.com/connect"
+	cloudv1 "github.com/rat-data/rat/platform/gen/cloud/v1"
+	"github.com/rat-data/rat/platform/gen/cloud/v1/cloudv1connect"
 	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
 	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
 	"github.com/rat-data/rat/platform/internal/auth"
@@ -331,15 +333,51 @@ func (r *Registry) CanAccess(ctx context.Context, userID, resourceType, resource
 	return resp.Msg.Allowed, nil
 }
 
-// ── Cloud (backward-compat — requires cloud plugin proto) ──────
+// ── Cloud (calls into cloud plugin via cloudv1 proto) ──────────
 
-// GetCredentials is a stub that returns an error. Cloud plugin support via
-// the core proto requires the cloud plugin to expose GetCredentials as an
-// HTTP route proxied through the plugin proxy, or a dedicated proto field
-// in DescribeResponse. For now, this maintains the CloudProvider interface
-// contract for the api package.
-func (r *Registry) GetCredentials(_ context.Context, _, _ string) (interface{}, error) {
-	return nil, fmt.Errorf("cloud credentials not available via new registry — use plugin proxy")
+// GetCredentials delegates to the cloud plugin's GetCredentials RPC and
+// converts the wire response to a platform domain type.
+//
+// Returns an error when no cloud plugin is loaded, when the plugin call
+// fails, or when the plugin's underlying HTTP client has not been wired
+// (defensive — should not happen in production where Manager.Register
+// always sets HTTPClient).
+//
+// Expiry is converted from Unix seconds to time.Time; a zero expires_at
+// translates to a zero time.Time (no expiry hint), which callers should
+// treat as "refresh on first use".
+func (r *Registry) GetCredentials(ctx context.Context, userID, namespace string) (*domain.CloudCredentials, error) {
+	p := r.ByCapability(CapCloud)
+	if p == nil {
+		return nil, fmt.Errorf("cloud plugin not loaded")
+	}
+	if p.HTTPClient == nil {
+		return nil, fmt.Errorf("cloud plugin %q has no HTTP client wired", p.Name)
+	}
+
+	client := cloudv1connect.NewCloudServiceClient(p.HTTPClient, EnsureScheme(p.Addr))
+	resp, err := client.GetCredentials(ctx, connect.NewRequest(&cloudv1.GetCredentialsRequest{
+		UserId:    userID,
+		Namespace: namespace,
+	}))
+	if err != nil {
+		return nil, fmt.Errorf("cloud plugin %q GetCredentials: %w", p.Name, err)
+	}
+	if resp == nil || resp.Msg == nil {
+		return nil, fmt.Errorf("cloud plugin %q returned empty response", p.Name)
+	}
+
+	var expiry time.Time
+	if resp.Msg.ExpiresAt > 0 {
+		expiry = time.Unix(resp.Msg.ExpiresAt, 0).UTC()
+	}
+	return &domain.CloudCredentials{
+		AccessKey:    resp.Msg.AccessKey,
+		SecretKey:    resp.Msg.SecretKey,
+		SessionToken: resp.Msg.SessionToken,
+		Region:       resp.Msg.Region,
+		Expiry:       expiry,
+	}, nil
 }
 
 // ── Internal helpers ───────────────────────────────────────────
