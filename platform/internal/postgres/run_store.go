@@ -356,13 +356,14 @@ func (s *RunStore) LatestRunPerPipeline(ctx context.Context, pipelineIDs []uuid.
 	return result, rows.Err()
 }
 
-// ListStuckRuns returns runs in pending or running state created before the given cutoff.
+// ListStuckRuns returns runs in running state created before the given cutoff.
+// Stuck PENDING runs use a separate, longer threshold — see ListStuckPendingRuns.
 func (s *RunStore) ListStuckRuns(ctx context.Context, olderThan time.Time) ([]domain.Run, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, pipeline_id, status, trigger, started_at, finished_at,
 		        duration_ms, rows_written, error, logs_s3_path, created_at
 		 FROM runs
-		 WHERE status IN ('pending', 'running') AND created_at < $1`,
+		 WHERE status = 'running' AND created_at < $1`,
 		olderThan)
 	if err != nil {
 		return nil, fmt.Errorf("list stuck runs: %w", err)
@@ -385,6 +386,63 @@ func (s *RunStore) ListStuckRuns(ctx context.Context, olderThan time.Time) ([]do
 			&startedAt, &finishedAt, &durationMs, &rowsWritten,
 			&errText, &logsS3Path, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan stuck run: %w", err)
+		}
+		run := domain.Run{
+			ID: id, PipelineID: pipelineID,
+			Status: domain.RunStatus(status), Trigger: trigger,
+			StartedAt: startedAt, FinishedAt: finishedAt, CreatedAt: createdAt,
+		}
+		if durationMs.Valid {
+			v := int(durationMs.Int32)
+			run.DurationMs = &v
+		}
+		if rowsWritten.Valid {
+			v := rowsWritten.Int64
+			run.RowsWritten = &v
+		}
+		if errText.Valid {
+			run.Error = &errText.String
+		}
+		if logsS3Path.Valid {
+			run.LogsS3Path = &logsS3Path.String
+		}
+		result = append(result, run)
+	}
+	return result, rows.Err()
+}
+
+// ListStuckPendingRuns returns runs stuck in PENDING state (never picked up by
+// the executor) created before the given cutoff. Pending runs use a longer
+// threshold than running runs because a queued run waiting for the executor
+// is a less alarming signal than a run that started but never completed.
+func (s *RunStore) ListStuckPendingRuns(ctx context.Context, olderThan time.Time) ([]domain.Run, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, pipeline_id, status, trigger, started_at, finished_at,
+		        duration_ms, rows_written, error, logs_s3_path, created_at
+		 FROM runs
+		 WHERE status = 'pending' AND created_at < $1`,
+		olderThan)
+	if err != nil {
+		return nil, fmt.Errorf("list stuck pending runs: %w", err)
+	}
+	defer rows.Close()
+
+	var result []domain.Run
+	for rows.Next() {
+		var (
+			id, pipelineID        uuid.UUID
+			status, trigger       string
+			startedAt, finishedAt *time.Time
+			durationMs            pgtype.Int4
+			rowsWritten           pgtype.Int8
+			errText               pgtype.Text
+			logsS3Path            pgtype.Text
+			createdAt             time.Time
+		)
+		if err := rows.Scan(&id, &pipelineID, &status, &trigger,
+			&startedAt, &finishedAt, &durationMs, &rowsWritten,
+			&errText, &logsS3Path, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan stuck pending run: %w", err)
 		}
 		run := domain.Run{
 			ID: id, PipelineID: pipelineID,

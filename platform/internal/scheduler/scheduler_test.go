@@ -206,6 +206,10 @@ func (m *mockRunStore) ListStuckRuns(_ context.Context, _ time.Time) ([]domain.R
 	return nil, nil
 }
 
+func (m *mockRunStore) ListStuckPendingRuns(_ context.Context, _ time.Time) ([]domain.Run, error) {
+	return nil, nil
+}
+
 func (m *mockRunStore) LatestRunPerPipeline(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]*domain.Run, error) {
 	return nil, nil
 }

@@ -1273,9 +1273,11 @@ func TestRunStore_ListStuckRuns(t *testing.T) {
 
 	pipeline := createTestPipeline(t, pStore, "default", "bronze", "stuck-runs")
 
-	// Create a pending run
+	// Create a running run (ListStuckRuns covers RUNNING only;
+	// PENDING runs have a separate longer threshold via ListStuckPendingRuns).
 	run := &domain.Run{PipelineID: pipeline.ID, Status: domain.RunStatusPending, Trigger: "manual"}
 	require.NoError(t, rStore.CreateRun(ctx, run))
+	require.NoError(t, rStore.UpdateRunStatus(ctx, run.ID.String(), domain.RunStatusRunning, nil, nil, nil))
 
 	// Stuck runs older than 1 second in the future — should find our run
 	stuck, err := rStore.ListStuckRuns(ctx, time.Now().Add(1*time.Second))
@@ -1284,10 +1286,10 @@ func TestRunStore_ListStuckRuns(t *testing.T) {
 	for _, r := range stuck {
 		if r.ID == run.ID {
 			found = true
-			assert.Equal(t, domain.RunStatusPending, r.Status)
+			assert.Equal(t, domain.RunStatusRunning, r.Status)
 		}
 	}
-	assert.True(t, found, "pending run should appear in stuck runs list")
+	assert.True(t, found, "running run should appear in stuck runs list")
 }
 
 func TestRunStore_ListStuckRuns_ExcludesTerminal(t *testing.T) {
@@ -1306,6 +1308,68 @@ func TestRunStore_ListStuckRuns_ExcludesTerminal(t *testing.T) {
 	require.NoError(t, err)
 	for _, r := range stuck {
 		assert.NotEqual(t, run.ID, r.ID, "terminal run should not appear in stuck runs")
+	}
+}
+
+func TestRunStore_ListStuckRuns_ExcludesPending(t *testing.T) {
+	pool := testPool(t)
+	pStore := postgres.NewPipelineStore(pool)
+	rStore := postgres.NewRunStore(pool)
+	ctx := context.Background()
+
+	pipeline := createTestPipeline(t, pStore, "default", "bronze", "no-pending")
+
+	// PENDING runs should NOT appear in ListStuckRuns (separate code path).
+	run := &domain.Run{PipelineID: pipeline.ID, Status: domain.RunStatusPending, Trigger: "manual"}
+	require.NoError(t, rStore.CreateRun(ctx, run))
+
+	stuck, err := rStore.ListStuckRuns(ctx, time.Now().Add(1*time.Second))
+	require.NoError(t, err)
+	for _, r := range stuck {
+		assert.NotEqual(t, run.ID, r.ID, "pending run should not appear in stuck (running) runs list")
+	}
+}
+
+func TestRunStore_ListStuckPendingRuns(t *testing.T) {
+	pool := testPool(t)
+	pStore := postgres.NewPipelineStore(pool)
+	rStore := postgres.NewRunStore(pool)
+	ctx := context.Background()
+
+	pipeline := createTestPipeline(t, pStore, "default", "bronze", "stuck-pending")
+
+	run := &domain.Run{PipelineID: pipeline.ID, Status: domain.RunStatusPending, Trigger: "manual"}
+	require.NoError(t, rStore.CreateRun(ctx, run))
+
+	stuck, err := rStore.ListStuckPendingRuns(ctx, time.Now().Add(1*time.Second))
+	require.NoError(t, err)
+	found := false
+	for _, r := range stuck {
+		if r.ID == run.ID {
+			found = true
+			assert.Equal(t, domain.RunStatusPending, r.Status)
+		}
+	}
+	assert.True(t, found, "pending run should appear in stuck pending runs list")
+}
+
+func TestRunStore_ListStuckPendingRuns_ExcludesRunning(t *testing.T) {
+	pool := testPool(t)
+	pStore := postgres.NewPipelineStore(pool)
+	rStore := postgres.NewRunStore(pool)
+	ctx := context.Background()
+
+	pipeline := createTestPipeline(t, pStore, "default", "bronze", "no-running")
+
+	// Running runs should NOT appear in ListStuckPendingRuns.
+	run := &domain.Run{PipelineID: pipeline.ID, Status: domain.RunStatusPending, Trigger: "manual"}
+	require.NoError(t, rStore.CreateRun(ctx, run))
+	require.NoError(t, rStore.UpdateRunStatus(ctx, run.ID.String(), domain.RunStatusRunning, nil, nil, nil))
+
+	stuck, err := rStore.ListStuckPendingRuns(ctx, time.Now().Add(1*time.Second))
+	require.NoError(t, err)
+	for _, r := range stuck {
+		assert.NotEqual(t, run.ID, r.ID, "running run should not appear in stuck pending runs list")
 	}
 }
 

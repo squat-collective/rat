@@ -120,6 +120,10 @@ func (m *memoryRunStore) ListStuckRuns(_ context.Context, _ time.Time) ([]domain
 	return nil, nil
 }
 
+func (m *memoryRunStore) ListStuckPendingRuns(_ context.Context, _ time.Time) ([]domain.Run, error) {
+	return nil, nil
+}
+
 func (m *memoryRunStore) LatestRunPerPipeline(_ context.Context, pipelineIDs []uuid.UUID) (map[uuid.UUID]*domain.Run, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

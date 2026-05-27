@@ -34,6 +34,7 @@ type RunStore interface {
 	DeleteRunsBeyondLimit(ctx context.Context, pipelineID uuid.UUID, keepCount int) (int, error)
 	DeleteRunsOlderThan(ctx context.Context, olderThan time.Time) (int, error)
 	ListStuckRuns(ctx context.Context, olderThan time.Time) ([]domain.Run, error)
+	ListStuckPendingRuns(ctx context.Context, olderThan time.Time) ([]domain.Run, error)
 
 	// LatestRunPerPipeline returns the most recent run for each of the given pipeline IDs
 	// in a single batch query, avoiding N+1 queries when building the lineage graph.

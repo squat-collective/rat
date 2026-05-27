@@ -130,7 +130,19 @@ func (m *mockRunStore) ListStuckRuns(_ context.Context, cutoff time.Time) ([]dom
 	defer m.mu.Unlock()
 	var stuck []domain.Run
 	for _, r := range m.runs {
-		if (r.Status == domain.RunStatusPending || r.Status == domain.RunStatusRunning) && r.CreatedAt.Before(cutoff) {
+		if r.Status == domain.RunStatusRunning && r.CreatedAt.Before(cutoff) {
+			stuck = append(stuck, r)
+		}
+	}
+	return stuck, nil
+}
+
+func (m *mockRunStore) ListStuckPendingRuns(_ context.Context, cutoff time.Time) ([]domain.Run, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var stuck []domain.Run
+	for _, r := range m.runs {
+		if r.Status == domain.RunStatusPending && r.CreatedAt.Before(cutoff) {
 			stuck = append(stuck, r)
 		}
 	}
@@ -348,6 +360,107 @@ func TestFailStuckRuns(t *testing.T) {
 
 	assert.Equal(t, 1, status.RunsFailed)
 	assert.Equal(t, domain.RunStatusFailed, runs.runs[0].Status)
+}
+
+func TestFailStuckPendingRuns_TimesOutOldPending(t *testing.T) {
+	cfg := domain.DefaultRetentionConfig()
+	settings := newMockSettingsStore(cfg)
+	runs := newMockRunStore()
+	pending := domain.Run{
+		ID:        uuid.New(),
+		Status:    domain.RunStatusPending,
+		CreatedAt: time.Now().Add(-25 * time.Hour),
+	}
+	runs.runs = []domain.Run{pending}
+
+	r := New(settings, runs, nil, nil, nil, nil, nil)
+	status := r.tick(context.Background())
+
+	assert.Equal(t, 1, status.RunsFailed, "25h-old PENDING run should be failed")
+	assert.Equal(t, domain.RunStatusFailed, runs.runs[0].Status)
+	require.NotNil(t, runs.runs[0].Error)
+	assert.Contains(t, *runs.runs[0].Error, "PENDING state for >24h")
+}
+
+func TestFailStuckPendingRuns_LeavesYoungPendingAlone(t *testing.T) {
+	cfg := domain.DefaultRetentionConfig()
+	settings := newMockSettingsStore(cfg)
+	runs := newMockRunStore()
+	pending := domain.Run{
+		ID:        uuid.New(),
+		Status:    domain.RunStatusPending,
+		CreatedAt: time.Now().Add(-1 * time.Hour),
+	}
+	runs.runs = []domain.Run{pending}
+
+	r := New(settings, runs, nil, nil, nil, nil, nil)
+	status := r.tick(context.Background())
+
+	assert.Equal(t, 0, status.RunsFailed, "1h-old PENDING run should be left alone")
+	assert.Equal(t, domain.RunStatusPending, runs.runs[0].Status)
+}
+
+func TestCleanupOrphanBranches_NowReapsFormerPendingBranches(t *testing.T) {
+	cfg := domain.DefaultRetentionConfig()
+	settings := newMockSettingsStore(cfg)
+
+	pendingRunID := uuid.New()
+	runs := newMockRunStore()
+	runs.runs = []domain.Run{
+		{
+			ID:        pendingRunID,
+			Status:    domain.RunStatusPending,
+			CreatedAt: time.Now().Add(-25 * time.Hour),
+		},
+	}
+
+	nessie := &mockNessieClient{
+		branches: []NessieBranch{
+			{Name: "main", Hash: "abc"},
+			{Name: "run-" + pendingRunID.String(), Hash: "def"},
+		},
+	}
+
+	r := New(settings, runs, nil, nil, nil, nil, nessie)
+	status := r.tick(context.Background())
+
+	// The 25h-old PENDING run is marked failed in this tick (Task 2b runs
+	// before Task 4), so the branch reaper picks up its branch in the same tick.
+	assert.Equal(t, 1, status.RunsFailed, "stale PENDING should be marked failed")
+	assert.Equal(t, 1, status.BranchesCleaned, "branch of now-failed run should be reaped")
+	assert.Contains(t, nessie.deleted, "run-"+pendingRunID.String())
+	assert.Equal(t, domain.RunStatusFailed, runs.runs[0].Status)
+}
+
+func TestCleanOrphanBranches_PreservesYoungPendingBranch(t *testing.T) {
+	cfg := domain.DefaultRetentionConfig()
+	settings := newMockSettingsStore(cfg)
+
+	pendingRunID := uuid.New()
+	runs := newMockRunStore()
+	// Young PENDING — the orphan-branch reaper should preserve its branch
+	// so a delayed-dispatch executor can still pick the run up.
+	runs.runs = []domain.Run{
+		{
+			ID:        pendingRunID,
+			Status:    domain.RunStatusPending,
+			CreatedAt: time.Now().Add(-2 * time.Hour),
+		},
+	}
+
+	nessie := &mockNessieClient{
+		branches: []NessieBranch{
+			{Name: "main", Hash: "abc"},
+			{Name: "run-" + pendingRunID.String(), Hash: "def"},
+		},
+	}
+
+	r := New(settings, runs, nil, nil, nil, nil, nessie)
+	status := r.tick(context.Background())
+
+	assert.Equal(t, 0, status.RunsFailed)
+	assert.Equal(t, 0, status.BranchesCleaned, "young PENDING branch should be preserved")
+	assert.NotContains(t, nessie.deleted, "run-"+pendingRunID.String())
 }
 
 func TestPurgeSoftDeletedPipelines(t *testing.T) {
