@@ -59,6 +59,18 @@ type PluginPolicyStore interface {
 // per-request handler invocations.
 var pluginConfigWarnLimiter = newWarnLimiter(time.Second)
 
+// pluginRegisterDeprecationLimiter rate-limits the "you hit the legacy
+// /internal/plugins/register path" WARN to one log line per remote-addr
+// per minute. A plugin in a phone-home retry storm on the old SDK could
+// otherwise burst a WARN per attempt; one per minute is enough to make
+// the deprecation visible without drowning the log.
+//
+// Keyed on the request's RemoteAddr rather than the plugin name (which we
+// can't read without consuming the body before delegating). That gives
+// roughly one entry per misbehaving plugin instance, which is what we
+// want for operator awareness.
+var pluginRegisterDeprecationLimiter = newWarnLimiter(time.Minute)
+
 // pluginRegisterLimiter rate-limits phone-home (POST /internal/plugins/register)
 // per plugin name. The /internal listener has no auth (it's bind-localhost),
 // so a runaway plugin process — or a compromised one in a crashloop — could
