@@ -3,11 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/rat-data/rat/platform/internal/domain"
+	"github.com/rat-data/rat/platform/internal/plugins"
 )
 
 // PluginManager defines the interface the API layer uses for plugin lifecycle operations.
@@ -82,6 +84,13 @@ func (srv *Server) HandlePluginRegister(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := srv.PluginManager.Register(r.Context(), body.Name, body.Addr); err != nil {
+		// SSRF guard rejected the address — that's a client problem, not a
+		// server problem, so return 400 with the validator's message so the
+		// caller can see why their address was unacceptable.
+		if errors.Is(err, plugins.ErrAddressRejected) {
+			errorJSON(w, err.Error(), "INVALID_ARGUMENT", http.StatusBadRequest)
+			return
+		}
 		internalError(w, "plugin registration failed", err)
 		return
 	}

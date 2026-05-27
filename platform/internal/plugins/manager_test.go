@@ -132,6 +132,11 @@ func (m *mockPluginService) Describe(
 // startMockPluginServer creates an HTTP test server running a real ConnectRPC
 // PluginService handler, so the Manager's Connect client negotiates content
 // types correctly. Used to test the Manager's Register flow.
+//
+// Callers MUST set PLUGIN_ALLOW_LOOPBACK=true (via t.Setenv) BEFORE
+// constructing the Manager, because httptest.NewServer binds to 127.0.0.1
+// and the SSRF guard rejects loopback by default. The Manager reads the env
+// var once at NewManager(), so the order matters.
 func startMockPluginServer(t *testing.T, caps []string) *httptest.Server {
 	t.Helper()
 
@@ -373,6 +378,9 @@ func (m *memoryPolicyStore) ListPluginPolicies(_ context.Context) ([]domain.Plug
 }
 
 func TestEvaluatePolicies_DenyBlocksRegistration(t *testing.T) {
+	// httptest.NewServer binds to 127.0.0.1; the SSRF guard reads the env var
+	// at NewManager(), so this must be set first.
+	t.Setenv("PLUGIN_ALLOW_LOOPBACK", "true")
 	catalog := newMemoryCatalog()
 	mgr := NewManager(catalog, "pro", nil)
 	mgr.SetPolicies(&memoryPolicyStore{
@@ -395,6 +403,7 @@ func TestEvaluatePolicies_DenyBlocksRegistration(t *testing.T) {
 }
 
 func TestEvaluatePolicies_AllowPermitsRegistration(t *testing.T) {
+	t.Setenv("PLUGIN_ALLOW_LOOPBACK", "true")
 	catalog := newMemoryCatalog()
 	mgr := NewManager(catalog, "pro", nil)
 	mgr.SetPolicies(&memoryPolicyStore{
@@ -415,6 +424,7 @@ func TestEvaluatePolicies_AllowPermitsRegistration(t *testing.T) {
 }
 
 func TestEvaluatePolicies_NoPoliciesDefaultAllow(t *testing.T) {
+	t.Setenv("PLUGIN_ALLOW_LOOPBACK", "true")
 	catalog := newMemoryCatalog()
 	mgr := NewManager(catalog, "pro", nil)
 	mgr.SetPolicies(&memoryPolicyStore{policies: nil})
@@ -428,6 +438,7 @@ func TestEvaluatePolicies_NoPoliciesDefaultAllow(t *testing.T) {
 }
 
 func TestEvaluatePolicies_FirstMatchWins(t *testing.T) {
+	t.Setenv("PLUGIN_ALLOW_LOOPBACK", "true")
 	catalog := newMemoryCatalog()
 	mgr := NewManager(catalog, "pro", nil)
 	mgr.SetPolicies(&memoryPolicyStore{
@@ -449,6 +460,7 @@ func TestEvaluatePolicies_FirstMatchWins(t *testing.T) {
 }
 
 func TestEvaluatePolicies_KindScopedPolicy(t *testing.T) {
+	t.Setenv("PLUGIN_ALLOW_LOOPBACK", "true")
 	catalog := newMemoryCatalog()
 	mgr := NewManager(catalog, "pro", nil)
 	mgr.SetPolicies(&memoryPolicyStore{
@@ -473,7 +485,46 @@ func TestEvaluatePolicies_KindScopedPolicy(t *testing.T) {
 	assert.NotNil(t, mgr.Registry().Get("custom-executor"))
 }
 
+// ── SSRF guard integration ────────────────────────────────────────────────
+
+func TestManager_Register_RejectsLoopback(t *testing.T) {
+	// Ensure the env override is OFF — we want production behaviour.
+	t.Setenv("PLUGIN_ALLOW_LOOPBACK", "false")
+	mgr := NewManager(newMemoryCatalog(), "pro", nil)
+
+	err := mgr.Register(context.Background(), "evil", "http://127.0.0.1:50100")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrAddressRejected)
+	assert.Contains(t, err.Error(), "loopback")
+	assert.Nil(t, mgr.Registry().Get("evil"), "rejected plugin must not be registered")
+}
+
+func TestManager_Register_RejectsAWSMetadata(t *testing.T) {
+	t.Setenv("PLUGIN_ALLOW_LOOPBACK", "false")
+	mgr := NewManager(newMemoryCatalog(), "pro", nil)
+
+	err := mgr.Register(context.Background(), "evil", "http://169.254.169.254/")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrAddressRejected)
+	assert.Contains(t, err.Error(), "link-local")
+	assert.Nil(t, mgr.Registry().Get("evil"))
+}
+
+func TestManager_Register_LoopbackOverride_Permitted(t *testing.T) {
+	// With the override on, a loopback address passes the validator. The
+	// register flow itself still fails at the health check (nothing is
+	// listening), but the failure mode must NOT be ErrAddressRejected — that
+	// proves the validator stepped aside.
+	t.Setenv("PLUGIN_ALLOW_LOOPBACK", "true")
+	mgr := NewManager(newMemoryCatalog(), "pro", nil)
+
+	err := mgr.Register(context.Background(), "dev", "http://127.0.0.1:1")
+	require.Error(t, err, "no listener on :1, register should still fail")
+	assert.NotErrorIs(t, err, ErrAddressRejected, "loopback override should bypass the SSRF guard")
+}
+
 func TestEvaluatePolicies_NilPoliciesStore_NoEnforcement(t *testing.T) {
+	t.Setenv("PLUGIN_ALLOW_LOOPBACK", "true")
 	catalog := newMemoryCatalog()
 	mgr := NewManager(catalog, "pro", nil)
 	// No SetPolicies call — policies is nil.

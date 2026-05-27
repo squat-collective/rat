@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"path"
+	"strings"
 	"time"
 
 	connect "connectrpc.com/connect"
@@ -53,6 +55,12 @@ type Manager struct {
 	httpClient *http.Client
 	edition    string
 
+	// allowLoopback gates the SSRF guard's loopback exception. Read once at
+	// construction from PLUGIN_ALLOW_LOOPBACK so behaviour is stable across the
+	// process lifetime. Default false — only flip on for local-dev plugin
+	// development outside Docker.
+	allowLoopback bool
+
 	// Callbacks fired when well-known capability plugins change.
 	// Set by main.go to re-wire auth middleware, executor, etc. at runtime.
 	OnAuthChanged        func(*Registry)
@@ -61,16 +69,33 @@ type Manager struct {
 }
 
 // NewManager creates a plugin Manager. Pass nil catalog for no persistence (tests).
+//
+// Reads PLUGIN_ALLOW_LOOPBACK once at construction; when set to "true" (or
+// "1"/"yes"), the SSRF guard permits loopback plugin addresses (127.0.0.1,
+// ::1, localhost). Default is false so production deployments reject SSRF
+// attempts against the host loopback.
 func NewManager(catalog PluginCatalog, edition string, httpClient *http.Client) *Manager {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 	return &Manager{
-		registry:   NewRegistry(edition),
-		catalog:    catalog,
-		httpClient: httpClient,
-		edition:    edition,
+		registry:      NewRegistry(edition),
+		catalog:       catalog,
+		httpClient:    httpClient,
+		edition:       edition,
+		allowLoopback: loopbackOverrideFromEnv(),
 	}
+}
+
+// loopbackOverrideFromEnv parses PLUGIN_ALLOW_LOOPBACK once at boot.
+// Truthy values: "true", "1", "yes" (case-insensitive). Everything else, and
+// an unset variable, evaluates to false.
+func loopbackOverrideFromEnv() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("PLUGIN_ALLOW_LOOPBACK"))) {
+	case "true", "1", "yes":
+		return true
+	}
+	return false
 }
 
 // SetCatalog sets the persistent catalog. Called after Postgres is initialized.
@@ -132,6 +157,14 @@ func (m *Manager) LoadFromCatalog(ctx context.Context) error {
 // Register handles the phone-home flow: health-check → describe → persist → register in memory.
 // This is called when a plugin POSTs to /internal/plugins/register.
 func (m *Manager) Register(ctx context.Context, name, addr string) error {
+	// 0. SSRF guard — reject loopback / link-local / multicast / unspecified
+	// BEFORE we make any outbound calls. A hostile registrant must not be able
+	// to point ratd at AWS IMDS (169.254.169.254) or localhost services and
+	// learn anything from the response or the error.
+	if err := ValidateRegistrationAddress(addr, m.allowLoopback); err != nil {
+		return fmt.Errorf("plugin %s address rejected: %w", name, err)
+	}
+
 	addr = EnsureScheme(addr)
 
 	// 1. Health check
