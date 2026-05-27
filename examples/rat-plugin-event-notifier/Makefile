@@ -11,6 +11,7 @@ RATD_INTERNAL_URL ?= http://ratd:8090
 build:
 	cd $(ROOT) && docker build \
 		--build-context platform=platform \
+		--build-context sdk=sdk-go \
 		-f examples/rat-plugin-event-notifier/Dockerfile \
 		-t rat-plugin-event-notifier \
 		examples/rat-plugin-event-notifier
@@ -20,6 +21,7 @@ test:
 	docker run --rm \
 		-v "$(shell pwd)":/work \
 		-v "$(ROOT)/platform":/platform \
+		-v "$(ROOT)/sdk-go":/sdk-go \
 		-w /work golang:1.24-alpine \
 		sh -c "go mod tidy && go test ./..."
 

@@ -13,6 +13,7 @@ import (
 	connect "connectrpc.com/connect"
 	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
 	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
+	sdk "github.com/rat-data/rat/sdk-go"
 )
 
 const pluginVersion = "0.1.0"
@@ -65,27 +66,24 @@ func (h *Handler) HealthCheck(
 func (h *Handler) Describe(
 	_ context.Context, _ *connect.Request[pluginv1.DescribeRequest],
 ) (*connect.Response[pluginv1.DescribeResponse], error) {
-	return connect.NewResponse(&pluginv1.DescribeResponse{
-		Name:               h.name,
-		Version:            pluginVersion,
-		Description:        "Records platform events and optionally forwards them to a webhook",
-		EventSubscriptions: []string{"run_completed", "quality_failed"},
-		Routes: []*pluginv1.RouteDeclaration{
-			{Method: "GET", Path: "/events", Description: "Recent platform events seen by the notifier"},
+	resp := sdk.NewDescribe(h.name, pluginVersion,
+		"Records platform events and optionally forwards them to a webhook").
+		WithRoute("GET", "/events", "Recent platform events seen by the notifier").
+		WithEventSubscriptions("run_completed", "quality_failed").
+		WithPlatformToken(h.platformToken).
+		WithConfigSchema(configSchemaJSON).
+		Build()
+	resp.Ui = &pluginv1.PluginUIDescriptor{
+		BundleUrl:  h.bundleURL,
+		BundleHash: h.bundleHash,
+		Slots: []*pluginv1.UISlotDeclaration{
+			{SlotId: "dashboard-widgets", ComponentName: "EventNotifierWidget", Priority: 50},
 		},
-		ConfigSchemaJson: configSchemaJSON,
-		PlatformToken:    h.platformToken,
-		Ui: &pluginv1.PluginUIDescriptor{
-			BundleUrl:  h.bundleURL,
-			BundleHash: h.bundleHash,
-			Slots: []*pluginv1.UISlotDeclaration{
-				{SlotId: "dashboard-widgets", ComponentName: "EventNotifierWidget", Priority: 50},
-			},
-			NavItems: []*pluginv1.UINavItem{
-				{Label: "Events", Icon: "bell", Path: "/x/event-notifier", Priority: 50},
-			},
+		NavItems: []*pluginv1.UINavItem{
+			{Label: "Events", Icon: "bell", Path: "/x/event-notifier", Priority: 50},
 		},
-	}), nil
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // HandleEvent receives a platform event ratd delivers because this plugin

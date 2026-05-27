@@ -6,7 +6,9 @@
 # Build from the repo root so the platform module is available as a
 # named context:
 #
-#   docker build --build-context platform=platform \
+#   docker build \
+#     --build-context platform=platform \
+#     --build-context sdk=sdk-go \
 #     -f examples/rat-plugin-lineage/Dockerfile \
 #     -t rat-plugin-lineage examples/rat-plugin-lineage
 #
@@ -21,6 +23,7 @@ RUN npm run build
 FROM golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 AS go-builder
 WORKDIR /build
 COPY --from=platform . /platform/
+COPY --from=sdk . /sdk-go/
 COPY . .
 # Pull the built UI bundle into the Go build context so go:embed picks
 # it up. ui/dist/bundle.js is the only file we need at this stage.

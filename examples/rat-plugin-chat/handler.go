@@ -6,6 +6,7 @@ import (
 	connect "connectrpc.com/connect"
 	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
 	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
+	sdk "github.com/rat-data/rat/sdk-go"
 )
 
 const pluginVersion = "0.1.0"
@@ -34,36 +35,26 @@ func (h *Handler) HealthCheck(
 func (h *Handler) Describe(
 	_ context.Context, _ *connect.Request[pluginv1.DescribeRequest],
 ) (*connect.Response[pluginv1.DescribeResponse], error) {
-	return connect.NewResponse(&pluginv1.DescribeResponse{
-		Name:        h.name,
-		Version:     pluginVersion,
-		Description: "AI chat with pluggable MCP connectors — auto-discovers MCP servers wired through the interconnect and lets a model use them as tools",
-		Routes: []*pluginv1.RouteDeclaration{
-			{Method: "GET", Path: "/servers", Description: "Discovered MCP servers + tool catalogs"},
-			{Method: "GET", Path: "/tools", Description: "Flattened, namespaced tool list as the LLM sees it"},
-			{Method: "GET", Path: "/agents", Description: "Available agents (proxy of rat-plugin-agents) for the header picker"},
-			{Method: "GET", Path: "/conversations", Description: "List persisted conversations (most-recent first)"},
-			{Method: "GET", Path: "/conversations/{id}", Description: "Full conversation with messages"},
-			{Method: "POST", Path: "/conversations", Description: "Create an empty conversation"},
-			{Method: "PATCH", Path: "/conversations/{id}", Description: "Rename a conversation"},
-			{Method: "DELETE", Path: "/conversations/{id}", Description: "Delete a conversation"},
-			{Method: "GET", Path: "/conversations/{id}/subagent-runs", Description: "List subagent invocations triggered by this conversation"},
-			{Method: "GET", Path: "/subagent-runs/{id}", Description: "Full event trace of one subagent invocation (for debugging hallucination etc.)"},
-			{Method: "POST", Path: "/conversations/{id}/continue", Description: "Signal a paused chat (at its max_iterations cap) that the user said yes — keep going"},
-			{Method: "POST", Path: "/chat", Description: "Run one chat turn (SSE: conversation / started / assistant_delta / assistant_message / tool_call / tool_result / done). Accepts conversation_id (server creates one if absent) + agent_id."},
-			{Method: "GET", Path: "/config", Description: "Effective chat config"},
-		},
-		ConfigSchemaJson: configSchemaJSON,
-		PlatformToken:    h.platformToken,
-		Ui: &pluginv1.PluginUIDescriptor{
-			BundleUrl:  h.bundleURL,
-			BundleHash: h.bundleHash,
-			NavItems: []*pluginv1.UINavItem{
-				{Label: "Chat", Icon: "message-circle", Path: "/x/chat", Priority: 5},
-			},
-			Routes: []*pluginv1.UIRoute{
-				{Path: "/x/chat", ComponentName: "ChatApp"},
-			},
-		},
-	}), nil
+	resp := sdk.NewDescribe(h.name, pluginVersion,
+		"AI chat with pluggable MCP connectors — auto-discovers MCP servers wired through the interconnect and lets a model use them as tools").
+		WithRoute("GET", "/servers", "Discovered MCP servers + tool catalogs").
+		WithRoute("GET", "/tools", "Flattened, namespaced tool list as the LLM sees it").
+		WithRoute("GET", "/agents", "Available agents (proxy of rat-plugin-agents) for the header picker").
+		WithRoute("GET", "/conversations", "List persisted conversations (most-recent first)").
+		WithRoute("GET", "/conversations/{id}", "Full conversation with messages").
+		WithRoute("POST", "/conversations", "Create an empty conversation").
+		WithRoute("PATCH", "/conversations/{id}", "Rename a conversation").
+		WithRoute("DELETE", "/conversations/{id}", "Delete a conversation").
+		WithRoute("GET", "/conversations/{id}/subagent-runs", "List subagent invocations triggered by this conversation").
+		WithRoute("GET", "/subagent-runs/{id}", "Full event trace of one subagent invocation (for debugging hallucination etc.)").
+		WithRoute("POST", "/conversations/{id}/continue", "Signal a paused chat (at its max_iterations cap) that the user said yes — keep going").
+		WithRoute("POST", "/chat", "Run one chat turn (SSE: conversation / started / assistant_delta / assistant_message / tool_call / tool_result / done). Accepts conversation_id (server creates one if absent) + agent_id.").
+		WithRoute("GET", "/config", "Effective chat config").
+		WithUI(h.bundleURL, h.bundleHash,
+			[]*pluginv1.UINavItem{{Label: "Chat", Icon: "message-circle", Path: "/x/chat", Priority: 5}},
+			[]*pluginv1.UIRoute{{Path: "/x/chat", ComponentName: "ChatApp"}}).
+		WithPlatformToken(h.platformToken).
+		WithConfigSchema(configSchemaJSON).
+		Build()
+	return connect.NewResponse(resp), nil
 }

@@ -7,6 +7,7 @@ RATD_INTERNAL_URL ?= http://ratd:8090
 build:
 	cd $(ROOT) && docker build \
 		--build-context platform=platform \
+		--build-context sdk=sdk-go \
 		-f examples/rat-plugin-lineage/Dockerfile \
 		-t rat-plugin-lineage \
 		examples/rat-plugin-lineage

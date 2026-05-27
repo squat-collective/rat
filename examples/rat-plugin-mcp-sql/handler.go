@@ -6,6 +6,7 @@ import (
 	connect "connectrpc.com/connect"
 	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
 	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
+	sdk "github.com/rat-data/rat/sdk-go"
 )
 
 const pluginVersion = "0.1.0"
@@ -34,14 +35,11 @@ func (h *Handler) HealthCheck(
 func (h *Handler) Describe(
 	_ context.Context, _ *connect.Request[pluginv1.DescribeRequest],
 ) (*connect.Response[pluginv1.DescribeResponse], error) {
-	return connect.NewResponse(&pluginv1.DescribeResponse{
-		Name:        h.name,
-		Version:     pluginVersion,
-		Description: "MCP server exposing read-only SQL access to the RAT warehouse (via ratq + DuckDB)",
-		Routes: []*pluginv1.RouteDeclaration{
-			{Method: "POST", Path: "/mcp", Description: "JSON-RPC 2.0 MCP endpoint (initialize, tools/list, tools/call)"},
-			{Method: "GET", Path: "/health", Description: "Health probe"},
-		},
-		PlatformToken: h.platformToken,
-	}), nil
+	resp := sdk.NewDescribe(h.name, pluginVersion,
+		"MCP server exposing read-only SQL access to the RAT warehouse (via ratq + DuckDB)").
+		WithRoute("POST", "/mcp", "JSON-RPC 2.0 MCP endpoint (initialize, tools/list, tools/call)").
+		WithRoute("GET", "/health", "Health probe").
+		WithPlatformToken(h.platformToken).
+		Build()
+	return connect.NewResponse(resp), nil
 }

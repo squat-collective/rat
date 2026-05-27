@@ -3,7 +3,9 @@
 # The portal UI bundle is build-free.
 #
 # Build from the repo root:
-#   docker build --build-context platform=platform \
+#   docker build \
+#     --build-context platform=platform \
+#     --build-context sdk=sdk-go \
 #     -f examples/rat-plugin-demo-loader/Dockerfile \
 #     -t rat-plugin-demo-loader examples/rat-plugin-demo-loader
 #
@@ -12,6 +14,7 @@ FROM golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064
 WORKDIR /build
 
 COPY --from=platform . /platform/
+COPY --from=sdk . /sdk-go/
 COPY . .
 
 RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /demo-loader .

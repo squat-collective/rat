@@ -6,6 +6,7 @@ import (
 	connect "connectrpc.com/connect"
 	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
 	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
+	sdk "github.com/rat-data/rat/sdk-go"
 )
 
 const pluginVersion = "0.1.0"
@@ -40,20 +41,17 @@ func (h *Handler) HealthCheck(
 func (h *Handler) Describe(
 	_ context.Context, _ *connect.Request[pluginv1.DescribeRequest],
 ) (*connect.Response[pluginv1.DescribeResponse], error) {
-	return connect.NewResponse(&pluginv1.DescribeResponse{
-		Name:        h.name,
-		Version:     pluginVersion,
-		Description: "AI dev assistant — writes, explains and fixes pipeline code in the editor",
-		Routes: []*pluginv1.RouteDeclaration{
-			{Method: "POST", Path: "/chat", Description: "Ask the dev assistant; brokered to the AI provider"},
+	resp := sdk.NewDescribe(h.name, pluginVersion,
+		"AI dev assistant — writes, explains and fixes pipeline code in the editor").
+		WithRoute("POST", "/chat", "Ask the dev assistant; brokered to the AI provider").
+		WithPlatformToken(h.platformToken).
+		Build()
+	resp.Ui = &pluginv1.PluginUIDescriptor{
+		BundleUrl:  h.bundleURL,
+		BundleHash: h.bundleHash,
+		Slots: []*pluginv1.UISlotDeclaration{
+			{SlotId: "pipeline-editor-sidebar", ComponentName: "DevAssistantPanel", Priority: 50},
 		},
-		PlatformToken: h.platformToken,
-		Ui: &pluginv1.PluginUIDescriptor{
-			BundleUrl:  h.bundleURL,
-			BundleHash: h.bundleHash,
-			Slots: []*pluginv1.UISlotDeclaration{
-				{SlotId: "pipeline-editor-sidebar", ComponentName: "DevAssistantPanel", Priority: 50},
-			},
-		},
-	}), nil
+	}
+	return connect.NewResponse(resp), nil
 }

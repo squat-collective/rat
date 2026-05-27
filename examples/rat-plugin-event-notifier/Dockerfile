@@ -4,7 +4,9 @@
 # build context, so the build does not depend on the repo-root .dockerignore.
 # Build from the repo root:
 #
-#   docker build --build-context platform=platform \
+#   docker build \
+#     --build-context platform=platform \
+#     --build-context sdk=sdk-go \
 #     -f examples/rat-plugin-event-notifier/Dockerfile \
 #     -t rat-plugin-event-notifier examples/rat-plugin-event-notifier
 #
@@ -13,8 +15,8 @@ FROM golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064
 WORKDIR /build
 
 # The platform module supplies the generated plugin/v1 ConnectRPC stubs.
-# go.mod's `replace ... => ../../platform` resolves to /platform from /build.
 COPY --from=platform . /platform/
+COPY --from=sdk . /sdk-go/
 COPY . .
 
 RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /event-notifier .

@@ -6,6 +6,7 @@ import (
 	connect "connectrpc.com/connect"
 	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
 	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
+	sdk "github.com/rat-data/rat/sdk-go"
 )
 
 const pluginVersion = "0.1.0"
@@ -34,29 +35,19 @@ func (h *Handler) HealthCheck(
 func (h *Handler) Describe(
 	_ context.Context, _ *connect.Request[pluginv1.DescribeRequest],
 ) (*connect.Response[pluginv1.DescribeResponse], error) {
-	return connect.NewResponse(&pluginv1.DescribeResponse{
-		Name:        h.name,
-		Version:     pluginVersion,
-		Description: "Agent registry — named personas (system prompt + tool whitelist + model overrides) the chat plugin can switch between",
-		Routes: []*pluginv1.RouteDeclaration{
-			{Method: "GET", Path: "/agents", Description: "List all agents"},
-			{Method: "GET", Path: "/agents/{id}", Description: "Get one agent"},
-			{Method: "POST", Path: "/agents", Description: "Create an agent"},
-			{Method: "PUT", Path: "/agents/{id}", Description: "Update an agent"},
-			{Method: "DELETE", Path: "/agents/{id}", Description: "Delete an agent"},
-			{Method: "POST", Path: "/agents/seed", Description: "Populate defaults if the catalog is empty"},
-		},
-		ConfigSchemaJson: configSchemaJSON,
-		PlatformToken:    h.platformToken,
-		Ui: &pluginv1.PluginUIDescriptor{
-			BundleUrl:  h.bundleURL,
-			BundleHash: h.bundleHash,
-			NavItems: []*pluginv1.UINavItem{
-				{Label: "Agents", Icon: "users", Path: "/x/agents", Priority: 6},
-			},
-			Routes: []*pluginv1.UIRoute{
-				{Path: "/x/agents", ComponentName: "AgentsApp"},
-			},
-		},
-	}), nil
+	resp := sdk.NewDescribe(h.name, pluginVersion,
+		"Agent registry — named personas (system prompt + tool whitelist + model overrides) the chat plugin can switch between").
+		WithRoute("GET", "/agents", "List all agents").
+		WithRoute("GET", "/agents/{id}", "Get one agent").
+		WithRoute("POST", "/agents", "Create an agent").
+		WithRoute("PUT", "/agents/{id}", "Update an agent").
+		WithRoute("DELETE", "/agents/{id}", "Delete an agent").
+		WithRoute("POST", "/agents/seed", "Populate defaults if the catalog is empty").
+		WithUI(h.bundleURL, h.bundleHash,
+			[]*pluginv1.UINavItem{{Label: "Agents", Icon: "users", Path: "/x/agents", Priority: 6}},
+			[]*pluginv1.UIRoute{{Path: "/x/agents", ComponentName: "AgentsApp"}}).
+		WithPlatformToken(h.platformToken).
+		WithConfigSchema(configSchemaJSON).
+		Build()
+	return connect.NewResponse(resp), nil
 }

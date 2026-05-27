@@ -6,6 +6,7 @@ import (
 	connect "connectrpc.com/connect"
 	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
 	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
+	sdk "github.com/rat-data/rat/sdk-go"
 )
 
 const pluginVersion = "0.1.0"
@@ -42,20 +43,17 @@ func (h *Handler) HealthCheck(
 func (h *Handler) Describe(
 	_ context.Context, _ *connect.Request[pluginv1.DescribeRequest],
 ) (*connect.Response[pluginv1.DescribeResponse], error) {
-	return connect.NewResponse(&pluginv1.DescribeResponse{
-		Name:        h.name,
-		Version:     pluginVersion,
-		Description: "AI docs assistant — suggests a table description and per-column descriptions",
-		Routes: []*pluginv1.RouteDeclaration{
-			{Method: "POST", Path: "/suggest", Description: "Generate {description, column_descriptions} for a table"},
+	resp := sdk.NewDescribe(h.name, pluginVersion,
+		"AI docs assistant — suggests a table description and per-column descriptions").
+		WithRoute("POST", "/suggest", "Generate {description, column_descriptions} for a table").
+		WithPlatformToken(h.platformToken).
+		Build()
+	resp.Ui = &pluginv1.PluginUIDescriptor{
+		BundleUrl:  h.bundleURL,
+		BundleHash: h.bundleHash,
+		Slots: []*pluginv1.UISlotDeclaration{
+			{SlotId: "table-actions", ComponentName: "DocsAssistantButton", Priority: 50},
 		},
-		PlatformToken: h.platformToken,
-		Ui: &pluginv1.PluginUIDescriptor{
-			BundleUrl:  h.bundleURL,
-			BundleHash: h.bundleHash,
-			Slots: []*pluginv1.UISlotDeclaration{
-				{SlotId: "table-actions", ComponentName: "DocsAssistantButton", Priority: 50},
-			},
-		},
-	}), nil
+	}
+	return connect.NewResponse(resp), nil
 }

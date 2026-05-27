@@ -6,7 +6,9 @@
 # The platform module (a local `replace` dependency) is supplied as a NAMED
 # build context. Build from the repo root:
 #
-#   docker build --build-context platform=platform \
+#   docker build \
+#     --build-context platform=platform \
+#     --build-context sdk=sdk-go \
 #     -f examples/rat-plugin-ai-provider/Dockerfile \
 #     -t rat-plugin-ai-provider examples/rat-plugin-ai-provider
 #
@@ -16,6 +18,7 @@ WORKDIR /build
 
 # The platform module supplies the generated plugin/v1 ConnectRPC stubs.
 COPY --from=platform . /platform/
+COPY --from=sdk . /sdk-go/
 COPY . .
 
 RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /ai-provider .
