@@ -86,6 +86,92 @@ func TestMountStandardPluginRoutes_EmptyTokenLeavesRESTOpen(t *testing.T) {
 	}
 }
 
+func TestMountStandardPluginRoutes_NilRestMux_NoPanic(t *testing.T) {
+	mux := http.NewServeMux()
+
+	// Should not panic when restMux is nil — defensive normalization
+	// replaces it with http.NotFoundHandler() before the TokenAuth wrap.
+	var handler http.Handler
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("MountStandardPluginRoutes panicked with nil restMux: %v", r)
+			}
+		}()
+		handler = MountStandardPluginRoutes(mux, &stubPluginHandler{}, []byte("x"), "secret-token", nil)
+	}()
+
+	// The bundle endpoint should still work — that path doesn't touch restMux.
+	req := httptest.NewRequest(http.MethodGet, "/bundle.js", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/bundle.js should remain 200 in no-REST mode, got %d", rec.Code)
+	}
+
+	// An authenticated REST call should hit the NotFoundHandler — 404, not panic.
+	req = httptest.NewRequest(http.MethodGet, "/api/anything", nil)
+	req.Header.Set("X-RAT-Plugin-Token", "secret-token")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("authenticated REST call with nil restMux should be 404, got %d", rec.Code)
+	}
+
+	// An unauthenticated REST call should still be rejected at the TokenAuth layer (401).
+	req = httptest.NewRequest(http.MethodGet, "/api/anything", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated REST call with nil restMux should be 401, got %d", rec.Code)
+	}
+}
+
+func TestMountStandardPluginRoutes_EmptyBundleJS_NoBundleEndpoint(t *testing.T) {
+	mux := http.NewServeMux()
+	rest := http.NewServeMux()
+	rest.HandleFunc("/api/data", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("data")) })
+
+	// Empty bundleJS — no UI; the /bundle.js endpoint should not be mounted.
+	handler := MountStandardPluginRoutes(mux, &stubPluginHandler{}, nil, "secret-token", rest)
+
+	// /bundle.js should NOT be served by the bundle handler. Since "/" is
+	// mounted with TokenAuth(rest) and rest has no handler for /bundle.js,
+	// an unauthenticated request is rejected at the TokenAuth allowlist
+	// boundary (which still allowlists /bundle.js, sending it through
+	// rest, which 404s).
+	req := httptest.NewRequest(http.MethodGet, "/bundle.js", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code == http.StatusOK && rec.Header().Get("Content-Type") == "application/javascript" {
+		t.Fatalf("/bundle.js should NOT be mounted when bundleJS is empty, got %d Content-Type=%q",
+			rec.Code, rec.Header().Get("Content-Type"))
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("/bundle.js without bundle should fall through to 404, got %d", rec.Code)
+	}
+
+	// Also verify the empty-slice form of "no bundle" is handled identically.
+	mux2 := http.NewServeMux()
+	rest2 := http.NewServeMux()
+	handler2 := MountStandardPluginRoutes(mux2, &stubPluginHandler{}, []byte{}, "secret-token", rest2)
+	req = httptest.NewRequest(http.MethodGet, "/bundle.js", nil)
+	rec = httptest.NewRecorder()
+	handler2.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("/bundle.js with []byte{} bundle should be 404, got %d", rec.Code)
+	}
+
+	// REST surface still works with a token.
+	req = httptest.NewRequest(http.MethodGet, "/api/data", nil)
+	req.Header.Set("X-RAT-Plugin-Token", "secret-token")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("REST path should still be 200 with token, got %d", rec.Code)
+	}
+}
+
 func TestH2CHandler_WrapsHandler(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("served")) })
 	wrapped := H2CHandler(inner)

@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
@@ -26,6 +27,14 @@ import (
 //
 // This collapses the ~30 LOC of mux setup duplicated across every
 // example plugin.
+//
+// Defensive normalization:
+//   - A nil restMux is replaced with http.NotFoundHandler() so the
+//     TokenAuth wrap (and its nil dereference) never panics. This is
+//     the "no REST" mode — the plugin still gets bundle + ConnectRPC +
+//     a TokenAuth-protected 404 for everything else.
+//   - An empty bundleJS skips the /bundle.js mount entirely. Plugins
+//     without a UI shouldn't carry a zero-byte bundle endpoint.
 func MountStandardPluginRoutes(
 	mux *http.ServeMux,
 	pluginHandler pluginv1connect.PluginServiceHandler,
@@ -35,10 +44,16 @@ func MountStandardPluginRoutes(
 ) http.Handler {
 	pluginPath, pluginHTTP := pluginv1connect.NewPluginServiceHandler(pluginHandler)
 	mux.Handle(pluginPath, pluginHTTP)
-	mux.HandleFunc("/bundle.js", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/javascript")
-		_, _ = w.Write(bundleJS)
-	})
+	if len(bundleJS) > 0 {
+		mux.HandleFunc("/bundle.js", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/javascript")
+			_, _ = w.Write(bundleJS)
+		})
+	}
+	if restMux == nil {
+		slog.Warn("MountStandardPluginRoutes: restMux is nil; mounting NotFoundHandler (no-REST mode)")
+		restMux = http.NotFoundHandler()
+	}
 	mux.Handle("/", TokenAuth(platformToken, restMux))
 	return mux
 }
