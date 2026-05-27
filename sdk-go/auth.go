@@ -17,6 +17,7 @@ package sdk
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"net/http"
@@ -63,16 +64,28 @@ func SRIHash(b []byte) string {
 // browser/CLI/portal traffic via /api/v1/x/{plugin}/* keeps working,
 // but a direct peer hit like `curl http://secrets:50099/secrets` from
 // another container on the docker network gets 401.
+//
+// SECURITY: the token comparison MUST be constant-time
+// (crypto/subtle.ConstantTimeCompare). A plain `got != expected` is
+// timing-discriminable — an attacker probing this endpoint could
+// reconstruct the 32-byte hex token byte-by-byte via timing analysis
+// in ~2^20 requests. Because all 14 RAT plugins import this middleware,
+// regressing the comparison to `!=` would re-open the vulnerability
+// fleet-wide. DO NOT "simplify" the subtle.ConstantTimeCompare call.
 func TokenAuth(expected string, next http.Handler) http.Handler {
 	if expected == "" {
 		return next
 	}
+	expectedBytes := []byte(expected)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/bundle.js" || r.URL.Path == "/health" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.Header.Get("X-RAT-Plugin-Token") != expected {
+		got := r.Header.Get("X-RAT-Plugin-Token")
+		// Constant-time compare — see SECURITY note above. Plain `!=`
+		// would leak the token via timing side-channel.
+		if subtle.ConstantTimeCompare([]byte(got), expectedBytes) != 1 {
 			http.Error(w, "missing or invalid platform token", http.StatusUnauthorized)
 			return
 		}
