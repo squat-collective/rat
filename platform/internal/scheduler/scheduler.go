@@ -104,6 +104,15 @@ func (s *Scheduler) Stop() {
 // take 5+ minutes — by which point the next tick was already overdue).
 const maxConcurrentScheduleDispatches = 10
 
+// submitTimeout bounds how long a single executor.Submit RPC may block
+// before the scheduler gives up and frees its errgroup slot. Without
+// this a hung runner (network wedged, deadlocked goroutine, etc.) would
+// occupy all 10 slots indefinitely and the next tick's submissions
+// would queue unbounded. On timeout we log a WARN, advance the schedule
+// (so the SAME slot doesn't re-fire next tick), and let the run stay
+// PENDING — the reaper's stuckPendingTimeout (24h) eventually fails it.
+const submitTimeout = 10 * time.Second
+
 // dueDispatch carries the data needed to fire a single schedule. We
 // build the list synchronously (preserving the existing sequential reads
 // of stores) and then fan out the actual executor.Submit calls.
@@ -214,7 +223,10 @@ func (s *Scheduler) tick(ctx context.Context) {
 // errors are logged but the schedule still advances (the run row was
 // already created in the planning phase).
 func (s *Scheduler) dispatchDue(ctx context.Context, now time.Time, dispatches []dueDispatch) {
-	g, gctx := errgroup.WithContext(ctx)
+	// Plain errgroup (NOT WithContext) — we don't want a single
+	// dispatch's timeout error to cancel sibling Submit RPCs via a
+	// shared context. Each dispatchOne builds its own bounded ctx.
+	var g errgroup.Group
 	g.SetLimit(maxConcurrentScheduleDispatches)
 
 	var mu sync.Mutex // serialises slog calls only — not required for correctness, just neater output.
@@ -222,7 +234,7 @@ func (s *Scheduler) dispatchDue(ctx context.Context, now time.Time, dispatches [
 	for _, d := range dispatches {
 		d := d // capture for closure
 		g.Go(func() error {
-			return s.dispatchOne(gctx, now, d, &mu)
+			return s.dispatchOne(ctx, now, d, &mu)
 		})
 	}
 
@@ -238,7 +250,9 @@ func (s *Scheduler) dispatchDue(ctx context.Context, now time.Time, dispatches [
 // the schedule's next_run_at accordingly. Always returns nil — the
 // errgroup is only used for concurrency control, not error propagation.
 func (s *Scheduler) dispatchOne(ctx context.Context, now time.Time, d dueDispatch, mu *sync.Mutex) error {
-	if err := s.executor.Submit(ctx, d.run, d.pipeline); err != nil {
+	submitCtx, cancel := context.WithTimeout(ctx, submitTimeout)
+	defer cancel()
+	if err := s.executor.Submit(submitCtx, d.run, d.pipeline); err != nil {
 		// If the runner is at capacity, don't advance the schedule —
 		// the next tick will retry. The run stays in pending state.
 		if errors.Is(err, executor.ErrRunnerBusy) {
@@ -248,9 +262,21 @@ func (s *Scheduler) dispatchOne(ctx context.Context, now time.Time, d dueDispatc
 			mu.Unlock()
 			return nil
 		}
-		mu.Lock()
-		slog.Error("scheduler: executor submit failed", "run_id", d.run.ID, "error", err)
-		mu.Unlock()
+		// Per-submit timeout — log loud and advance the schedule so the
+		// same slot doesn't re-fire next tick (run stays PENDING; reaper
+		// will catch it after stuckPendingTimeout).
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(submitCtx.Err(), context.DeadlineExceeded) {
+			mu.Lock()
+			slog.Warn("scheduler: executor submit timed out, advancing schedule",
+				"schedule_id", d.schedule.ID, "run_id", d.run.ID,
+				"pipeline_id", d.schedule.PipelineID, "timeout_secs", int(submitTimeout/time.Second))
+			mu.Unlock()
+			// fall through to schedule advance below
+		} else {
+			mu.Lock()
+			slog.Error("scheduler: executor submit failed", "run_id", d.run.ID, "error", err)
+			mu.Unlock()
+		}
 		// Fall through — run was created, just not dispatched. The
 		// schedule still advances so we don't fire the same slot again
 		// next tick.

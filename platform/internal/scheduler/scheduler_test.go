@@ -813,6 +813,42 @@ func TestScheduler_DispatchDue_AllSchedulesAttempted(t *testing.T) {
 		"every due schedule should have produced a run row in the planning phase")
 }
 
+// TestScheduler_DispatchOne_TimeoutAfter10Sec proves the per-submission
+// watchdog cancels a hung executor.Submit after submitTimeout (10s)
+// rather than letting it occupy an errgroup slot indefinitely. The
+// schedule still advances on timeout so the same slot doesn't re-fire
+// next tick — the run stays PENDING for the reaper to age out.
+func TestScheduler_DispatchOne_TimeoutAfter10Sec(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping 10s timeout test in -short mode")
+	}
+	schedStore, pipelineStore, runStore := makeDueSchedules(t, 1)
+
+	exec := newMockExecutor()
+	// Block until ctx is cancelled — simulates a hung runner that
+	// respects RPC deadlines (which gRPC's context machinery does).
+	exec.submitFn = func(ctx context.Context, _ *domain.Run, _ *domain.Pipeline) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	sched := New(schedStore, pipelineStore, runStore, exec, 30*time.Second)
+
+	start := time.Now()
+	sched.tick(context.Background())
+	elapsed := time.Since(start)
+
+	// Allow a generous window: ~submitTimeout ± 2s for CI variance.
+	if elapsed < 9*time.Second || elapsed > 15*time.Second {
+		t.Fatalf("tick should have returned in ~%s after the submit timeout fired, got %s",
+			submitTimeout, elapsed)
+	}
+
+	// The schedule MUST have been advanced even on timeout — otherwise
+	// the next tick would re-fire the same slot indefinitely.
+	assert.NotEmpty(t, schedStore.updated, "schedule must advance after a timed-out submit")
+}
+
 // TestScheduler_DispatchDue_TickLatency is the regression test for the
 // original bug: 100 schedules each taking 100ms to submit must finish
 // in well under the old serial-with-3s-stagger time (which would have
