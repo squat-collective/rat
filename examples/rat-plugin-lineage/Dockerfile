@@ -11,14 +11,14 @@
 #     -t rat-plugin-lineage examples/rat-plugin-lineage
 #
 # Or `make build` from this directory.
-FROM node:20-alpine AS ui-builder
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS ui-builder
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json* ./
 RUN npm install --no-audit --no-fund --silent || npm install --no-audit --no-fund
 COPY ui/ ./
 RUN npm run build
 
-FROM golang:1.24-alpine AS go-builder
+FROM golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 AS go-builder
 WORKDIR /build
 COPY --from=platform . /platform/
 COPY . .
@@ -27,7 +27,7 @@ COPY . .
 COPY --from=ui-builder /ui/dist/bundle.js ./ui/dist/bundle.js
 RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /lineage .
 
-FROM alpine:3.21
+FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
 RUN addgroup -S rat && adduser -S -G rat rat
 COPY --from=go-builder /lineage /lineage
 USER rat

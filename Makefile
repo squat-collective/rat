@@ -58,6 +58,12 @@ build: ## Build all Docker images
 rebuild: ## Rebuild all Docker images (no cache)
 	$(COMPOSE) build --no-cache
 
+# Re-pin base images to current digests. Run when a base image
+# CVE patch needs to flow into builds. Edit + commit the result.
+.PHONY: refresh-base-image-digests
+refresh-base-image-digests: ## Re-pin base images in Dockerfiles to current sha256 digests
+	@bash scripts/refresh-base-image-digests.sh
+
 logs: ## Tail all service logs
 	$(COMPOSE) logs -f
 
