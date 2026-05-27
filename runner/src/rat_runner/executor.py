@@ -40,6 +40,7 @@ from rat_runner.iceberg import (
     snapshot_iceberg,
     write_iceberg,
 )
+from rat_runner.json_log import clear_run_context, set_run_context
 from rat_runner.log import RunLogger, run_log_extras
 from rat_runner.maintenance import run_maintenance
 from rat_runner.models import MergeStrategy, PipelineConfig, QualityTestResult, RunState, RunStatus
@@ -647,6 +648,16 @@ def execute_pipeline(
     start = time.monotonic()
     run.status = RunStatus.RUNNING
 
+    # Bind the run extras into the thread-local context so subsystem modules
+    # (iceberg, nessie, maintenance, plugin_registry, state_dir) whose
+    # module-level loggers don't have a RunState in scope still emit lines
+    # tagged with run_id/request_id/namespace/layer/pipeline_name. We set
+    # the context INSIDE the worker thread (not at submit time) because
+    # ThreadPoolExecutor.submit does not copy the dispatcher's contextvars
+    # to the new thread unless wrapped with copy_context().run, and doing
+    # it here keeps every code path consistent.
+    _context_token = set_run_context(run_log_extras(run))
+
     # Per-run env overrides: apply to S3Config instead of os.environ
     # (os.environ is process-global and thread-unsafe for concurrent runs)
     if run.env:
@@ -732,3 +743,9 @@ def execute_pipeline(
         elapsed_ms = int((time.monotonic() - start) * 1000)
         run.duration_ms = elapsed_ms
         log.info(f"Duration: {elapsed_ms}ms")
+
+        # Restore the prior context binding — important when the same worker
+        # thread is recycled for a different run by ThreadPoolExecutor, so the
+        # next run doesn't inherit the previous run's extras until it binds
+        # its own.
+        clear_run_context(_context_token)

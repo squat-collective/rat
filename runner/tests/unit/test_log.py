@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
 
-from rat_runner.json_log import JSONFormatter, configure_json_logging
+from rat_runner.json_log import (
+    JSONFormatter,
+    clear_run_context,
+    configure_json_logging,
+    set_run_context,
+)
 from rat_runner.log import RunLogger, run_log_extras
 from rat_runner.models import RunState
 
@@ -258,3 +264,117 @@ class TestConfigureJSONLogging:
         assert parsed["run_id"] == "r-1"
         assert parsed["request_id"] == "q-9"
         assert parsed["namespace"] == "n"
+
+
+class TestRunContextVar:
+    """Tests for the contextvars-bound run context that lets subsystem loggers
+    (iceberg, nessie, maintenance, …) inherit run extras without having a
+    RunState in scope."""
+
+    def _capture(self, logger_name: str, msg: str, extras: dict | None = None) -> dict:
+        """Drive a real LogRecord through JSONFormatter and parse the line.
+
+        Important: we route through the actual ``logging`` module (not just
+        ``JSONFormatter().format(record)``) so the extras-attached attributes
+        land on the record exactly the way stdlib does it.
+        """
+        buffer = io.StringIO()
+        handler = logging.StreamHandler(buffer)
+        handler.setFormatter(JSONFormatter())
+        target = logging.getLogger(logger_name)
+        # Use a dedicated logger and isolate it from any root handlers so the
+        # test is independent of root logger state.
+        target.handlers = [handler]
+        target.setLevel(logging.DEBUG)
+        target.propagate = False
+        try:
+            if extras is not None:
+                target.info(msg, extra=extras)
+            else:
+                target.info(msg)
+        finally:
+            target.handlers = []
+            target.propagate = True
+        return json.loads(buffer.getvalue().strip())
+
+    def test_logs_inherit_set_run_context(self):
+        """After binding context, a log from ANY module gets the extras —
+        even if the caller forgets to pass extra= explicitly."""
+        token = set_run_context(
+            {
+                "run_id": "abc",
+                "request_id": "req-1",
+                "namespace": "underground",
+                "layer": "bronze",
+                "pipeline_name": "attendees",
+            }
+        )
+        try:
+            # Use a module name that lives "outside" rat_runner.log — this
+            # simulates iceberg.py / nessie.py emitting a raw line with no
+            # per-call extras.
+            out = self._capture("rat_runner.iceberg", "wrote partition")
+        finally:
+            clear_run_context(token)
+
+        assert out["run_id"] == "abc"
+        assert out["request_id"] == "req-1"
+        assert out["namespace"] == "underground"
+        assert out["layer"] == "bronze"
+        assert out["pipeline_name"] == "attendees"
+        assert out["logger"] == "rat_runner.iceberg"
+        assert out["msg"] == "wrote partition"
+
+    def test_per_call_extras_override_context(self):
+        """Per-call extras must win on conflict — that's how a retry block can
+        emit a line with the retry's run_id even while the outer context still
+        holds the original."""
+        token = set_run_context({"run_id": "abc", "namespace": "ns-a"})
+        try:
+            out = self._capture(
+                "rat_runner.test",
+                "retrying",
+                extras={"run_id": "xyz"},
+            )
+        finally:
+            clear_run_context(token)
+
+        # Per-call wins on the conflicting key…
+        assert out["run_id"] == "xyz"
+        # …but non-conflicting context-bound keys are still present.
+        assert out["namespace"] == "ns-a"
+
+    def test_clear_run_context_drops_extras(self):
+        """After clearing, subsequent logs must not include the previously
+        bound extras — otherwise the next run on the same thread would
+        inherit stale data."""
+        token = set_run_context({"run_id": "abc"})
+        clear_run_context(token)
+
+        out = self._capture("rat_runner.test", "after clear")
+        assert "run_id" not in out
+
+    def test_contextvar_isolated_across_async_tasks(self):
+        """Two concurrent asyncio tasks each set their own context; neither
+        sees the other's bound extras. ContextVars are per-task by default —
+        this guards against accidental cross-task leakage if the implementation
+        ever switches to a module-level dict."""
+        async def task(run_id: str, results: dict[str, str]) -> None:
+            token = set_run_context({"run_id": run_id})
+            try:
+                # Yield to the scheduler so both tasks have their context set
+                # concurrently — without this the awaits would serialize and
+                # the test wouldn't actually prove isolation.
+                await asyncio.sleep(0)
+                out = self._capture("rat_runner.test", f"from {run_id}")
+                results[run_id] = out.get("run_id", "<missing>")
+            finally:
+                clear_run_context(token)
+
+        async def main() -> dict[str, str]:
+            results: dict[str, str] = {}
+            await asyncio.gather(task("alpha", results), task("beta", results))
+            return results
+
+        results = asyncio.run(main())
+        assert results == {"alpha": "alpha", "beta": "beta"}

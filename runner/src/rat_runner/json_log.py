@@ -18,9 +18,49 @@ as a top-level JSON field on the resulting line — that's how we propagate the
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 from datetime import datetime, timezone
+
+# Per-thread / per-asyncio-task run context — merged into every log emit by
+# JSONFormatter so subsystem modules (iceberg, nessie, maintenance, …) whose
+# module-level loggers don't have a RunState in scope still produce log lines
+# tagged with run_id/request_id/namespace/layer/pipeline_name.
+#
+# This is the same pattern used by sentry/datadog for request-scoped context:
+# the executor binds a snapshot of run_log_extras at the top of each pipeline
+# run; per-call extras passed to ``logger.log(..., extra=…)`` take precedence
+# on conflict because they're applied AFTER the context dict in ``format``.
+#
+# Concurrency note: contextvars are per-thread by default. The runner's
+# ThreadPoolExecutor wrapper sets the context INSIDE the worker thread (at the
+# top of execute_pipeline) rather than relying on copy_context propagation,
+# so each pipeline thread builds its own isolated context regardless of
+# whatever the dispatcher thread had set.
+_run_context: contextvars.ContextVar[dict[str, object]] = contextvars.ContextVar(
+    "rat_run_ctx", default={}
+)
+
+
+def set_run_context(extras: dict[str, object]) -> contextvars.Token[dict[str, object]]:
+    """Bind run-scoped extras into the current thread/task context.
+
+    Returns a token that ``clear_run_context`` uses to restore the prior value
+    — that's how nested binds (e.g. retries) compose without leaking state
+    back to the dispatcher when the outer scope exits.
+    """
+    return _run_context.set(dict(extras))
+
+
+def clear_run_context(token: contextvars.Token[dict[str, object]]) -> None:
+    """Restore the prior run-context binding using the token from set_run_context."""
+    _run_context.reset(token)
+
+
+def current_run_context() -> dict[str, object]:
+    """Return the current run-context snapshot. Public for tests/diagnostics."""
+    return dict(_run_context.get())
 
 # Standard LogRecord attributes that should NOT be copied into the JSON payload
 # as user "extras" — they're either already represented (level, time, msg) or
@@ -89,9 +129,19 @@ class JSONFormatter(logging.Formatter):
             "logger": record.name,
         }
 
+        # Merge the per-thread / per-task run context FIRST so per-call
+        # ``extra={...}`` keys can override on conflict (loop below). This is
+        # how subsystem loggers (iceberg, nessie, maintenance, …) that don't
+        # have a RunState in scope still emit lines tagged with run_id et al.
+        context_extras = _run_context.get()
+        if context_extras:
+            payload.update(context_extras)
+
         # Copy any extras attached via ``extra={...}`` into the top-level dict.
         # We intentionally skip the stdlib's reserved attributes so we don't
-        # leak process/thread/path noise into structured output.
+        # leak process/thread/path noise into structured output. Per-call
+        # extras intentionally win over the context-bound ones (e.g. a retry
+        # block can override the bound ``run_id`` for a single line).
         for key, value in record.__dict__.items():
             if key in _RESERVED_RECORD_ATTRS or key.startswith("_"):
                 continue
