@@ -151,6 +151,12 @@ services:
       # S3 — same creds as ratd, for pipeline writes to Iceberg/Parquet
       <<: *s3-credentials
       NESSIE_URL: http://nessie:19120/api/v1
+      # Per-quality-test timeout. A runaway test (infinite loop, catastrophic
+      # cartesian join) would otherwise hang the runner thread; the watchdog
+      # calls conn.interrupt() once the deadline passes and the test is
+      # recorded as failed so the rest of the suite continues. Override via
+      # QUALITY_TEST_TIMEOUT_SECS in your .env (default: 60).
+      QUALITY_TEST_TIMEOUT_SECS: "${QUALITY_TEST_TIMEOUT_SECS:-60}"
     depends_on:
       minio: { condition: service_healthy }
       nessie: { condition: service_healthy }

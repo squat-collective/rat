@@ -14,6 +14,7 @@ from rat_runner.config import (
     read_s3_text,
     read_s3_text_version,
 )
+from rat_runner.engine import QueryTimeoutError
 from rat_runner.models import QualityTestResult, RunState
 from rat_runner.templating import compile_sql
 
@@ -127,13 +128,15 @@ def run_quality_test(
     tags = _parse_tags(sql)
     remediation = _parse_remediation(sql)
 
+    timeout_seconds = engine._duckdb_config.quality_test_timeout_seconds
+
     compiled = ""
     start = time.monotonic()
     try:
         compiled = compile_sql(sql, namespace, layer, name, s3_config, nessie_config)
         log.debug(f"Quality test '{test_name}' SQL:\n{compiled}")
 
-        result = engine.query_arrow(compiled)
+        result = engine.query_arrow(compiled, timeout_seconds=timeout_seconds)
         row_count = len(result)
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
@@ -162,6 +165,26 @@ def run_quality_test(
             description=description,
             compiled_sql=compiled,
             sample_rows=sample,
+            tags=tags,
+            remediation=remediation,
+        )
+    except QueryTimeoutError:
+        # Watchdog fired — record a deliberate failure (NOT an error) so the
+        # rest of the quality suite keeps executing. A runaway test should be
+        # surfaced to the user, not crash the run.
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        msg = f"quality test exceeded {timeout_seconds}s timeout"
+        log.error(f"Quality test '{test_name}': {msg}")
+        return QualityTestResult(
+            test_name=test_name,
+            test_file=key,
+            severity=severity,
+            status="fail",
+            row_count=0,
+            message=msg,
+            duration_ms=elapsed_ms,
+            description=description,
+            compiled_sql=compiled,
             tags=tags,
             remediation=remediation,
         )

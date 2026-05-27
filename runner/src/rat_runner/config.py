@@ -129,11 +129,18 @@ class DuckDBConfig:
     ignores it — pipeline SQL is plugin-author-controlled rather than
     user-facing — but the field is mirrored here so the two configs do
     not drift.
+
+    `quality_test_timeout_seconds` is runner-only. Quality test SQL is
+    author-written but can still hang the run thread (infinite recursion,
+    catastrophic cartesian join, etc.). The runner's engine.query_arrow()
+    consumes this field as the per-test deadline via the same watchdog
+    pattern. Tunable via QUALITY_TEST_TIMEOUT_SECS (default 60s).
     """
 
     memory_limit: str = "2GB"
     threads: int = 4
     query_timeout_seconds: int = 60
+    quality_test_timeout_seconds: int = 60
 
     @classmethod
     def from_env(cls) -> DuckDBConfig:
@@ -159,10 +166,24 @@ class DuckDBConfig:
                 f"QUERY_TIMEOUT_SECS must be a positive integer, got {query_timeout_seconds}"
             )
 
+        raw_qt_timeout = os.environ.get("QUALITY_TEST_TIMEOUT_SECS", "60")
+        try:
+            quality_test_timeout_seconds = int(raw_qt_timeout)
+        except ValueError:
+            raise ValueError(
+                f"QUALITY_TEST_TIMEOUT_SECS must be a valid integer, got {raw_qt_timeout!r}"
+            ) from None
+        if quality_test_timeout_seconds < 1:
+            raise ValueError(
+                "QUALITY_TEST_TIMEOUT_SECS must be a positive integer, "
+                f"got {quality_test_timeout_seconds}"
+            )
+
         return cls(
             memory_limit=os.environ.get("DUCKDB_MEMORY_LIMIT", "2GB"),
             threads=threads,
             query_timeout_seconds=query_timeout_seconds,
+            quality_test_timeout_seconds=quality_test_timeout_seconds,
         )
 
 
