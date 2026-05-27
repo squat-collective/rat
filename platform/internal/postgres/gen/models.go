@@ -101,19 +101,20 @@ type PlatformSetting struct {
 }
 
 type PluginCatalog struct {
-	ID           uuid.UUID
-	Name         string
-	Kind         string
-	Version      string
-	Status       string
-	Error        pgtype.Text
-	Descriptor   []byte
-	Config       []byte
-	Addr         string
-	Healthy      bool
-	RegisteredAt time.Time
-	EnabledAt    *time.Time
-	UpdatedAt    time.Time
+	ID            uuid.UUID
+	Name          string
+	Kind          string
+	Version       string
+	Status        string
+	Error         pgtype.Text
+	Descriptor    []byte
+	Config        []byte
+	Addr          string
+	Healthy       bool
+	RegisteredAt  time.Time
+	EnabledAt     *time.Time
+	UpdatedAt     time.Time
+	ConfigVersion int64
 }
 
 type PluginPolicy struct {

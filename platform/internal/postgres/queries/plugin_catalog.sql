@@ -1,5 +1,5 @@
 -- name: ListPlugins :many
-SELECT id, name, kind, version, status, error, descriptor, config,
+SELECT id, name, kind, version, status, error, descriptor, config, config_version,
        addr, healthy, registered_at, enabled_at, updated_at
 FROM plugin_catalog
 WHERE (sqlc.narg('filter_status')::text IS NULL OR status = sqlc.narg('filter_status'))
@@ -7,7 +7,7 @@ WHERE (sqlc.narg('filter_status')::text IS NULL OR status = sqlc.narg('filter_st
 ORDER BY registered_at DESC;
 
 -- name: GetPluginByName :one
-SELECT id, name, kind, version, status, error, descriptor, config,
+SELECT id, name, kind, version, status, error, descriptor, config, config_version,
        addr, healthy, registered_at, enabled_at, updated_at
 FROM plugin_catalog
 WHERE name = $1;
@@ -18,7 +18,8 @@ WHERE name = $1;
 -- field is owned by UpdatePluginConfig and tracks plugin-managed state
 -- (e.g. rat-plugin-secrets stores its encrypted secret list there).
 -- Pass config = NULL from the Go side on re-register; COALESCE keeps
--- whatever the plugin previously persisted.
+-- whatever the plugin previously persisted. config_version is preserved
+-- across re-registrations (only UpdatePluginConfig bumps it).
 INSERT INTO plugin_catalog (name, kind, version, status, error, descriptor, config, addr, healthy)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (name) DO UPDATE
@@ -31,7 +32,7 @@ SET kind = EXCLUDED.kind,
     addr = EXCLUDED.addr,
     healthy = EXCLUDED.healthy,
     updated_at = now()
-RETURNING id, name, kind, version, status, error, descriptor, config,
+RETURNING id, name, kind, version, status, error, descriptor, config, config_version,
           addr, healthy, registered_at, enabled_at, updated_at;
 
 -- name: UpdatePluginStatus :exec
@@ -43,12 +44,35 @@ SET status = $2,
 WHERE name = $1;
 
 -- name: UpdatePluginConfig :one
-UPDATE plugin_catalog
-SET config = $2,
-    updated_at = now()
-WHERE name = $1
-RETURNING id, name, kind, version, status, error, descriptor, config,
-          addr, healthy, registered_at, enabled_at, updated_at;
+-- Optimistic concurrency: when expected_version is non-NULL, the UPDATE
+-- only fires if config_version matches; the CTE then SELECTs the row in
+-- the same statement so the caller can distinguish three outcomes in one
+-- round-trip:
+--   * row returned, was_updated = true   → success, new config_version is N+1
+--   * row returned, was_updated = false  → version mismatch, current config_version is returned
+--   * no row returned                    → plugin not found
+WITH updated AS (
+    UPDATE plugin_catalog AS pc
+    SET config = $2,
+        config_version = pc.config_version + 1,
+        updated_at = now()
+    WHERE pc.name = $1
+      AND (sqlc.narg('expected_version')::bigint IS NULL
+           OR pc.config_version = sqlc.narg('expected_version'))
+    RETURNING pc.id, pc.name, pc.kind, pc.version, pc.status, pc.error, pc.descriptor, pc.config, pc.config_version,
+              pc.addr, pc.healthy, pc.registered_at, pc.enabled_at, pc.updated_at
+)
+SELECT u.id, u.name, u.kind, u.version, u.status, u.error, u.descriptor, u.config, u.config_version,
+       u.addr, u.healthy, u.registered_at, u.enabled_at, u.updated_at,
+       true AS was_updated
+FROM updated u
+UNION ALL
+SELECT p.id, p.name, p.kind, p.version, p.status, p.error, p.descriptor, p.config, p.config_version,
+       p.addr, p.healthy, p.registered_at, p.enabled_at, p.updated_at,
+       false AS was_updated
+FROM plugin_catalog p
+WHERE p.name = $1
+  AND NOT EXISTS (SELECT 1 FROM updated);
 
 -- name: UpdatePluginHealth :exec
 UPDATE plugin_catalog

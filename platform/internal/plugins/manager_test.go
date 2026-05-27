@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -94,15 +93,25 @@ func (c *memoryCatalog) UpdatePluginHealth(_ context.Context, name string, healt
 	return nil
 }
 
-func (c *memoryCatalog) UpdatePluginConfig(_ context.Context, name string, config json.RawMessage) (*domain.PluginEntry, error) {
+func (c *memoryCatalog) UpdatePluginConfig(_ context.Context, name string, config json.RawMessage, expectedVersion *int64) (*domain.PluginEntry, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if p, ok := c.plugins[name]; ok {
-		p.Config = config
-		c.plugins[name] = p
-		return &p, nil
+	p, ok := c.plugins[name]
+	if !ok {
+		// Match the real PluginStore: (nil, nil) means not-found so the
+		// handler maps to 404 instead of 500.
+		return nil, nil
 	}
-	return nil, fmt.Errorf("plugin %s not found", name)
+	if expectedVersion != nil && p.ConfigVersion != *expectedVersion {
+		// Surface the current entry alongside the sentinel so the HTTP
+		// layer can echo the live version back in the 409.
+		current := p
+		return &current, domain.ErrConfigVersionMismatch
+	}
+	p.Config = config
+	p.ConfigVersion++
+	c.plugins[name] = p
+	return &p, nil
 }
 
 // ── Test helper: mock ConnectRPC plugin server ────────────────────────────
@@ -265,16 +274,50 @@ func TestManager_UpdateConfig(t *testing.T) {
 	mgr := NewManager(catalog, "pro", nil)
 	config := json.RawMessage(`{"key": "value"}`)
 
-	entry, err := mgr.UpdateConfig(context.Background(), "auth", config)
+	entry, err := mgr.UpdateConfig(context.Background(), "auth", config, nil)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"key":"value"}`, string(entry.Config))
+	assert.Equal(t, int64(1), entry.ConfigVersion, "version bumps from 0 → 1 on first write")
 }
 
 func TestManager_UpdateConfig_NoCatalog(t *testing.T) {
 	mgr := NewManager(nil, "pro", nil)
-	_, err := mgr.UpdateConfig(context.Background(), "auth", json.RawMessage(`{}`))
+	_, err := mgr.UpdateConfig(context.Background(), "auth", json.RawMessage(`{}`), nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no catalog")
+}
+
+func TestManager_UpdateConfig_VersionMatch_Succeeds(t *testing.T) {
+	catalog := newMemoryCatalog()
+	catalog.UpsertPlugin(context.Background(), domain.PluginEntry{
+		Name:          "auth",
+		Status:        domain.PluginStatusEnabled,
+		ConfigVersion: 5,
+	})
+
+	mgr := NewManager(catalog, "pro", nil)
+	expected := int64(5)
+
+	entry, err := mgr.UpdateConfig(context.Background(), "auth", json.RawMessage(`{}`), &expected)
+	require.NoError(t, err)
+	assert.Equal(t, int64(6), entry.ConfigVersion)
+}
+
+func TestManager_UpdateConfig_VersionMismatch_ReturnsSentinel(t *testing.T) {
+	catalog := newMemoryCatalog()
+	catalog.UpsertPlugin(context.Background(), domain.PluginEntry{
+		Name:          "auth",
+		Status:        domain.PluginStatusEnabled,
+		ConfigVersion: 5,
+	})
+
+	mgr := NewManager(catalog, "pro", nil)
+	stale := int64(2)
+
+	entry, err := mgr.UpdateConfig(context.Background(), "auth", json.RawMessage(`{}`), &stale)
+	require.ErrorIs(t, err, domain.ErrConfigVersionMismatch)
+	require.NotNil(t, entry, "current entry returned alongside sentinel so handler can echo live version")
+	assert.Equal(t, int64(5), entry.ConfigVersion, "version unchanged on mismatch")
 }
 
 func TestManager_Enable_NoCatalog(t *testing.T) {

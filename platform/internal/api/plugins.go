@@ -4,7 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -14,12 +20,17 @@ import (
 
 // PluginManager defines the interface the API layer uses for plugin lifecycle operations.
 // Implemented by plugins.Manager.
+//
+// UpdateConfig propagates the optimistic-concurrency expectedVersion: callers
+// pass nil for legacy last-write-wins, or a non-nil pointer to require the
+// current config_version to match (returns domain.ErrConfigVersionMismatch
+// on conflict).
 type PluginManager interface {
 	Register(ctx context.Context, name, addr string) error
 	Enable(ctx context.Context, name string) error
 	Disable(ctx context.Context, name string) error
 	Remove(ctx context.Context, name string) error
-	UpdateConfig(ctx context.Context, name string, config json.RawMessage) (*domain.PluginEntry, error)
+	UpdateConfig(ctx context.Context, name string, config json.RawMessage, expectedVersion *int64) (*domain.PluginEntry, error)
 }
 
 // PluginLister lists plugins from the catalog (read-only queries).
@@ -40,6 +51,64 @@ type PluginPolicyStore interface {
 	ListPluginPolicies(ctx context.Context) ([]domain.PluginPolicy, error)
 	CreatePluginPolicy(ctx context.Context, policy domain.PluginPolicy) (*domain.PluginPolicy, error)
 	DeletePluginPolicy(ctx context.Context, id uuid.UUID) error
+}
+
+// pluginConfigWarnLimiter rate-limits the "PUT /config without If-Match" WARN
+// to once per plugin name per second so a busy client (e.g. the secrets plugin
+// polling its own config) cannot flood the logs. Module-scope so it survives
+// per-request handler invocations.
+var pluginConfigWarnLimiter = newWarnLimiter(time.Second)
+
+type warnLimiter struct {
+	window time.Duration
+	mu     sync.Mutex
+	last   map[string]time.Time
+}
+
+func newWarnLimiter(window time.Duration) *warnLimiter {
+	return &warnLimiter{window: window, last: make(map[string]time.Time)}
+}
+
+// allow reports whether key has not been warned within the current window.
+// On allow it advances the timestamp atomically so concurrent callers cannot
+// both pass the same gate.
+func (l *warnLimiter) allow(key string) bool {
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if prev, ok := l.last[key]; ok && now.Sub(prev) < l.window {
+		return false
+	}
+	l.last[key] = now
+	return true
+}
+
+// parseIfMatch extracts a non-negative int64 from the If-Match header, accepting
+// the standard quoted form (`"42"`), the W/ weak-validator form, or a bare
+// integer. Returns (nil, false, nil) when the header is absent (legacy path),
+// (nil, true, err) when the header is present but unparseable so the caller
+// can reject with 400.
+func parseIfMatch(h string) (*int64, bool, error) {
+	if h == "" {
+		return nil, false, nil
+	}
+	raw := strings.TrimSpace(h)
+	raw = strings.TrimPrefix(raw, "W/")
+	raw = strings.Trim(raw, `"`)
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return nil, true, fmt.Errorf("If-Match must be a quoted integer (config_version), got %q", h)
+	}
+	if v < 0 {
+		return nil, true, fmt.Errorf("If-Match must be non-negative, got %d", v)
+	}
+	return &v, true, nil
+}
+
+// setETag sets the ETag response header from a config_version. The value is
+// quoted per RFC 7232 so clients can echo it back verbatim in If-Match.
+func setETag(w http.ResponseWriter, configVersion int64) {
+	w.Header().Set("ETag", `"`+strconv.FormatInt(configVersion, 10)+`"`)
 }
 
 // MountPluginInternalRoutes mounts the phone-home endpoint outside the auth middleware.
@@ -123,6 +192,10 @@ func (srv *Server) HandleListPlugins(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleGetPlugin handles GET /api/v1/plugins/{name}.
+//
+// Always sets ETag to the plugin's current config_version so clients can
+// capture it once with GET and reuse it on a subsequent PUT /config without
+// reading the body.
 func (srv *Server) HandleGetPlugin(w http.ResponseWriter, r *http.Request) {
 	if srv.PluginCatalog == nil {
 		errorJSON(w, "plugin catalog not available", "UNAVAILABLE", http.StatusServiceUnavailable)
@@ -140,6 +213,7 @@ func (srv *Server) HandleGetPlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setETag(w, plugin.ConfigVersion)
 	writeJSON(w, http.StatusOK, plugin)
 }
 
@@ -176,6 +250,16 @@ func (srv *Server) HandleDisablePlugin(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleUpdatePluginConfig handles PUT /api/v1/plugins/{name}/config.
+//
+// Optimistic concurrency contract:
+//   - If-Match present and parseable → require config_version to match;
+//     return 409 Conflict with the current ETag on mismatch.
+//   - If-Match absent → legacy last-write-wins; logs a rate-limited WARN so
+//     operators can find stragglers before we tighten the contract.
+//   - If-Match present but malformed → 400 Bad Request (client bug).
+//
+// The response always carries the NEW config_version in both the JSON body
+// and the ETag header so the client has the value ready for its next write.
 func (srv *Server) HandleUpdatePluginConfig(w http.ResponseWriter, r *http.Request) {
 	if srv.PluginManager == nil {
 		errorJSON(w, "plugin manager not available", "UNAVAILABLE", http.StatusServiceUnavailable)
@@ -184,13 +268,36 @@ func (srv *Server) HandleUpdatePluginConfig(w http.ResponseWriter, r *http.Reque
 
 	name := chi.URLParam(r, "name")
 
+	expectedVersion, hadIfMatch, ifMatchErr := parseIfMatch(r.Header.Get("If-Match"))
+	if ifMatchErr != nil {
+		errorJSON(w, ifMatchErr.Error(), "INVALID_ARGUMENT", http.StatusBadRequest)
+		return
+	}
+	if !hadIfMatch && pluginConfigWarnLimiter.allow(name) {
+		// Loud enough that operators notice unsafe writers, quiet enough
+		// that a busy poller can't spam the log. Drop to Debug once all
+		// in-tree clients send If-Match.
+		slog.Warn("plugin config update without If-Match (last-write-wins, unsafe)",
+			"plugin", name)
+	}
+
 	var config json.RawMessage
 	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
 		errorJSON(w, "invalid JSON body", "INVALID_ARGUMENT", http.StatusBadRequest)
 		return
 	}
 
-	entry, err := srv.PluginManager.UpdateConfig(r.Context(), name, config)
+	entry, err := srv.PluginManager.UpdateConfig(r.Context(), name, config, expectedVersion)
+	if errors.Is(err, domain.ErrConfigVersionMismatch) {
+		// entry holds the CURRENT row (the wrapper returns it alongside the
+		// sentinel) so we can echo the live version in both the body and
+		// the ETag header for the client's next attempt.
+		setETag(w, entry.ConfigVersion)
+		msg := fmt.Sprintf("config_version mismatch; expected %d, current %d",
+			*expectedVersion, entry.ConfigVersion)
+		errorJSON(w, msg, "CONFIG_VERSION_MISMATCH", http.StatusConflict)
+		return
+	}
 	if err != nil {
 		internalError(w, "failed to update plugin config", err)
 		return
@@ -200,6 +307,7 @@ func (srv *Server) HandleUpdatePluginConfig(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	setETag(w, entry.ConfigVersion)
 	writeJSON(w, http.StatusOK, entry)
 }
 

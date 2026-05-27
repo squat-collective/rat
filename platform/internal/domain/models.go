@@ -410,21 +410,33 @@ func ValidPluginKind(s string) bool {
 }
 
 // PluginEntry represents a plugin registered in the catalog.
+//
+// ConfigVersion is bumped by every successful UpdatePluginConfig and is used
+// for optimistic concurrency control on PUT /api/v1/plugins/{name}/config —
+// clients echo it back via the If-Match header to detect lost updates. It is
+// surfaced in the JSON body (config_version) and via the ETag response header.
 type PluginEntry struct {
-	ID           uuid.UUID       `json:"id"`
-	Name         string          `json:"name"`
-	Kind         PluginKind      `json:"kind"`
-	Version      string          `json:"version"`
-	Status       PluginStatus    `json:"status"`
-	Error        string          `json:"error,omitempty"`
-	Descriptor   json.RawMessage `json:"descriptor,omitempty"`
-	Config       json.RawMessage `json:"config,omitempty"`
-	Addr         string          `json:"addr"`
-	Healthy      bool            `json:"healthy"`
-	RegisteredAt time.Time       `json:"registered_at"`
-	EnabledAt    *time.Time      `json:"enabled_at,omitempty"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	ID            uuid.UUID       `json:"id"`
+	Name          string          `json:"name"`
+	Kind          PluginKind      `json:"kind"`
+	Version       string          `json:"version"`
+	Status        PluginStatus    `json:"status"`
+	Error         string          `json:"error,omitempty"`
+	Descriptor    json.RawMessage `json:"descriptor,omitempty"`
+	Config        json.RawMessage `json:"config,omitempty"`
+	ConfigVersion int64           `json:"config_version"`
+	Addr          string          `json:"addr"`
+	Healthy       bool            `json:"healthy"`
+	RegisteredAt  time.Time       `json:"registered_at"`
+	EnabledAt     *time.Time      `json:"enabled_at,omitempty"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
+
+// ErrConfigVersionMismatch is returned by PluginCatalog.UpdatePluginConfig when
+// the caller supplied an expectedVersion that did not match the row's current
+// config_version (optimistic concurrency conflict). The HTTP layer translates
+// this into a 409 Conflict with the current version echoed in the ETag header.
+var ErrConfigVersionMismatch = errors.New("plugin config_version mismatch")
 
 // PluginFilter constrains ListPlugins queries.
 type PluginFilter struct {

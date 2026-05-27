@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rat-data/rat/platform/internal/domain"
 	"github.com/rat-data/rat/platform/internal/postgres/gen"
@@ -34,7 +36,7 @@ func (s *PluginStore) ListPlugins(ctx context.Context, filter domain.PluginFilte
 
 	result := make([]domain.PluginEntry, len(rows))
 	for i, r := range rows {
-		result[i] = pluginRowToDomain(r)
+		result[i] = listRowToDomain(r)
 	}
 	return result, nil
 }
@@ -47,7 +49,7 @@ func (s *PluginStore) GetPlugin(ctx context.Context, name string) (*domain.Plugi
 		}
 		return nil, fmt.Errorf("get plugin %s: %w", name, err)
 	}
-	entry := pluginRowToDomain(row)
+	entry := getRowToDomain(row)
 	return &entry, nil
 }
 
@@ -74,7 +76,7 @@ func (s *PluginStore) UpsertPlugin(ctx context.Context, entry domain.PluginEntry
 	if err != nil {
 		return nil, fmt.Errorf("upsert plugin %s: %w", entry.Name, err)
 	}
-	result := pluginRowToDomain(row)
+	result := upsertRowToDomain(row)
 	return &result, nil
 }
 
@@ -90,18 +92,42 @@ func (s *PluginStore) UpdatePluginStatus(ctx context.Context, name string, statu
 	return nil
 }
 
-func (s *PluginStore) UpdatePluginConfig(ctx context.Context, name string, config json.RawMessage) (*domain.PluginEntry, error) {
-	row, err := s.q.UpdatePluginConfig(ctx, gen.UpdatePluginConfigParams{
+// UpdatePluginConfig writes new config for the named plugin.
+//
+// expectedVersion implements optimistic concurrency:
+//   - nil → legacy last-write-wins (no version check); still bumps config_version.
+//   - non-nil → only writes if the current config_version matches; otherwise
+//     returns domain.ErrConfigVersionMismatch along with the current entry so
+//     the caller can surface the latest config_version in the response.
+//
+// Returns (nil, nil) when the plugin does not exist (callers map to 404).
+func (s *PluginStore) UpdatePluginConfig(ctx context.Context, name string, config json.RawMessage, expectedVersion *int64) (*domain.PluginEntry, error) {
+	params := gen.UpdatePluginConfigParams{
 		Name:   name,
 		Config: config,
-	})
+	}
+	if expectedVersion != nil {
+		params.ExpectedVersion = pgtype.Int8{Int64: *expectedVersion, Valid: true}
+	}
+
+	row, err := s.q.UpdatePluginConfig(ctx, params)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			// Neither branch of the CTE produced a row → the plugin does not
+			// exist. Surface as not-found so the handler returns 404.
 			return nil, nil
 		}
 		return nil, fmt.Errorf("update plugin config %s: %w", name, err)
 	}
-	result := pluginRowToDomain(row)
+
+	result := updateRowToDomain(row)
+	if !row.WasUpdated {
+		// The UPDATE branch of the CTE did not fire because the supplied
+		// expectedVersion did not match. Return the current entry alongside
+		// the sentinel error so the caller can echo the live version back to
+		// the client in the 409 response.
+		return &result, domain.ErrConfigVersionMismatch
+	}
 	return &result, nil
 }
 
@@ -218,22 +244,71 @@ func (s *PluginStore) DeletePluginPolicy(ctx context.Context, id uuid.UUID) erro
 }
 
 // ── Row conversion ─────────────────────────────────────────────
+//
+// sqlc generates a distinct row type per query when the SELECT list adds an
+// extra column (UpdatePluginConfig adds was_updated, so it can't share the
+// row shape used by List/Get/Upsert). The shape is otherwise identical, so
+// we centralise the conversion in one helper that takes individual fields
+// and provide thin per-row adapters.
 
-func pluginRowToDomain(r gen.PluginCatalog) domain.PluginEntry {
-	entry := domain.PluginEntry{
-		ID:           r.ID,
-		Name:         r.Name,
-		Kind:         domain.PluginKind(r.Kind),
-		Version:      r.Version,
-		Status:       domain.PluginStatus(r.Status),
-		Error:        nullableTextToString(r.Error),
-		Descriptor:   r.Descriptor,
-		Config:       r.Config,
-		Addr:         r.Addr,
-		Healthy:      r.Healthy,
-		RegisteredAt: r.RegisteredAt,
-		EnabledAt:    r.EnabledAt,
-		UpdatedAt:    r.UpdatedAt,
+func pluginEntryFromFields(
+	id uuid.UUID,
+	name, kind, version, status string,
+	errText pgtype.Text,
+	descriptor, config []byte,
+	configVersion int64,
+	addr string,
+	healthy bool,
+	registeredAt time.Time,
+	enabledAt *time.Time,
+	updatedAt time.Time,
+) domain.PluginEntry {
+	return domain.PluginEntry{
+		ID:            id,
+		Name:          name,
+		Kind:          domain.PluginKind(kind),
+		Version:       version,
+		Status:        domain.PluginStatus(status),
+		Error:         nullableTextToString(errText),
+		Descriptor:    descriptor,
+		Config:        config,
+		ConfigVersion: configVersion,
+		Addr:          addr,
+		Healthy:       healthy,
+		RegisteredAt:  registeredAt,
+		EnabledAt:     enabledAt,
+		UpdatedAt:     updatedAt,
 	}
-	return entry
+}
+
+func listRowToDomain(r gen.ListPluginsRow) domain.PluginEntry {
+	return pluginEntryFromFields(
+		r.ID, r.Name, r.Kind, r.Version, r.Status, r.Error,
+		r.Descriptor, r.Config, r.ConfigVersion,
+		r.Addr, r.Healthy, r.RegisteredAt, r.EnabledAt, r.UpdatedAt,
+	)
+}
+
+func getRowToDomain(r gen.GetPluginByNameRow) domain.PluginEntry {
+	return pluginEntryFromFields(
+		r.ID, r.Name, r.Kind, r.Version, r.Status, r.Error,
+		r.Descriptor, r.Config, r.ConfigVersion,
+		r.Addr, r.Healthy, r.RegisteredAt, r.EnabledAt, r.UpdatedAt,
+	)
+}
+
+func upsertRowToDomain(r gen.UpsertPluginRow) domain.PluginEntry {
+	return pluginEntryFromFields(
+		r.ID, r.Name, r.Kind, r.Version, r.Status, r.Error,
+		r.Descriptor, r.Config, r.ConfigVersion,
+		r.Addr, r.Healthy, r.RegisteredAt, r.EnabledAt, r.UpdatedAt,
+	)
+}
+
+func updateRowToDomain(r gen.UpdatePluginConfigRow) domain.PluginEntry {
+	return pluginEntryFromFields(
+		r.ID, r.Name, r.Kind, r.Version, r.Status, r.Error,
+		r.Descriptor, r.Config, r.ConfigVersion,
+		r.Addr, r.Healthy, r.RegisteredAt, r.EnabledAt, r.UpdatedAt,
+	)
 }

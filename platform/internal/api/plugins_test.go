@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,11 +20,12 @@ import (
 
 // mockPluginManager implements api.PluginManager for tests.
 type mockPluginManager struct {
-	registerFunc    func(ctx context.Context, name, addr string) error
-	enableFunc      func(ctx context.Context, name string) error
-	disableFunc     func(ctx context.Context, name string) error
-	removeFunc      func(ctx context.Context, name string) error
-	updateConfigErr error
+	registerFunc     func(ctx context.Context, name, addr string) error
+	enableFunc       func(ctx context.Context, name string) error
+	disableFunc      func(ctx context.Context, name string) error
+	removeFunc       func(ctx context.Context, name string) error
+	updateConfigErr  error
+	updateConfigFunc func(ctx context.Context, name string, config json.RawMessage, expectedVersion *int64) (*domain.PluginEntry, error)
 }
 
 func (m *mockPluginManager) Register(ctx context.Context, name, addr string) error {
@@ -54,11 +56,14 @@ func (m *mockPluginManager) Remove(ctx context.Context, name string) error {
 	return nil
 }
 
-func (m *mockPluginManager) UpdateConfig(_ context.Context, name string, config json.RawMessage) (*domain.PluginEntry, error) {
+func (m *mockPluginManager) UpdateConfig(ctx context.Context, name string, config json.RawMessage, expectedVersion *int64) (*domain.PluginEntry, error) {
+	if m.updateConfigFunc != nil {
+		return m.updateConfigFunc(ctx, name, config, expectedVersion)
+	}
 	if m.updateConfigErr != nil {
 		return nil, m.updateConfigErr
 	}
-	return &domain.PluginEntry{Name: name, Config: config}, nil
+	return &domain.PluginEntry{Name: name, Config: config, ConfigVersion: 1}, nil
 }
 
 // mockPluginLister implements api.PluginLister for tests.
@@ -285,6 +290,193 @@ func TestHandleDeletePlugin_Success(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+// ── Update Config (PUT /api/v1/plugins/{name}/config) ────────────────────
+//
+// These tests cover the optimistic-concurrency contract added in migration
+// 017: If-Match parses to expectedVersion, ETag echoes the new
+// config_version, 409 on mismatch, and the legacy no-header path stays
+// working with a one-line WARN per plugin per second.
+
+func TestHandleUpdatePluginConfig_NoIfMatch_LegacyPath_LogsWarn(t *testing.T) {
+	buf, restore := captureSlog(t)
+	defer restore()
+
+	var observedExpected *int64
+	mgr := &mockPluginManager{
+		updateConfigFunc: func(_ context.Context, name string, config json.RawMessage, exp *int64) (*domain.PluginEntry, error) {
+			observedExpected = exp
+			return &domain.PluginEntry{Name: name, Config: config, ConfigVersion: 7}, nil
+		},
+	}
+	srv := &api.Server{PluginManager: mgr}
+	router := api.NewRouter(srv)
+
+	// Unique plugin name so the package-level rate limiter doesn't suppress
+	// the WARN when other tests in this run hit /config first.
+	name := "warn-no-ifmatch-" + uuid.NewString()[:8]
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/plugins/"+name+"/config",
+		bytes.NewBufferString(`{"k":"v"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code, "legacy no-If-Match path still 200s")
+	assert.Equal(t, `"7"`, rec.Header().Get("ETag"), "new config_version surfaces as ETag")
+	assert.Nil(t, observedExpected, "no If-Match → nil expectedVersion passed through")
+	assert.Contains(t, buf.String(), "without If-Match",
+		"backward-compat path must log a WARN so operators see unsafe writers")
+	assert.Contains(t, buf.String(), name)
+}
+
+func TestHandleUpdatePluginConfig_CorrectIfMatch_Bumps(t *testing.T) {
+	var observedExpected *int64
+	mgr := &mockPluginManager{
+		updateConfigFunc: func(_ context.Context, name string, config json.RawMessage, exp *int64) (*domain.PluginEntry, error) {
+			observedExpected = exp
+			require.NotNil(t, exp)
+			return &domain.PluginEntry{Name: name, Config: config, ConfigVersion: *exp + 1}, nil
+		},
+	}
+	srv := &api.Server{PluginManager: mgr}
+	router := api.NewRouter(srv)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/plugins/secrets/config",
+		bytes.NewBufferString(`{"k":"v"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("If-Match", `"3"`)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, `"4"`, rec.Header().Get("ETag"), "ETag bumped by 1 on success")
+	require.NotNil(t, observedExpected)
+	assert.Equal(t, int64(3), *observedExpected)
+
+	var entry domain.PluginEntry
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&entry))
+	assert.Equal(t, int64(4), entry.ConfigVersion, "body carries new config_version too")
+}
+
+func TestHandleUpdatePluginConfig_StaleIfMatch_Returns409(t *testing.T) {
+	mgr := &mockPluginManager{
+		updateConfigFunc: func(_ context.Context, name string, _ json.RawMessage, _ *int64) (*domain.PluginEntry, error) {
+			return &domain.PluginEntry{Name: name, ConfigVersion: 10}, domain.ErrConfigVersionMismatch
+		},
+	}
+	srv := &api.Server{PluginManager: mgr}
+	router := api.NewRouter(srv)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/plugins/secrets/config",
+		bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("If-Match", `"3"`)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Equal(t, `"10"`, rec.Header().Get("ETag"),
+		"409 echoes the CURRENT version so the client can refetch & retry")
+	assert.Contains(t, rec.Body.String(), "CONFIG_VERSION_MISMATCH")
+	assert.Contains(t, rec.Body.String(), "expected 3")
+	assert.Contains(t, rec.Body.String(), "current 10")
+}
+
+func TestHandleUpdatePluginConfig_MalformedIfMatch_Returns400(t *testing.T) {
+	mgr := &mockPluginManager{
+		updateConfigFunc: func(_ context.Context, _ string, _ json.RawMessage, _ *int64) (*domain.PluginEntry, error) {
+			t.Fatal("manager should not be called when If-Match fails to parse")
+			return nil, nil
+		},
+	}
+	srv := &api.Server{PluginManager: mgr}
+	router := api.NewRouter(srv)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/plugins/secrets/config",
+		bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("If-Match", `"not-a-number"`)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestHandleUpdatePluginConfig_ConcurrentSameIfMatch_OneWinsOneConflicts(t *testing.T) {
+	// Emulate the real race: two writers GET version=5, both PUT with
+	// If-Match: "5". The first to land bumps to 6; the second sees the
+	// stale check fail and gets 409.
+	var (
+		mu       sync.Mutex
+		current  = int64(5)
+		winners  int
+		conflict int
+	)
+	mgr := &mockPluginManager{
+		updateConfigFunc: func(_ context.Context, name string, _ json.RawMessage, exp *int64) (*domain.PluginEntry, error) {
+			require.NotNil(t, exp)
+			mu.Lock()
+			defer mu.Unlock()
+			if *exp != current {
+				return &domain.PluginEntry{Name: name, ConfigVersion: current}, domain.ErrConfigVersionMismatch
+			}
+			current++
+			return &domain.PluginEntry{Name: name, ConfigVersion: current}, nil
+		},
+	}
+	srv := &api.Server{PluginManager: mgr}
+	router := api.NewRouter(srv)
+
+	const writers = 2
+	results := make(chan int, writers)
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/plugins/secrets/config",
+				bytes.NewBufferString(`{}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("If-Match", `"5"`)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			results <- rec.Code
+		}()
+	}
+	wg.Wait()
+	close(results)
+	for code := range results {
+		switch code {
+		case http.StatusOK:
+			winners++
+		case http.StatusConflict:
+			conflict++
+		default:
+			t.Fatalf("unexpected status %d", code)
+		}
+	}
+
+	assert.Equal(t, 1, winners, "exactly one writer commits")
+	assert.Equal(t, 1, conflict, "the other writer sees 409")
+}
+
+func TestHandleGetPlugin_SetsETag(t *testing.T) {
+	lister := &mockPluginLister{
+		plugins: []domain.PluginEntry{
+			{Name: "secrets", Status: domain.PluginStatusEnabled, ConfigVersion: 12},
+		},
+	}
+	srv := &api.Server{PluginCatalog: lister, PluginManager: &mockPluginManager{}}
+	router := api.NewRouter(srv)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/plugins/secrets", http.NoBody)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, `"12"`, rec.Header().Get("ETag"),
+		"GET surfaces ETag so clients can capture it once and reuse on PUT")
 }
 
 // ── Plugin Source mocks & tests ───────────────────────────────────────────

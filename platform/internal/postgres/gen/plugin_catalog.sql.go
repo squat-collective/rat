@@ -7,6 +7,7 @@ package gen
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -100,15 +101,32 @@ func (q *Queries) DeletePluginSource(ctx context.Context, id uuid.UUID) error {
 }
 
 const getPluginByName = `-- name: GetPluginByName :one
-SELECT id, name, kind, version, status, error, descriptor, config,
+SELECT id, name, kind, version, status, error, descriptor, config, config_version,
        addr, healthy, registered_at, enabled_at, updated_at
 FROM plugin_catalog
 WHERE name = $1
 `
 
-func (q *Queries) GetPluginByName(ctx context.Context, name string) (PluginCatalog, error) {
+type GetPluginByNameRow struct {
+	ID            uuid.UUID
+	Name          string
+	Kind          string
+	Version       string
+	Status        string
+	Error         pgtype.Text
+	Descriptor    []byte
+	Config        []byte
+	ConfigVersion int64
+	Addr          string
+	Healthy       bool
+	RegisteredAt  time.Time
+	EnabledAt     *time.Time
+	UpdatedAt     time.Time
+}
+
+func (q *Queries) GetPluginByName(ctx context.Context, name string) (GetPluginByNameRow, error) {
 	row := q.db.QueryRow(ctx, getPluginByName, name)
-	var i PluginCatalog
+	var i GetPluginByNameRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -118,6 +136,7 @@ func (q *Queries) GetPluginByName(ctx context.Context, name string) (PluginCatal
 		&i.Error,
 		&i.Descriptor,
 		&i.Config,
+		&i.ConfigVersion,
 		&i.Addr,
 		&i.Healthy,
 		&i.RegisteredAt,
@@ -197,7 +216,7 @@ func (q *Queries) ListPluginSources(ctx context.Context) ([]PluginSource, error)
 }
 
 const listPlugins = `-- name: ListPlugins :many
-SELECT id, name, kind, version, status, error, descriptor, config,
+SELECT id, name, kind, version, status, error, descriptor, config, config_version,
        addr, healthy, registered_at, enabled_at, updated_at
 FROM plugin_catalog
 WHERE ($1::text IS NULL OR status = $1)
@@ -210,15 +229,32 @@ type ListPluginsParams struct {
 	FilterKind   pgtype.Text
 }
 
-func (q *Queries) ListPlugins(ctx context.Context, arg ListPluginsParams) ([]PluginCatalog, error) {
+type ListPluginsRow struct {
+	ID            uuid.UUID
+	Name          string
+	Kind          string
+	Version       string
+	Status        string
+	Error         pgtype.Text
+	Descriptor    []byte
+	Config        []byte
+	ConfigVersion int64
+	Addr          string
+	Healthy       bool
+	RegisteredAt  time.Time
+	EnabledAt     *time.Time
+	UpdatedAt     time.Time
+}
+
+func (q *Queries) ListPlugins(ctx context.Context, arg ListPluginsParams) ([]ListPluginsRow, error) {
 	rows, err := q.db.Query(ctx, listPlugins, arg.FilterStatus, arg.FilterKind)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []PluginCatalog{}
+	items := []ListPluginsRow{}
 	for rows.Next() {
-		var i PluginCatalog
+		var i ListPluginsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
@@ -228,6 +264,7 @@ func (q *Queries) ListPlugins(ctx context.Context, arg ListPluginsParams) ([]Plu
 			&i.Error,
 			&i.Descriptor,
 			&i.Config,
+			&i.ConfigVersion,
 			&i.Addr,
 			&i.Healthy,
 			&i.RegisteredAt,
@@ -245,22 +282,64 @@ func (q *Queries) ListPlugins(ctx context.Context, arg ListPluginsParams) ([]Plu
 }
 
 const updatePluginConfig = `-- name: UpdatePluginConfig :one
-UPDATE plugin_catalog
-SET config = $2,
-    updated_at = now()
-WHERE name = $1
-RETURNING id, name, kind, version, status, error, descriptor, config,
-          addr, healthy, registered_at, enabled_at, updated_at
+WITH updated AS (
+    UPDATE plugin_catalog AS pc
+    SET config = $2,
+        config_version = pc.config_version + 1,
+        updated_at = now()
+    WHERE pc.name = $1
+      AND ($3::bigint IS NULL
+           OR pc.config_version = $3)
+    RETURNING pc.id, pc.name, pc.kind, pc.version, pc.status, pc.error, pc.descriptor, pc.config, pc.config_version,
+              pc.addr, pc.healthy, pc.registered_at, pc.enabled_at, pc.updated_at
+)
+SELECT u.id, u.name, u.kind, u.version, u.status, u.error, u.descriptor, u.config, u.config_version,
+       u.addr, u.healthy, u.registered_at, u.enabled_at, u.updated_at,
+       true AS was_updated
+FROM updated u
+UNION ALL
+SELECT p.id, p.name, p.kind, p.version, p.status, p.error, p.descriptor, p.config, p.config_version,
+       p.addr, p.healthy, p.registered_at, p.enabled_at, p.updated_at,
+       false AS was_updated
+FROM plugin_catalog p
+WHERE p.name = $1
+  AND NOT EXISTS (SELECT 1 FROM updated)
 `
 
 type UpdatePluginConfigParams struct {
-	Name   string
-	Config []byte
+	Name            string
+	Config          []byte
+	ExpectedVersion pgtype.Int8
 }
 
-func (q *Queries) UpdatePluginConfig(ctx context.Context, arg UpdatePluginConfigParams) (PluginCatalog, error) {
-	row := q.db.QueryRow(ctx, updatePluginConfig, arg.Name, arg.Config)
-	var i PluginCatalog
+type UpdatePluginConfigRow struct {
+	ID            uuid.UUID
+	Name          string
+	Kind          string
+	Version       string
+	Status        string
+	Error         pgtype.Text
+	Descriptor    []byte
+	Config        []byte
+	ConfigVersion int64
+	Addr          string
+	Healthy       bool
+	RegisteredAt  time.Time
+	EnabledAt     *time.Time
+	UpdatedAt     time.Time
+	WasUpdated    bool
+}
+
+// Optimistic concurrency: when expected_version is non-NULL, the UPDATE
+// only fires if config_version matches; the CTE then SELECTs the row in
+// the same statement so the caller can distinguish three outcomes in one
+// round-trip:
+//   - row returned, was_updated = true   → success, new config_version is N+1
+//   - row returned, was_updated = false  → version mismatch, current config_version is returned
+//   - no row returned                    → plugin not found
+func (q *Queries) UpdatePluginConfig(ctx context.Context, arg UpdatePluginConfigParams) (UpdatePluginConfigRow, error) {
+	row := q.db.QueryRow(ctx, updatePluginConfig, arg.Name, arg.Config, arg.ExpectedVersion)
+	var i UpdatePluginConfigRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -270,11 +349,13 @@ func (q *Queries) UpdatePluginConfig(ctx context.Context, arg UpdatePluginConfig
 		&i.Error,
 		&i.Descriptor,
 		&i.Config,
+		&i.ConfigVersion,
 		&i.Addr,
 		&i.Healthy,
 		&i.RegisteredAt,
 		&i.EnabledAt,
 		&i.UpdatedAt,
+		&i.WasUpdated,
 	)
 	return i, err
 }
@@ -319,12 +400,6 @@ func (q *Queries) UpdatePluginStatus(ctx context.Context, arg UpdatePluginStatus
 }
 
 const upsertPlugin = `-- name: UpsertPlugin :one
--- Registers or re-registers a plugin. Re-registration (the common case
--- on container restart) must NOT clobber the persisted config — that
--- field is owned by UpdatePluginConfig and tracks plugin-managed state
--- (e.g. rat-plugin-secrets stores its encrypted secret list there).
--- Pass config = NULL from the Go side on re-register; COALESCE keeps
--- whatever the plugin previously persisted.
 INSERT INTO plugin_catalog (name, kind, version, status, error, descriptor, config, addr, healthy)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (name) DO UPDATE
@@ -337,7 +412,7 @@ SET kind = EXCLUDED.kind,
     addr = EXCLUDED.addr,
     healthy = EXCLUDED.healthy,
     updated_at = now()
-RETURNING id, name, kind, version, status, error, descriptor, config,
+RETURNING id, name, kind, version, status, error, descriptor, config, config_version,
           addr, healthy, registered_at, enabled_at, updated_at
 `
 
@@ -353,7 +428,31 @@ type UpsertPluginParams struct {
 	Healthy    bool
 }
 
-func (q *Queries) UpsertPlugin(ctx context.Context, arg UpsertPluginParams) (PluginCatalog, error) {
+type UpsertPluginRow struct {
+	ID            uuid.UUID
+	Name          string
+	Kind          string
+	Version       string
+	Status        string
+	Error         pgtype.Text
+	Descriptor    []byte
+	Config        []byte
+	ConfigVersion int64
+	Addr          string
+	Healthy       bool
+	RegisteredAt  time.Time
+	EnabledAt     *time.Time
+	UpdatedAt     time.Time
+}
+
+// Registers or re-registers a plugin. Re-registration (the common case
+// on container restart) must NOT clobber the persisted config — that
+// field is owned by UpdatePluginConfig and tracks plugin-managed state
+// (e.g. rat-plugin-secrets stores its encrypted secret list there).
+// Pass config = NULL from the Go side on re-register; COALESCE keeps
+// whatever the plugin previously persisted. config_version is preserved
+// across re-registrations (only UpdatePluginConfig bumps it).
+func (q *Queries) UpsertPlugin(ctx context.Context, arg UpsertPluginParams) (UpsertPluginRow, error) {
 	row := q.db.QueryRow(ctx, upsertPlugin,
 		arg.Name,
 		arg.Kind,
@@ -365,7 +464,7 @@ func (q *Queries) UpsertPlugin(ctx context.Context, arg UpsertPluginParams) (Plu
 		arg.Addr,
 		arg.Healthy,
 	)
-	var i PluginCatalog
+	var i UpsertPluginRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -375,6 +474,7 @@ func (q *Queries) UpsertPlugin(ctx context.Context, arg UpsertPluginParams) (Plu
 		&i.Error,
 		&i.Descriptor,
 		&i.Config,
+		&i.ConfigVersion,
 		&i.Addr,
 		&i.Healthy,
 		&i.RegisteredAt,

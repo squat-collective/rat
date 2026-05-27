@@ -31,6 +31,11 @@ const (
 
 // PluginCatalog is the persistence interface the Manager uses for plugin state.
 // Implemented by postgres.PluginStore.
+//
+// UpdatePluginConfig honours optimistic concurrency: pass a non-nil
+// expectedVersion to require the on-disk config_version to match (returns
+// domain.ErrConfigVersionMismatch with the current entry on conflict). Pass
+// nil for legacy last-write-wins behaviour (still bumps config_version).
 type PluginCatalog interface {
 	UpsertPlugin(ctx context.Context, entry domain.PluginEntry) (*domain.PluginEntry, error)
 	ListPlugins(ctx context.Context, filter domain.PluginFilter) ([]domain.PluginEntry, error)
@@ -38,7 +43,7 @@ type PluginCatalog interface {
 	DeletePlugin(ctx context.Context, name string) error
 	UpdatePluginStatus(ctx context.Context, name string, status domain.PluginStatus, errMsg string) error
 	UpdatePluginHealth(ctx context.Context, name string, healthy bool, errMsg string) error
-	UpdatePluginConfig(ctx context.Context, name string, config json.RawMessage) (*domain.PluginEntry, error)
+	UpdatePluginConfig(ctx context.Context, name string, config json.RawMessage, expectedVersion *int64) (*domain.PluginEntry, error)
 }
 
 // PluginPolicyLister loads plugin policies for evaluation during registration.
@@ -352,11 +357,17 @@ func (m *Manager) Remove(ctx context.Context, name string) error {
 }
 
 // UpdateConfig updates a plugin's configuration in the catalog.
-func (m *Manager) UpdateConfig(ctx context.Context, name string, config json.RawMessage) (*domain.PluginEntry, error) {
+//
+// expectedVersion supports optimistic concurrency: when non-nil, the write
+// is rejected with domain.ErrConfigVersionMismatch if the catalog row's
+// config_version has moved on since the caller last read it. Pass nil for
+// the legacy unsafe last-write-wins path (preserved for backward compat
+// with clients that don't send the If-Match header).
+func (m *Manager) UpdateConfig(ctx context.Context, name string, config json.RawMessage, expectedVersion *int64) (*domain.PluginEntry, error) {
 	if m.catalog == nil {
 		return nil, fmt.Errorf("no catalog available")
 	}
-	return m.catalog.UpdatePluginConfig(ctx, name, config)
+	return m.catalog.UpdatePluginConfig(ctx, name, config, expectedVersion)
 }
 
 // NotifyHealthTransition is called by the HealthLoop when a plugin's status
