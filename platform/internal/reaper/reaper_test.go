@@ -307,7 +307,7 @@ func TestPruneRuns_DeletesExcess(t *testing.T) {
 	p1 := domain.Pipeline{ID: uuid.New(), Namespace: "default", Layer: "bronze", Name: "test"}
 	pipelines.pipelines = []domain.Pipeline{p1}
 
-	r := New(settings, runs, pipelines, nil, nil, nil, nil)
+	r := New(settings, runs, pipelines, nil, nil, nil, nil, nil)
 	status := r.tick(context.Background())
 
 	assert.Equal(t, 8, status.RunsPruned) // 5 from limit + 3 from age
@@ -324,7 +324,7 @@ func TestPruneRuns_PreservesActive(t *testing.T) {
 	p1 := domain.Pipeline{ID: uuid.New()}
 	pipelines.pipelines = []domain.Pipeline{p1}
 
-	r := New(settings, runs, pipelines, nil, nil, nil, nil)
+	r := New(settings, runs, pipelines, nil, nil, nil, nil, nil)
 	r.tick(context.Background())
 
 	assert.Equal(t, 50, runs.deletedBeyondLimit[p1.ID])
@@ -343,7 +343,7 @@ func TestFailStuckRuns(t *testing.T) {
 	}
 	runs.runs = []domain.Run{stuckRun}
 
-	r := New(settings, runs, nil, nil, nil, nil, nil)
+	r := New(settings, runs, nil, nil, nil, nil, nil, nil)
 	status := r.tick(context.Background())
 
 	assert.Equal(t, 1, status.RunsFailed)
@@ -362,7 +362,7 @@ func TestPurgeSoftDeletedPipelines(t *testing.T) {
 
 	storage := newMockStorageStore()
 
-	r := New(settings, nil, pipelines, nil, storage, nil, nil)
+	r := New(settings, nil, pipelines, nil, storage, nil, nil, nil)
 	status := r.tick(context.Background())
 
 	assert.Equal(t, 1, status.PipelinesPurged)
@@ -390,12 +390,63 @@ func TestCleanOrphanBranches(t *testing.T) {
 		},
 	}
 
-	r := New(settings, runs, nil, nil, nil, nil, nessie)
+	r := New(settings, runs, nil, nil, nil, nil, nil, nessie)
 	status := r.tick(context.Background())
 
 	assert.Equal(t, 1, status.BranchesCleaned)
 	assert.Contains(t, nessie.deleted, "run-"+orphanRunID.String())
 	assert.NotContains(t, nessie.deleted, "run-"+runID.String())
+}
+
+// mockFailedMergesStore is a minimal reaper-side stub that mirrors the
+// branch-name "do not reap" hint. Each entry represents a recent row.
+type mockFailedMergesStoreForReaper struct {
+	names []string
+	err   error
+}
+
+func (m *mockFailedMergesStoreForReaper) Create(_ context.Context, _ domain.FailedMerge) error {
+	return nil
+}
+func (m *mockFailedMergesStoreForReaper) RecentBranchNames(_ context.Context, _ time.Time) ([]string, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.names, nil
+}
+
+func TestCleanOrphanBranches_SkipsBranchesWithRecentFailedMerges(t *testing.T) {
+	cfg := domain.DefaultRetentionConfig()
+	settings := newMockSettingsStore(cfg)
+
+	// Two orphan runs (no active row in run store) — without the
+	// failed_merges hint both would be reaped. The hint should rescue one.
+	orphanA := uuid.New()
+	orphanB := uuid.New()
+
+	runs := newMockRunStore()
+
+	nessie := &mockNessieClient{
+		branches: []NessieBranch{
+			{Name: "main", Hash: "main-h"},
+			{Name: "run-" + orphanA.String(), Hash: "ha"},
+			{Name: "run-" + orphanB.String(), Hash: "hb"},
+		},
+	}
+
+	failedMerges := &mockFailedMergesStoreForReaper{
+		names: []string{"run-" + orphanA.String()}, // protect A
+	}
+
+	r := New(settings, runs, nil, nil, nil, nil, failedMerges, nessie)
+	status := r.tick(context.Background())
+
+	assert.Equal(t, 1, status.BranchesCleaned,
+		"only the unprotected orphan should be deleted")
+	assert.NotContains(t, nessie.deleted, "run-"+orphanA.String(),
+		"protected branch must not be reaped")
+	assert.Contains(t, nessie.deleted, "run-"+orphanB.String(),
+		"unprotected orphan branch must be reaped")
 }
 
 func TestPurgeProcessedLZFiles(t *testing.T) {
@@ -416,7 +467,7 @@ func TestPurgeProcessedLZFiles(t *testing.T) {
 		{Path: "default/landing/uploads/_processed/recent/file.csv", Modified: time.Now()},
 	}
 
-	r := New(settings, nil, nil, zones, storage, nil, nil)
+	r := New(settings, nil, nil, zones, storage, nil, nil, nil)
 	status := r.tick(context.Background())
 
 	assert.Equal(t, 1, status.LZFilesCleaned)
@@ -430,7 +481,7 @@ func TestPruneAuditLog(t *testing.T) {
 	settings := newMockSettingsStore(cfg)
 	audit := &mockAuditStore{}
 
-	r := New(settings, nil, nil, nil, nil, audit, nil)
+	r := New(settings, nil, nil, nil, nil, audit, nil, nil)
 	status := r.tick(context.Background())
 
 	assert.Equal(t, 42, status.AuditPruned)
@@ -441,7 +492,7 @@ func TestRunNow_ReturnsStatus(t *testing.T) {
 	settings := newMockSettingsStore(cfg)
 	audit := &mockAuditStore{}
 
-	r := New(settings, nil, nil, nil, nil, audit, nil)
+	r := New(settings, nil, nil, nil, nil, audit, nil, nil)
 	status, err := r.RunNow(context.Background())
 
 	require.NoError(t, err)
@@ -454,7 +505,7 @@ func TestStartStop(t *testing.T) {
 	cfg.ReaperIntervalMinutes = 1
 
 	settings := newMockSettingsStore(cfg)
-	r := New(settings, nil, nil, nil, nil, nil, nil)
+	r := New(settings, nil, nil, nil, nil, nil, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	r.Start(ctx)
@@ -471,7 +522,7 @@ func TestTaskIsolation_PanicDoesNotCrash(t *testing.T) {
 	settings := newMockSettingsStore(cfg)
 
 	// Create a reaper with nil stores — some tasks will panic
-	r := New(settings, nil, nil, nil, nil, nil, nil)
+	r := New(settings, nil, nil, nil, nil, nil, nil, nil)
 
 	// Should not panic
 	status := r.tick(context.Background())

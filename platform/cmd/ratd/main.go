@@ -368,6 +368,7 @@ func main() {
 		srv.TableMetadata = postgres.NewTableMetadataStore(pool)
 		srv.Triggers = postgres.NewTriggerStore(pool)
 		srv.Audit = postgres.NewAuditStore(pool)
+		srv.FailedMerges = postgres.NewFailedMergesStore(pool)
 		srv.Settings = postgres.NewSettingsStore(pool)
 
 		srv.DBHealth = postgres.NewHealthChecker(pool)
@@ -630,7 +631,7 @@ func main() {
 			if nessieURL := os.Getenv("NESSIE_URL"); nessieURL != "" {
 				nessieClient = reaper.NewHTTPNessieClient(nessieURL)
 			}
-			reap := reaper.New(srv.Settings, srv.Runs, srv.Pipelines, srv.LandingZones, srv.Storage, srv.Audit, nessieClient)
+			reap := reaper.New(srv.Settings, srv.Runs, srv.Pipelines, srv.LandingZones, srv.Storage, srv.Audit, srv.FailedMerges, nessieClient)
 			reap.Start(ctx)
 			srv.Reaper = reap
 			stopReaper = func() { reap.Stop() }

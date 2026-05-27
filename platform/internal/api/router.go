@@ -322,6 +322,7 @@ type Server struct {
 	LandingZones  LandingZoneStore
 	Triggers      PipelineTriggerStore
 	Audit         AuditStore
+	FailedMerges  FailedMergesStore // optional: audit log for Phase 5 merge failures from the runner.
 	Settings      SettingsStore
 	EventBus      EventPublisher // Optional: publishes events for plugin dispatch.
 	Auth           func(http.Handler) http.Handler
@@ -527,6 +528,7 @@ func NewRouter(srv *Server) chi.Router {
 // callbacks. It hosts ONLY internal endpoints:
 //
 //   - POST /api/v1/internal/runs/{runID}/status — runner posts terminal run status
+//   - POST /api/v1/internal/failed-merges        — runner records a Phase 5 merge failure
 //   - POST /internal/plugins/register           — plugins phone home at boot
 //
 // SECURITY MODEL: this router has NO authentication. It assumes the caller is
@@ -558,6 +560,11 @@ func NewInternalRouter(srv *Server) chi.Router {
 
 	// Run-status callback from the runner.
 	MountInternalRoutes(r, srv)
+
+	// Failed-merge audit callback from the runner (Phase 5 terminal failure).
+	// Mounted unconditionally — the handler tolerates a nil FailedMerges store
+	// (logs a warning, 200s) so dev-mode without Postgres still works.
+	MountInternalFailedMergesRoute(r, srv)
 
 	// Plugin phone-home (plugins POST here at boot to register themselves).
 	if srv.PluginManager != nil {

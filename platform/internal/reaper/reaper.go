@@ -15,18 +15,29 @@ import (
 // It periodically cleans up old runs, logs, quality results, orphan branches,
 // soft-deleted pipelines, and processed landing zone files.
 type Reaper struct {
-	settings  api.SettingsStore
-	runs      api.RunStore
-	pipelines api.PipelineStore
-	zones     api.LandingZoneStore
-	storage   api.StorageStore
-	audit     api.AuditStore
-	nessie    NessieClient
-	cancel    context.CancelFunc
-	done      chan struct{}
+	settings     api.SettingsStore
+	runs         api.RunStore
+	pipelines    api.PipelineStore
+	zones        api.LandingZoneStore
+	storage      api.StorageStore
+	audit        api.AuditStore
+	failedMerges api.FailedMergesStore // optional: branches with recent rows are NOT swept.
+	nessie       NessieClient
+	cancel       context.CancelFunc
+	done         chan struct{}
 }
 
+// failedMergeRetentionDays is the window during which a branch name listed in
+// failed_merges is protected from the orphan-branch sweeper. Branches with a
+// failed Phase 5 merge represent data the runner already wrote and quality
+// tested but couldn't merge to main — an operator needs time to recover.
+const failedMergeRetentionDays = 7
+
 // New creates a Reaper with the given store dependencies.
+//
+// `failedMerges` may be nil (dev mode without Postgres) — in that case the
+// orphan-branch sweeper falls back to its previous behaviour of reaping any
+// run-* branch whose run is terminal.
 func New(
 	settings api.SettingsStore,
 	runs api.RunStore,
@@ -34,16 +45,18 @@ func New(
 	zones api.LandingZoneStore,
 	storage api.StorageStore,
 	audit api.AuditStore,
+	failedMerges api.FailedMergesStore,
 	nessie NessieClient,
 ) *Reaper {
 	return &Reaper{
-		settings:  settings,
-		runs:      runs,
-		pipelines: pipelines,
-		zones:     zones,
-		storage:   storage,
-		audit:     audit,
-		nessie:    nessie,
+		settings:     settings,
+		runs:         runs,
+		pipelines:    pipelines,
+		zones:        zones,
+		storage:      storage,
+		audit:        audit,
+		failedMerges: failedMerges,
+		nessie:       nessie,
 	}
 }
 
@@ -268,9 +281,30 @@ func (r *Reaper) purgeSoftDeletedPipelines(ctx context.Context, cfg domain.Reten
 }
 
 // cleanOrphanBranches deletes Nessie branches named "run-*" that have no active run.
-func (r *Reaper) cleanOrphanBranches(ctx context.Context, _ domain.RetentionConfig, _ time.Time) int {
+//
+// Branches that appear in failed_merges within the last failedMergeRetentionDays
+// are SKIPPED — they hold data that Phase 3 wrote and Phase 4 quality-tested,
+// but which couldn't reach main, and a human needs to recover them.
+func (r *Reaper) cleanOrphanBranches(ctx context.Context, _ domain.RetentionConfig, now time.Time) int {
 	if r.nessie == nil || r.runs == nil {
 		return 0
+	}
+
+	// Build the "do not auto-reap" set from recent failed_merges rows.
+	// On error we WARN but continue with the empty set rather than block
+	// cleanup entirely — repeated warnings will alert the operator.
+	skip := map[string]bool{}
+	if r.failedMerges != nil {
+		since := now.AddDate(0, 0, -failedMergeRetentionDays)
+		names, err := r.failedMerges.RecentBranchNames(ctx, since)
+		if err != nil {
+			slog.Warn("reaper: failed to load recent failed_merges (will not skip any branches)",
+				"error", err)
+		} else {
+			for _, n := range names {
+				skip[n] = true
+			}
+		}
 	}
 
 	branches, err := r.nessie.ListBranches(ctx)
@@ -282,6 +316,12 @@ func (r *Reaper) cleanOrphanBranches(ctx context.Context, _ domain.RetentionConf
 	count := 0
 	for _, b := range branches {
 		if !strings.HasPrefix(b.Name, "run-") {
+			continue
+		}
+
+		if skip[b.Name] {
+			slog.Info("reaper: skipping branch with recent failed merge (operator recovery pending)",
+				"branch", b.Name)
 			continue
 		}
 

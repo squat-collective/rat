@@ -233,6 +233,21 @@ type AuditEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// FailedMerge represents a Phase 5 branch-merge terminal failure.
+//
+// When the runner cannot merge an ephemeral branch into main and has
+// exhausted its retry budget, it leaves the branch in place (so a human
+// can recover the data) and writes a record like this so the failure is
+// visible without trawling logs.
+type FailedMerge struct {
+	RunID        string `json:"run_id"`
+	BranchName   string `json:"branch_name"`
+	SourceHash   string `json:"source_hash,omitempty"`
+	TargetHash   string `json:"target_hash,omitempty"`
+	ErrorKind    string `json:"error_kind"`
+	ErrorMessage string `json:"error_message"`
+}
+
 // RetentionConfig holds system-wide data retention settings.
 // Stored as JSONB in platform_settings under key "retention".
 type RetentionConfig struct {
