@@ -40,7 +40,7 @@ from rat_runner.iceberg import (
     snapshot_iceberg,
     write_iceberg,
 )
-from rat_runner.log import RunLogger
+from rat_runner.log import RunLogger, run_log_extras
 from rat_runner.maintenance import run_maintenance
 from rat_runner.models import MergeStrategy, PipelineConfig, QualityTestResult, RunState, RunStatus
 from rat_runner.nessie import (
@@ -724,6 +724,7 @@ def execute_pipeline(
                     "Failed to delete ephemeral branch '%s'",
                     run.branch,
                     exc_info=True,
+                    extra=run_log_extras(run),
                 )
 
         if ctx.engine is not None:

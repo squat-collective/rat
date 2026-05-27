@@ -59,6 +59,10 @@ class RunState:
     layer: str
     pipeline_name: str
     trigger: str
+    # X-Request-ID propagated from the gRPC caller (ratd). Empty when the
+    # caller didn't supply one. Carried so log lines / outbound callbacks can
+    # echo it back for cross-service tracing.
+    request_id: str = ""
     status: RunStatus = RunStatus.PENDING
     rows_written: int = 0
     duration_ms: int = 0

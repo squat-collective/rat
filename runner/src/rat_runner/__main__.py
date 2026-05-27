@@ -17,12 +17,11 @@ _gen_dir = Path(__file__).parent / "gen"
 if str(_gen_dir) not in sys.path:
     sys.path.insert(0, str(_gen_dir))
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+# Configure logging — JSON one-object-per-line so ratd's slog output and
+# runner output are interoperable for cross-service grep'ing by request_id.
+from rat_runner.json_log import configure_json_logging  # noqa: E402
+
+configure_json_logging(level=logging.INFO)
 
 _logger = logging.getLogger("rat_runner.startup")
 

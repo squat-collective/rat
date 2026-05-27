@@ -28,6 +28,15 @@ func MountInternalRoutes(r chi.Router, srv *Server) {
 func (s *Server) HandleRunStatusCallback(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "runID")
 
+	// Bind run_id (+ request_id when present) to the scope for every log
+	// statement below. The chi RequestID middleware already populated the
+	// request context with whatever X-Request-ID the runner echoed back, so
+	// pulling it explicitly here pairs request_id with run_id in JSON output.
+	log := slog.With("run_id", runID)
+	if reqID := RequestIDFromContext(r.Context()); reqID != "" {
+		log = log.With("request_id", reqID)
+	}
+
 	var update RunStatusUpdate
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
 		errorJSON(w, "invalid request body", "INVALID_ARGUMENT", http.StatusBadRequest)
@@ -50,7 +59,7 @@ func (s *Server) HandleRunStatusCallback(w http.ResponseWriter, r *http.Request)
 	// Delegate to executor if it supports push-based callbacks.
 	// Guard against nil executor (e.g., dev mode with no runner configured).
 	if s.Executor == nil {
-		slog.Warn("status callback received but no executor configured", "run_id", runID)
+		log.Warn("status callback received but no executor configured")
 		writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 		return
 	}
@@ -58,18 +67,17 @@ func (s *Server) HandleRunStatusCallback(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		// Executor doesn't support callbacks — just accept and ignore.
 		// The poll fallback will handle it.
-		slog.Warn("status callback received but executor does not support StatusCallbackReceiver",
-			"run_id", runID)
+		log.Warn("status callback received but executor does not support StatusCallbackReceiver")
 		writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 		return
 	}
 
 	if err := receiver.HandleStatusCallback(r.Context(), update); err != nil {
-		slog.Error("status callback processing failed", "run_id", runID, "error", err)
+		log.Error("status callback processing failed", "error", err)
 		internalError(w, "failed to process status callback", err)
 		return
 	}
 
-	slog.Info("status callback processed", "run_id", runID, "status", update.Status)
+	log.Info("status callback processed", "status", update.Status)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 }

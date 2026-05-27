@@ -29,6 +29,7 @@ from runner.v1 import (
 from rat_runner.callback import notify_run_complete
 from rat_runner.config import NessieConfig, S3Config, list_s3_keys, read_s3_text
 from rat_runner.executor import execute_pipeline
+from rat_runner.log import run_log_extras
 from rat_runner.models import RunState, RunStatus
 from rat_runner.plugin_registry import PluginRegistry
 from rat_runner.preview import preview_pipeline
@@ -41,6 +42,31 @@ from rat_runner.state_dir import (
 from rat_runner.templating import validate_template
 
 logger = logging.getLogger(__name__)
+
+
+# gRPC metadata is case-insensitive but the standard convention is lowercase.
+# ratd's Go middleware sets the header as "X-Request-ID"; ConnectRPC
+# lowercases header names before placing them on the wire as gRPC metadata.
+_REQUEST_ID_METADATA_KEYS: tuple[str, ...] = ("x-request-id",)
+
+
+def _request_id_from_context(context: grpc.ServicerContext) -> str:
+    """Extract the X-Request-ID propagated by ratd from gRPC metadata.
+
+    Returns an empty string when the caller didn't supply one. We accept the
+    lowercased form because both ConnectRPC and grpcio normalise headers to
+    lowercase on the receiving side, and the constants here document the
+    contract with ratd's ``propagateRequestID`` helper.
+    """
+    try:
+        metadata = dict(context.invocation_metadata() or ())
+    except Exception:
+        return ""
+    for key in _REQUEST_ID_METADATA_KEYS:
+        value = metadata.get(key)
+        if value:
+            return str(value)
+    return ""
 
 
 def _sanitize_error(error: str) -> str:
@@ -202,11 +228,8 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
                 )
                 self._runs[cr.run_id] = run
                 logger.warning(
-                    "Crash recovery: marked run %s (%s.%s.%s) as FAILED",
-                    cr.run_id,
-                    cr.namespace,
-                    cr.layer,
-                    cr.pipeline_name,
+                    "Crash recovery: marked run as FAILED",
+                    extra=run_log_extras(run),
                 )
 
     def _execute_with_marker(
@@ -279,14 +302,11 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
 
         for attempt in range(1, config.max_retries + 1):
             logger.info(
-                "Retry %d/%d for run %s (%s.%s.%s) after %ds delay",
+                "Retry %d/%d after %ds delay",
                 attempt,
                 config.max_retries,
-                run.run_id,
-                ns,
-                layer,
-                name,
                 config.retry_delay_seconds,
+                extra=run_log_extras(run),
             )
             run.add_log(
                 "info",
@@ -314,9 +334,9 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
             run.add_log("warn", f"Retry {attempt}/{config.max_retries} failed: {run.error}")
 
         logger.warning(
-            "All %d retries exhausted for run %s",
+            "All %d retries exhausted",
             config.max_retries,
-            run.run_id,
+            extra=run_log_extras(run),
         )
 
     def SubmitPipeline(  # noqa: N802
@@ -345,12 +365,17 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
         if hasattr(request, "env") and request.env:
             env = dict(request.env)
 
+        # Extract X-Request-ID propagated by ratd so every log line + the
+        # outbound status callback can echo it back for cross-service tracing.
+        request_id = _request_id_from_context(context)
+
         run = RunState(
             run_id=run_id,
             namespace=request.namespace,
             layer=layer_str,
             pipeline_name=request.pipeline_name,
             trigger=request.trigger,
+            request_id=request_id,
             env=env,
         )
 
@@ -370,12 +395,14 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
             self._runs[run_id] = run
 
         logger.info(
-            "Submitting pipeline: %s.%s.%s (run=%s, trigger=%s)",
+            "Submitting pipeline %s.%s.%s",
             request.namespace,
             layer_str,
             request.pipeline_name,
-            run_id,
-            request.trigger,
+            extra={
+                **run_log_extras(run),
+                "trigger": request.trigger,
+            },
         )
 
         # Write marker file before dispatching — if the process crashes during
@@ -422,7 +449,11 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
         # Sanitize error messages before returning — log full error server-side.
         error_msg = run.error
         if error_msg:
-            logger.debug("Full run error for %s: %s", run.run_id, error_msg)
+            logger.debug(
+                "Full run error: %s",
+                error_msg,
+                extra=run_log_extras(run),
+            )
             error_msg = _sanitize_error(error_msg)
 
         return common_pb2.GetRunStatusResponse(
