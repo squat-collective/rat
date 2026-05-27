@@ -2,11 +2,13 @@ package plugins
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	connect "connectrpc.com/connect"
 	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
@@ -14,6 +16,11 @@ import (
 	"github.com/rat-data/rat/platform/internal/auth"
 	"github.com/rat-data/rat/platform/internal/domain"
 )
+
+// Per-RPC timeout on the auth plugin's Authenticate call — a slow/hung
+// auth plugin must NOT block every request to ratd. On timeout we fail
+// closed (401).
+const authPluginRPCTimeout = 5 * time.Second
 
 // Well-known capability names. A plugin declares these in DescribeResponse.capabilities.
 const (
@@ -243,8 +250,29 @@ func (r *Registry) AuthMiddleware() func(http.Handler) http.Handler {
 				return
 			}
 
-			resp, err := r.Authenticate(req.Context(), token)
+			authCtx, cancel := context.WithTimeout(req.Context(), authPluginRPCTimeout)
+			defer cancel()
+
+			resp, err := r.Authenticate(authCtx, token)
 			if err != nil {
+				// A slow/hung auth plugin must not stall every request to ratd.
+				// On deadline-exceeded we fail closed (401) and log WARN with
+				// the plugin name; the plugin name is intentionally not exposed
+				// in the response to avoid leaking deployment details.
+				if isDeadlineExceeded(err) {
+					pluginName := ""
+					if p := r.ByCapability(CapAuth); p != nil {
+						pluginName = p.Name
+					}
+					slog.Warn("auth plugin Authenticate timed out",
+						"plugin", pluginName,
+						"timeout", authPluginRPCTimeout,
+					)
+					writeJSON(w, http.StatusUnauthorized, map[string]string{
+						"error": "authentication timed out",
+					})
+					return
+				}
 				writeJSON(w, http.StatusUnauthorized, map[string]string{
 					"error": "authentication failed",
 				})
@@ -264,6 +292,22 @@ func (r *Registry) AuthMiddleware() func(http.Handler) http.Handler {
 			next.ServeHTTP(w, req.WithContext(ctx))
 		})
 	}
+}
+
+// isDeadlineExceeded reports whether err is (or wraps) a context-deadline
+// timeout. ConnectRPC surfaces deadline-exceeded as connect.CodeDeadlineExceeded
+// but the wrapped context error still satisfies errors.Is, so we check both.
+func isDeadlineExceeded(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if connectErr := new(connect.Error); errors.As(err, &connectErr) {
+		return connectErr.Code() == connect.CodeDeadlineExceeded
+	}
+	return false
 }
 
 // ── Enforcement (calls into enforcement plugin via core proto) ──
