@@ -209,3 +209,41 @@ func TestInternalRouter_ServesHealth(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code,
 		"internal router must serve /health for container probes")
 }
+
+// ── Identity routes are user-facing, mounted on public listener only ─────
+
+// Wave 5 (commit 0d7529f) wired MountIdentityRoutes into router.go's public
+// listener. These tests pin that wiring so a future refactor that drops the
+// MountIdentityRoutes(vr, srv) call would fail loudly instead of silently
+// regressing Pro identity plugins.
+//
+// The distinction we assert is 401 vs 404:
+//   - 401 (Unauthorized): chi has the route mounted, the handler ran, and
+//     requireIdentity self-gated on missing auth context.
+//   - 404 (Not Found): chi has no route — the mount call is missing.
+
+func TestPublicRouter_ServesIdentityRoutes(t *testing.T) {
+	srv := fullTestServer()
+	router := api.NewRouter(srv)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/identity/users", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"public router must serve /api/v1/identity/users — handler self-gates on auth (401), not chi 404")
+}
+
+func TestInternalRouter_DoesNotExposeIdentity(t *testing.T) {
+	srv := fullTestServer()
+	router := api.NewInternalRouter(srv)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/identity/users", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code,
+		"internal router must NOT expose /api/v1/identity/users — identity is user-facing, not service-to-service")
+}
