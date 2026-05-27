@@ -116,6 +116,58 @@ func TestValidateRegistrationAddress_LinkLocalIPv6_Rejected(t *testing.T) {
 	}
 }
 
+// ── IPv4-mapped IPv6 — dual-stack SSRF surface ─────────────────────────────
+
+// TestValidateRegistrationAddress_IPv4MappedIPv6 covers the ::ffff:1.2.3.4
+// form. Go's net.IP.IsLoopback / IsLinkLocalUnicast already recognise the
+// mapped variants (the methods inspect To4() internally), so the validator
+// should reject mapped loopback / link-local without any extra code — but
+// without an explicit test we have no assurance, and dual-stack SSRF tricks
+// are an increasingly common attack vector worth pinning down.
+func TestValidateRegistrationAddress_IPv4MappedIPv6(t *testing.T) {
+	cases := []struct {
+		name      string
+		addr      string
+		wantErr   bool
+		wantMatch string // substring required in the rejection message
+	}{
+		{
+			name:      "mapped loopback rejected",
+			addr:      "http://[::ffff:127.0.0.1]:50100",
+			wantErr:   true,
+			wantMatch: "loopback",
+		},
+		{
+			name:      "mapped AWS metadata rejected",
+			addr:      "http://[::ffff:169.254.169.254]/latest/meta-data/",
+			wantErr:   true,
+			wantMatch: "link-local",
+		},
+		{
+			name:    "mapped private (Docker-style) allowed",
+			addr:    "http://[::ffff:10.0.0.5]:50100",
+			wantErr: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRegistrationAddress(tc.addr, false, noResolverShouldBeCalled(t))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected rejection for %s, got nil", tc.addr)
+				}
+				if tc.wantMatch != "" && !strings.Contains(err.Error(), tc.wantMatch) {
+					t.Errorf("error for %s should mention %q; got %v", tc.addr, tc.wantMatch, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected ok for %s, got %v", tc.addr, err)
+			}
+		})
+	}
+}
+
 // ── Multicast / unspecified ────────────────────────────────────────────────
 
 func TestValidateRegistrationAddress_MulticastIPv4_Rejected(t *testing.T) {
