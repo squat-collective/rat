@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	connect "connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -810,4 +811,91 @@ func TestManager_Reconciler_HealthyState_NoWarning(t *testing.T) {
 	out := logs()
 	assert.NotContains(t, out, "plugin in catalog but not in registry")
 	assert.NotContains(t, out, "plugin in registry but not in catalog")
+}
+
+// ── Callback panic safety ─────────────────────────────────────────────────
+
+// TestManager_Register_CallbackPanics_DoesNotDeadlock proves that a panic
+// inside an OnAuthChanged handler does NOT propagate up through Register
+// (which would skip the deferred Manager.mu unlock and deadlock every
+// subsequent registration). The first Register must return normally and
+// the second one must also succeed — proof that the mutex is free.
+func TestManager_Register_CallbackPanics_DoesNotDeadlock(t *testing.T) {
+	t.Setenv("PLUGIN_ALLOW_LOOPBACK", "true")
+	catalog := newMemoryCatalog()
+	mgr := NewManager(catalog, "pro", nil)
+
+	mgr.OnAuthChanged = func(_ *Registry) {
+		panic("intentional callback explosion")
+	}
+
+	logs := captureSlog(t)
+
+	ts1 := startMockPluginServer(t, []string{CapAuth})
+	defer ts1.Close()
+
+	// (a) First Register with the panicking auth callback — must not propagate.
+	assert.NotPanics(t, func() {
+		err := mgr.Register(context.Background(), "auth-one", ts1.URL)
+		require.NoError(t, err, "Register must absorb the callback panic")
+	}, "Register must not let the callback panic propagate")
+	assert.NotNil(t, mgr.Registry().Get("auth-one"), "first plugin still registered")
+
+	// (b) Second Register on a fresh address with a non-exclusive capability —
+	// must succeed, which proves Manager.mu was actually released after the
+	// first call. (CapAuth is mutually-exclusive across plugins, so we use
+	// a generic capability here.)
+	ts2 := startMockPluginServer(t, []string{"custom"})
+	defer ts2.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- mgr.Register(context.Background(), "other-plugin", ts2.URL)
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err, "second Register must succeed (mutex was released)")
+	case <-time.After(5 * time.Second):
+		t.Fatal("second Register deadlocked — Manager.mu was held across the callback panic")
+	}
+	assert.NotNil(t, mgr.Registry().Get("other-plugin"), "second plugin registered")
+
+	// (c) The panic was logged at ERROR with greppable structure.
+	out := logs()
+	assert.Contains(t, out, "plugin callback panicked",
+		"the recovery shim must log at ERROR with a stable message")
+	assert.Contains(t, out, "intentional callback explosion",
+		"the original panic value must appear in the log")
+	assert.Contains(t, out, "capability="+CapAuth,
+		"the failing capability must be tagged for greppability")
+}
+
+// TestManager_Register_MultipleCallbacksOneCrashes_OthersRun proves
+// callbacks are independent: when OnAuthChanged panics, OnCloudChanged
+// still runs for the same plugin (both capabilities fire in a single
+// fireCallbacks loop).
+func TestManager_Register_MultipleCallbacksOneCrashes_OthersRun(t *testing.T) {
+	t.Setenv("PLUGIN_ALLOW_LOOPBACK", "true")
+	catalog := newMemoryCatalog()
+	mgr := NewManager(catalog, "pro", nil)
+
+	var cloudFired atomic.Bool
+	mgr.OnAuthChanged = func(_ *Registry) {
+		panic("auth handler is broken")
+	}
+	mgr.OnCloudChanged = func(_ *Registry) {
+		cloudFired.Store(true)
+	}
+
+	logs := captureSlog(t)
+
+	ts := startMockPluginServer(t, []string{CapAuth, CapCloud})
+	defer ts.Close()
+
+	err := mgr.Register(context.Background(), "auth-and-cloud", ts.URL)
+	require.NoError(t, err, "Register must succeed despite the auth callback panic")
+
+	assert.True(t, cloudFired.Load(),
+		"OnCloudChanged must still run after OnAuthChanged panicked")
+	assert.Contains(t, logs(), "plugin callback panicked",
+		"the panicking callback must still be logged")
 }

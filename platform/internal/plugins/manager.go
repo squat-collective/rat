@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -636,25 +637,41 @@ func (m *Manager) reconcileOnce(ctx context.Context) {
 
 // fireCallbacks triggers the appropriate runtime re-wiring callbacks
 // when a plugin with well-known capabilities is registered or removed.
+//
+// Each callback runs through fireOne, which recovers panics so a
+// misbehaving handler can't propagate up through Manager.mu and deadlock
+// every subsequent Register/Enable/Disable/Remove call until ratd
+// restarts. Callbacks remain independent: one's panic doesn't skip the
+// others.
 func (m *Manager) fireCallbacks(capabilities []string) {
 	for _, cap := range capabilities {
 		switch cap {
 		case CapAuth:
-			if m.OnAuthChanged != nil {
-				m.OnAuthChanged(m.registry)
-			}
+			m.fireOne(cap, m.OnAuthChanged)
 		case CapExecutor:
-			if m.OnExecutorChanged != nil {
-				m.OnExecutorChanged(m.registry)
-			}
+			m.fireOne(cap, m.OnExecutorChanged)
 		case CapEnforcement:
-			if m.OnEnforcementChanged != nil {
-				m.OnEnforcementChanged(m.registry)
-			}
+			m.fireOne(cap, m.OnEnforcementChanged)
 		case CapCloud:
-			if m.OnCloudChanged != nil {
-				m.OnCloudChanged(m.registry)
-			}
+			m.fireOne(cap, m.OnCloudChanged)
 		}
 	}
+}
+
+// fireOne invokes a callback safely: recovers panics, logs them at
+// ERROR with the capability name and stack, and continues. A bad
+// callback handler must not deadlock the manager mutex.
+func (m *Manager) fireOne(cap string, fn func(*Registry)) {
+	if fn == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("plugin callback panicked",
+				"capability", cap,
+				"panic", r,
+				"stack", string(debug.Stack()))
+		}
+	}()
+	fn(m.registry)
 }
