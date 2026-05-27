@@ -221,6 +221,83 @@ func TestHealthLoop_OnTransition_NotFiredWhenStable(t *testing.T) {
 	assert.Equal(t, 0, callCount, "OnTransition should not fire when health status is stable")
 }
 
+// TestHealthLoop_ReDescribesOnRecovery is the regression for the plugin-restart
+// stale-token blind window. When a plugin recovers (error→enabled), the loop
+// must re-Describe and refresh the platform_token so subsequent proxied calls
+// inject the plugin's CURRENT token, not the one captured at first registration.
+func TestHealthLoop_ReDescribesOnRecovery(t *testing.T) {
+	reg := NewRegistry("pro")
+
+	describeCalls := 0
+	mock := &mockPluginServiceClient{
+		healthCheckFunc: func(_ context.Context, _ *connect.Request[pluginv1.HealthCheckRequest]) (*connect.Response[pluginv1.HealthCheckResponse], error) {
+			return connect.NewResponse(&pluginv1.HealthCheckResponse{
+				Status: pluginv1.Status_STATUS_SERVING,
+			}), nil
+		},
+		describeFunc: func(_ context.Context, _ *connect.Request[pluginv1.DescribeRequest]) (*connect.Response[pluginv1.DescribeResponse], error) {
+			describeCalls++
+			return connect.NewResponse(&pluginv1.DescribeResponse{
+				PlatformToken: "fresh-token-after-restart",
+				Version:       "1.2.3",
+				Capabilities:  []string{CapAuth},
+			}), nil
+		},
+	}
+
+	require.NoError(t, reg.Register(&Plugin{
+		Name:         "auth",
+		Addr:         "http://auth:50060",
+		Status:       domain.PluginStatusError,
+		Error:        "was down",
+		Token:        "stale-token-from-before-restart",
+		Capabilities: []string{CapAuth},
+		PluginClient: mock,
+	}))
+
+	hl := NewHealthLoop(reg, nil)
+	hl.checkAll(context.Background())
+
+	p := reg.Get("auth")
+	assert.Equal(t, domain.PluginStatusEnabled, p.Status)
+	assert.Equal(t, 1, describeCalls, "Describe should be called on recovery")
+	assert.Equal(t, "fresh-token-after-restart", p.Token, "stale token must be replaced")
+	assert.Equal(t, "1.2.3", p.Version)
+}
+
+// TestHealthLoop_RecoveryWithUnimplementedDescribe ensures a legacy plugin
+// that doesn't implement Describe still recovers cleanly (token just stays
+// at whatever it was — no panic, no error).
+func TestHealthLoop_RecoveryWithUnimplementedDescribe(t *testing.T) {
+	reg := NewRegistry("pro")
+
+	mock := &mockPluginServiceClient{
+		healthCheckFunc: func(_ context.Context, _ *connect.Request[pluginv1.HealthCheckRequest]) (*connect.Response[pluginv1.HealthCheckResponse], error) {
+			return connect.NewResponse(&pluginv1.HealthCheckResponse{
+				Status: pluginv1.Status_STATUS_SERVING,
+			}), nil
+		},
+		// Default Describe returns Unimplemented — legacy plugin path.
+	}
+
+	require.NoError(t, reg.Register(&Plugin{
+		Name:         "legacy",
+		Addr:         "http://legacy:50060",
+		Status:       domain.PluginStatusError,
+		Error:        "was down",
+		Token:        "legacy-token",
+		Capabilities: []string{CapAuth},
+		PluginClient: mock,
+	}))
+
+	hl := NewHealthLoop(reg, nil)
+	hl.checkAll(context.Background())
+
+	p := reg.Get("legacy")
+	assert.Equal(t, domain.PluginStatusEnabled, p.Status)
+	assert.Equal(t, "legacy-token", p.Token, "legacy token preserved when Describe is unimplemented")
+}
+
 func TestHealthLoop_PersistsTransitionToCatalog(t *testing.T) {
 	reg := NewRegistry("pro")
 	catalog := newMemoryCatalog()

@@ -121,6 +121,31 @@ func (hl *HealthLoop) checkAll(ctx context.Context) {
 			p.Status = domain.PluginStatusEnabled
 			p.Error = ""
 
+			// Re-describe so a freshly-restarted plugin's new platform_token
+			// replaces the stale one we got at registration. Without this,
+			// every proxied call after a plugin restart would inject the old
+			// token and the plugin's TokenAuth would 401 until ratd itself
+			// restarted. Best-effort: a failure here just leaves the old
+			// token in place, same as before the fix.
+			descCtx, descCancel := context.WithTimeout(ctx, describeTimeout)
+			descResp, descErr := p.PluginClient.Describe(descCtx, connect.NewRequest(&pluginv1.DescribeRequest{}))
+			descCancel()
+			if descErr == nil && descResp != nil && descResp.Msg != nil {
+				if tok := descResp.Msg.PlatformToken; tok != "" {
+					p.Token = tok
+				}
+				if v := descResp.Msg.Version; v != "" {
+					p.Version = v
+				}
+				if caps := descResp.Msg.Capabilities; len(caps) > 0 {
+					p.Capabilities = caps
+				}
+				if events := descResp.Msg.EventSubscriptions; len(events) > 0 {
+					p.EventTypes = events
+				}
+				p.Descriptor = descResp.Msg
+			}
+
 			if hl.catalog != nil {
 				_ = hl.catalog.UpdatePluginHealth(ctx, p.Name, true, "")
 				_ = hl.catalog.UpdatePluginStatus(ctx, p.Name, domain.PluginStatusEnabled, "")
