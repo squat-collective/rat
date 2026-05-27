@@ -496,6 +496,10 @@ func NewRouter(srv *Server) chi.Router {
 		// Handlers check for permission provider internally.
 		MountPermissionRoutes(vr, srv)
 
+		// Identity management endpoints (authenticated).
+		// Handlers check for identity provider internally.
+		MountIdentityRoutes(vr, srv)
+
 		// Plugin management endpoints (authenticated).
 		if srv.PluginManager != nil {
 			MountPluginRoutes(vr, srv)
