@@ -423,6 +423,48 @@ func TestWriteFile_SetsDraftDirty(t *testing.T) {
 	assert.NotEmpty(t, resp["version_id"])
 }
 
+// --- Path traversal ---
+
+// TestReadFile_DoubleEncodedTraversal_Returns400 ensures the double-decode
+// guard in validateFilePath catches %252e%252e — chi auto-decodes URL params
+// once, so the literal ".." check below would otherwise miss it.
+func TestReadFile_DoubleEncodedTraversal_Returns400(t *testing.T) {
+	srv, _ := newStorageTestServer()
+	router := api.NewRouter(srv)
+
+	// %252e%252e decodes once (by chi) to %2e%2e — which has no literal ".."
+	// and would slip past the pre-fix check. The defense-in-depth re-decode
+	// catches it.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/files/default/%252e%252e/etc/passwd", http.NoBody)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestListFiles_DoubleEncodedTraversalInPrefix_Returns400(t *testing.T) {
+	srv, _ := newStorageTestServer()
+	router := api.NewRouter(srv)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/files?prefix=default/%252e%252e/", http.NoBody)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestReadFile_SingleEncodedTraversal_Returns400(t *testing.T) {
+	srv, _ := newStorageTestServer()
+	router := api.NewRouter(srv)
+
+	// %2e%2e decodes (by chi) to ".." — caught by the pre-existing literal check.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/files/default/%2e%2e/secret", http.NoBody)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 func TestWriteFile_NonPipelinePath_NoDraftDirty(t *testing.T) {
 	srv, _ := newStorageTestServer()
 	router := api.NewRouter(srv)
