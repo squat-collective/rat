@@ -64,9 +64,19 @@ Pro Edition adds multi-user, sharing, and cloud via closed-source container plug
 │   ├── portal/                        # Next.js — web IDE
 │   │   └── src/components/plugins/    # Plugin slot system (generic extension points)
 │   ├── sdk-typescript/                # TS SDK for portal
+│   ├── sdk-go/                        # Go SDK for plugins (phone-home, auth, Describe builder)
 │   ├── proto/                         # Shared gRPC protobuf definitions
+│   ├── plugins/                       # Community plugins (15 Go + 5 Python)
+│   │   ├── rat-plugin-secrets/        # AES-256-GCM encrypted vault
+│   │   ├── rat-plugin-compaction/     # Iceberg small-file rewriter (Go+Python hybrid)
+│   │   ├── rat-plugin-pg-sync/        # External Postgres → Iceberg sync
+│   │   ├── rat-plugin-diff/           # Live activity feed + row-level diff
+│   │   ├── rat-plugin-interconnect/   # Capability broker + plugin-mesh viewer
+│   │   └── …                          # Full list at plugins/README.md
 │   ├── infra/                         # Docker compose, configs, scripts
-│   ├── docs/                          # Architecture docs, ADRs
+│   │   ├── docker-compose.yml         # Core 7-service stack
+│   │   └── docker-compose.plugins.yml # Optional plugin overlay (uncomment to enable)
+│   ├── docs/                          # Architecture docs, ADRs, migrations
 │   ├── Makefile                       # Root orchestrator
 │   └── CLAUDE.md                      # This file
 │
@@ -76,6 +86,13 @@ Pro Edition adds multi-user, sharing, and cloud via closed-source container plug
     ├── portal-pro/                    # Portal plugin package (private)
     └── infra/                         # Pro compose overrides + Keycloak realm
 ```
+
+> **Note** on the rename: this directory used to be `examples/` and was
+> renamed to `plugins/` in May 2026 to reflect that the contents are
+> first-class shipped artefacts. Plugin Docker images are published to
+> `ghcr.io/squat-collective/rat-plugin-*` on every push to main and on
+> per-plugin version tags. See
+> [`docs/migrations/2026-05-examples-to-plugins.md`](docs/migrations/2026-05-examples-to-plugins.md).
 
 ---
 
@@ -548,6 +565,64 @@ make dev-ratd         # hot reload Go platform
 make dev-portal       # hot reload Next.js portal (builds SDK first)
 make clean            # remove containers, volumes, generated files
 ```
+
+---
+
+## Plugin Guidelines
+
+### Two plugin layers
+
+RAT has two distinct plugin mechanisms — don't confuse them:
+
+| Layer | Where | What it extends | How it's loaded |
+|---|---|---|---|
+| **Runner plugin** | Python package in `plugins/rat-plugin-*` (with `pyproject.toml`) | Merge strategies, pipeline types, sources, hooks, jinja helpers | Pip-installed into the runner image; discovered via Python `entry_points` |
+| **Platform plugin** | Go container in `plugins/rat-plugin-*` (with `Dockerfile`) | New REST routes, UI pages, capability brokers, AI providers, etc. | Phones home to ratd's internal listener on startup; ratd reverse-proxies the plugin's HTTP under `/api/v1/x/<name>/*` and `/api/v1/plugins/<name>/ui/bundle.js` |
+
+A "plugin" in casual conversation almost always means a platform
+plugin (the Go-container kind). When in doubt about wiring, read
+[`docs/PLUGIN_AUTHOR_GUIDE.md`](docs/PLUGIN_AUTHOR_GUIDE.md).
+
+### Platform plugin shape
+
+Every Go platform plugin uses the same skeleton (see
+`plugins/rat-plugin-secrets/main.go` for the canonical example):
+
+1. `sdk.LoadPluginEnv()` reads `PLUGIN_NAME`, `PLUGIN_ADDR`, `GRPC_PORT`, `RATD_URL`, `RATD_INTERNAL_URL`.
+2. `sdk.PhoneHomeLoop()` POSTs `{name, addr}` to ratd's internal listener until accepted (exponential backoff).
+3. `sdk.MountStandardPluginRoutes()` wires the ConnectRPC `PluginService` (`HealthCheck` + `Describe`) and serves the embedded `bundle.js` plus the plugin's own API mux.
+4. `sdk.NewDescribe(name, version, summary).WithRoute(…).WithUI(…).WithPlatformToken(sdk.RandomToken()).Build()` constructs the descriptor.
+5. The plugin's per-startup random `platform_token` is advertised via `Describe` and injected by ratd's reverse proxy as `X-RAT-Plugin-Token` on every forwarded call. Use `sdk.TokenAuth()` middleware on the plugin's API mux to validate it (constant-time compare).
+
+### Distribution
+
+- **Source** lives in `plugins/rat-plugin-<name>/` in this monorepo.
+- **CI** (`.github/workflows/publish-plugins.yml`) publishes each
+  plugin's image to `ghcr.io/squat-collective/rat-plugin-<name>` on
+  every push to main and on `plugin-<name>-v<version>` tags.
+- **Install path for operators**: pull the image (or use
+  `infra/docker-compose.plugins.yml` overlay) — the plugin phones home
+  and registers itself within ~2s.
+- **Local development**: `cd plugins/rat-plugin-<name> && make build &&
+  make run` builds from the in-tree sources and runs against the local
+  ratd. `make run` cleans up any previous container of the same name.
+
+### When to add a new plugin
+
+Add a plugin when:
+- The feature is meaningfully optional (not every deployment needs it)
+- It has its own UI surface (lives at `/x/<name>`)
+- It integrates with an external system (Postgres, Slack, an LLM, MCP)
+- It's experimental and you want a kill-switch
+
+Add it to core when:
+- It's load-bearing for the standard workflow (most users will need it)
+- It needs deep access to ratd's internal state (transactions, etc.)
+- Decoupling cost outweighs the optionality benefit
+
+See the [v3-warehouse-platformization](docs/v2-strategy.md) plan for
+the longer-term vision of how the plugin layer becomes the central
+extensibility mechanism.
 
 ---
 
