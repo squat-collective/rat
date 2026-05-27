@@ -12,12 +12,13 @@ const pluginVersion = "0.1.0"
 
 type Handler struct {
 	pluginv1connect.UnimplementedPluginServiceHandler
-	name      string
-	bundleURL string
+	name       string
+	bundleURL  string
+	bundleHash string // SRI format ("sha256-<base64>") — surfaced in Describe so the portal can set <script integrity>
 }
 
-func newHandler(name, bundleURL string) *Handler {
-	return &Handler{name: name, bundleURL: bundleURL}
+func newHandler(name, bundleURL, bundleHash string) *Handler {
+	return &Handler{name: name, bundleURL: bundleURL, bundleHash: bundleHash}
 }
 
 func (h *Handler) HealthCheck(
@@ -41,7 +42,8 @@ func (h *Handler) Describe(
 			{Method: "POST", Path: "/tables/{ns}/{layer}/{name}/diff", Description: "Row-level diff between two snapshots. Body: {snapshot_a, snapshot_b, limit?}"},
 		},
 		Ui: &pluginv1.PluginUIDescriptor{
-			BundleUrl: h.bundleURL,
+			BundleUrl:  h.bundleURL,
+			BundleHash: h.bundleHash,
 			NavItems: []*pluginv1.UINavItem{
 				{Label: "Diff", Icon: "git-compare", Path: "/x/diff", Priority: 14},
 			},

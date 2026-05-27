@@ -25,7 +25,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -40,6 +42,17 @@ import (
 
 //go:embed bundle.js
 var bundleJS []byte
+
+// bundleHash is computed once at startup over the go:embed'd bundle.js.
+// It surfaces in Describe()'s UI descriptor so the portal can set
+// <script integrity="sha256-…"> and the browser rejects any tampered
+// bundle delivered through the ratd reverse proxy.
+var bundleHash = sriHash(bundleJS)
+
+func sriHash(b []byte) string {
+	sum := sha256.Sum256(b)
+	return "sha256-" + base64.StdEncoding.EncodeToString(sum[:])
+}
 
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -83,7 +96,7 @@ func main() {
 	cfg.onChange(st.hydrate)
 
 	a := newAPI(st)
-	h := newHandler(name, "http://"+selfAddr+"/bundle.js")
+	h := newHandler(name, "http://"+selfAddr+"/bundle.js", bundleHash)
 
 	mux := http.NewServeMux()
 	pluginPath, pluginHTTP := pluginv1connect.NewPluginServiceHandler(h)

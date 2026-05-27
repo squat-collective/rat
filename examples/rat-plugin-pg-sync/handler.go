@@ -13,12 +13,13 @@ const pluginVersion = "0.1.0"
 type Handler struct {
 	pluginv1connect.UnimplementedPluginServiceHandler
 
-	name      string
-	bundleURL string
+	name       string
+	bundleURL  string
+	bundleHash string // SRI format ("sha256-<base64>") — surfaced in Describe so the portal can set <script integrity>
 }
 
-func newHandler(name, bundleURL string) *Handler {
-	return &Handler{name: name, bundleURL: bundleURL}
+func newHandler(name, bundleURL, bundleHash string) *Handler {
+	return &Handler{name: name, bundleURL: bundleURL, bundleHash: bundleHash}
 }
 
 func (h *Handler) HealthCheck(
@@ -48,7 +49,8 @@ func (h *Handler) Describe(
 			{Method: "POST", Path: "/tables/{id}/sync-now", Description: "Trigger an immediate run"},
 		},
 		Ui: &pluginv1.PluginUIDescriptor{
-			BundleUrl: h.bundleURL,
+			BundleUrl:  h.bundleURL,
+			BundleHash: h.bundleHash,
 			NavItems: []*pluginv1.UINavItem{
 				{Label: "Pg Sync", Icon: "database", Path: "/x/pg-sync", Priority: 13},
 			},

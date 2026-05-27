@@ -22,6 +22,10 @@ interface PluginListEntry {
   descriptor?: {
     ui?: {
       bundle_url?: string;
+      // SHA-256 of the bundle in SRI format ("sha256-<base64>"). When present,
+      // the loader sets <script integrity=…> so the browser refuses to execute
+      // a tampered bundle. Plugins on older proto versions omit this.
+      bundle_hash?: string;
       nav_items?: PluginNavItem[];
     };
   };
@@ -68,6 +72,20 @@ export async function loadPlugins(nonce: string): Promise<PluginRegistry> {
             script.src = `${PUBLIC_API_URL}/api/v1/plugins/${p.name}/ui/bundle.js`;
             script.nonce = nonce;
             script.async = true;
+            const hash = p.descriptor?.ui?.bundle_hash;
+            if (hash) {
+              // SRI: the browser hashes the fetched bytes and refuses to
+              // execute the script if they don't match. crossOrigin is
+              // required because the bundle is fetched cross-origin (portal
+              // origin → ratd origin) and SRI demands a CORS-clean response.
+              script.integrity = hash;
+              script.crossOrigin = "anonymous";
+            } else {
+              console.warn(
+                `[plugin-loader] ${p.name} has no bundle_hash — script integrity not verified. ` +
+                  `Add bundle_hash to its Describe() response to enable SRI.`,
+              );
+            }
             script.onload = () => resolve();
             script.onerror = () => {
               console.warn(`[plugin-loader] Failed to load bundle for plugin: ${p.name}`);
