@@ -65,6 +65,30 @@ func (s *Server) HandleListNamespaces(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Pro: filter to namespaces the user can read. resourceID for namespaces
+	// is the namespace name. Community / no-user / no-authorizer falls through
+	// unchanged via filterAccess's early returns.
+	if plugins.UserFromContext(r.Context()) != nil {
+		ids := make([]string, len(namespaces))
+		for i, n := range namespaces {
+			ids[i] = n.Name
+		}
+		allowed := s.filterAccess(r.Context(), "namespace", "read", ids)
+		if len(allowed) != len(ids) {
+			allowedSet := make(map[string]bool, len(allowed))
+			for _, id := range allowed {
+				allowedSet[id] = true
+			}
+			out := make([]domain.Namespace, 0, len(allowed))
+			for _, n := range namespaces {
+				if allowedSet[n.Name] {
+					out = append(out, n)
+				}
+			}
+			namespaces = out
+		}
+	}
+
 	total := len(namespaces)
 	limit, offset := parsePagination(r)
 	namespaces = paginate(namespaces, limit, offset)

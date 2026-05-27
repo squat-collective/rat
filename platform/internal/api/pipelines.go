@@ -107,6 +107,12 @@ func MountPipelineRoutes(r chi.Router, srv *Server) {
 // Pagination is pushed to SQL via LIMIT/OFFSET for efficiency.
 // Supports sorting via ?sort=field or ?sort=-field (descending).
 // Supports search via ?search=term (substring match on pipeline name).
+//
+// When an Authorizer is configured (Pro), the result page is post-filtered
+// to only the pipelines the caller can read. `total` is the visible count
+// for the current page — note this means pagination becomes "fetch more"
+// rather than "page N of M" in Pro deployments. SQL-side filtering is the
+// follow-up when a Pro user hits the scale that makes this insufficient.
 func (s *Server) HandleListPipelines(w http.ResponseWriter, r *http.Request) {
 	limit, offset := parsePagination(r)
 	filter := PipelineFilter{
@@ -124,16 +130,51 @@ func (s *Server) HandleListPipelines(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	pipelines = filterPipelinesByAccess(s, r.Context(), pipelines, "read")
+
 	total, err := s.Pipelines.CountPipelines(r.Context(), filter)
 	if err != nil {
 		internalError(w, "internal error", err)
 		return
+	}
+	// In Pro mode the SQL count overstates the user's visible set. Use the
+	// post-filter length so the UI's "total" matches what they can see.
+	if plugins.UserFromContext(r.Context()) != nil {
+		total = len(pipelines)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"pipelines": pipelines,
 		"total":     total,
 	})
+}
+
+// filterPipelinesByAccess returns only the pipelines the current request's
+// user can access for the given action. NoopAuthorizer / no-user contexts
+// pass through unchanged.
+func filterPipelinesByAccess(s *Server, ctx context.Context, pipelines []domain.Pipeline, action string) []domain.Pipeline {
+	if len(pipelines) == 0 {
+		return pipelines
+	}
+	ids := make([]string, len(pipelines))
+	for i, p := range pipelines {
+		ids[i] = p.ID.String()
+	}
+	allowed := s.filterAccess(ctx, "pipeline", action, ids)
+	if len(allowed) == len(ids) {
+		return pipelines
+	}
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, id := range allowed {
+		allowedSet[id] = true
+	}
+	out := make([]domain.Pipeline, 0, len(allowed))
+	for _, p := range pipelines {
+		if allowedSet[p.ID.String()] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // pipelineCacheKey builds the cache key for a pipeline: "ns/layer/name".
@@ -169,6 +210,10 @@ func (s *Server) HandleGetPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 	if pipeline == nil {
 		errorJSON(w, "pipeline not found", "NOT_FOUND", http.StatusNotFound)
+		return
+	}
+
+	if !s.requireAccess(w, r, "pipeline", pipeline.ID.String(), "read") {
 		return
 	}
 

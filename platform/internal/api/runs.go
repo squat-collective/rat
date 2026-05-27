@@ -88,6 +88,10 @@ func MountRunRoutes(r chi.Router, srv *Server) {
 // Pagination is pushed to SQL via LIMIT/OFFSET for efficiency.
 // Date range filters: ?started_after=RFC3339 and ?started_before=RFC3339.
 // Sorting: ?sort=field or ?sort=-field (descending).
+//
+// When an Authorizer is configured (Pro), the page is post-filtered to only
+// runs whose parent pipeline the caller can read. Same pagination caveat as
+// HandleListPipelines applies.
 func (s *Server) HandleListRuns(w http.ResponseWriter, r *http.Request) {
 	limit, offset := parsePagination(r)
 	filter := RunFilter{
@@ -124,16 +128,54 @@ func (s *Server) HandleListRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	runs = filterRunsByPipelineAccess(s, r.Context(), runs, "read")
+
 	total, err := s.Runs.CountRuns(r.Context(), filter)
 	if err != nil {
 		internalError(w, "internal error", err)
 		return
+	}
+	if plugins.UserFromContext(r.Context()) != nil {
+		total = len(runs)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"runs":  runs,
 		"total": total,
 	})
+}
+
+// filterRunsByPipelineAccess restricts runs to those whose parent pipeline
+// the caller can access. Dedups pipeline IDs to keep the per-page Filter
+// cost proportional to the number of distinct pipelines, not runs.
+func filterRunsByPipelineAccess(s *Server, ctx context.Context, runs []domain.Run, action string) []domain.Run {
+	if len(runs) == 0 {
+		return runs
+	}
+	seen := make(map[string]bool)
+	uniqueIDs := make([]string, 0, len(runs))
+	for _, run := range runs {
+		id := run.PipelineID.String()
+		if !seen[id] {
+			seen[id] = true
+			uniqueIDs = append(uniqueIDs, id)
+		}
+	}
+	allowed := s.filterAccess(ctx, "pipeline", action, uniqueIDs)
+	if len(allowed) == len(uniqueIDs) {
+		return runs
+	}
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, id := range allowed {
+		allowedSet[id] = true
+	}
+	out := make([]domain.Run, 0, len(runs))
+	for _, run := range runs {
+		if allowedSet[run.PipelineID.String()] {
+			out = append(out, run)
+		}
+	}
+	return out
 }
 
 // HandleGetRun returns a single run by ID.
@@ -147,6 +189,10 @@ func (s *Server) HandleGetRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if run == nil {
 		errorJSON(w, "run not found", "NOT_FOUND", http.StatusNotFound)
+		return
+	}
+
+	if !s.requireAccess(w, r, "pipeline", run.PipelineID.String(), "read") {
 		return
 	}
 
