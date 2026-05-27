@@ -80,6 +80,8 @@ message PluginUIDescriptor {
   repeated UISlotDeclaration slots = 2;      // UI slots the plugin fills
   repeated UINavItem nav_items = 3;          // navigation items to add to the portal sidebar
   repeated UIRoute routes = 4;              // client-side routes the plugin handles
+  // SHA-256 hash of the bundle in SRI format ("sha256-<base64>") — when present, the portal sets <script integrity=…> so a tampered bundle is rejected by the browser. Optional for now to keep older plugins working; will become required in a future version.
+  string bundle_hash = 5;
 }
 
 // UISlotDeclaration describes a UI slot the plugin fills in the portal.

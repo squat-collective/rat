@@ -375,11 +375,13 @@ func (x *RouteDeclaration) GetDescription() string {
 
 // PluginUIDescriptor describes how the plugin integrates with the portal UI.
 type PluginUIDescriptor struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	BundleUrl     string                 `protobuf:"bytes,1,opt,name=bundle_url,json=bundleUrl,proto3" json:"bundle_url,omitempty"` // URL to the plugin's JS bundle
-	Slots         []*UISlotDeclaration   `protobuf:"bytes,2,rep,name=slots,proto3" json:"slots,omitempty"`                          // UI slots the plugin fills
-	NavItems      []*UINavItem           `protobuf:"bytes,3,rep,name=nav_items,json=navItems,proto3" json:"nav_items,omitempty"`    // navigation items to add to the portal sidebar
-	Routes        []*UIRoute             `protobuf:"bytes,4,rep,name=routes,proto3" json:"routes,omitempty"`                        // client-side routes the plugin handles
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	BundleUrl string                 `protobuf:"bytes,1,opt,name=bundle_url,json=bundleUrl,proto3" json:"bundle_url,omitempty"` // URL to the plugin's JS bundle
+	Slots     []*UISlotDeclaration   `protobuf:"bytes,2,rep,name=slots,proto3" json:"slots,omitempty"`                          // UI slots the plugin fills
+	NavItems  []*UINavItem           `protobuf:"bytes,3,rep,name=nav_items,json=navItems,proto3" json:"nav_items,omitempty"`    // navigation items to add to the portal sidebar
+	Routes    []*UIRoute             `protobuf:"bytes,4,rep,name=routes,proto3" json:"routes,omitempty"`                        // client-side routes the plugin handles
+	// SHA-256 hash of the bundle in SRI format ("sha256-<base64>") — when present, the portal sets <script integrity=…> so a tampered bundle is rejected by the browser. Optional for now to keep older plugins working; will become required in a future version.
+	BundleHash    string `protobuf:"bytes,5,opt,name=bundle_hash,json=bundleHash,proto3" json:"bundle_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -440,6 +442,13 @@ func (x *PluginUIDescriptor) GetRoutes() []*UIRoute {
 		return x.Routes
 	}
 	return nil
+}
+
+func (x *PluginUIDescriptor) GetBundleHash() string {
+	if x != nil {
+		return x.BundleHash
+	}
+	return ""
 }
 
 // UISlotDeclaration describes a UI slot the plugin fills in the portal.
@@ -1046,13 +1055,15 @@ const file_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x06method\x18\x01 \x01(\tR\x06method\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12#\n" +
 	"\rauth_required\x18\x03 \x01(\bR\fauthRequired\x12 \n" +
-	"\vdescription\x18\x04 \x01(\tR\vdescription\"\xea\x01\n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescription\"\x8b\x02\n" +
 	"\x12PluginUIDescriptor\x12\x1d\n" +
 	"\n" +
 	"bundle_url\x18\x01 \x01(\tR\tbundleUrl\x12>\n" +
 	"\x05slots\x18\x02 \x03(\v2(.ratatouille.plugin.v1.UISlotDeclarationR\x05slots\x12=\n" +
 	"\tnav_items\x18\x03 \x03(\v2 .ratatouille.plugin.v1.UINavItemR\bnavItems\x126\n" +
-	"\x06routes\x18\x04 \x03(\v2\x1e.ratatouille.plugin.v1.UIRouteR\x06routes\"o\n" +
+	"\x06routes\x18\x04 \x03(\v2\x1e.ratatouille.plugin.v1.UIRouteR\x06routes\x12\x1f\n" +
+	"\vbundle_hash\x18\x05 \x01(\tR\n" +
+	"bundleHash\"o\n" +
 	"\x11UISlotDeclaration\x12\x17\n" +
 	"\aslot_id\x18\x01 \x01(\tR\x06slotId\x12%\n" +
 	"\x0ecomponent_name\x18\x02 \x01(\tR\rcomponentName\x12\x1a\n" +
