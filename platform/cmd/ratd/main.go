@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 	"os"
 	"os/signal"
@@ -866,6 +867,34 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      120 * time.Second,
 		IdleTimeout:       120 * time.Second,
+	}
+
+	// Optional pprof endpoint for production diagnostics (goroutine dumps,
+	// heap, CPU profile, trace). Disabled by default; opt in by setting
+	// RAT_PPROF_ADDR (e.g. "127.0.0.1:6060"). Always bound to a SEPARATE
+	// listener — never mixed with the public or internal listeners, both
+	// to keep concerns separate and so operators can firewall it
+	// independently. The handlers expose sensitive runtime state, so the
+	// default recommendation is loopback-only access via SSH tunnel.
+	if pprofAddr := os.Getenv("RAT_PPROF_ADDR"); pprofAddr != "" {
+		pprofMux := http.NewServeMux()
+		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
+		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		// Plus the runtime profiles via pprof.Handler:
+		for _, p := range []string{"goroutine", "heap", "allocs", "threadcreate", "block", "mutex"} {
+			pprofMux.Handle("/debug/pprof/"+p, pprof.Handler(p))
+		}
+		go func() {
+			slog.Info("pprof endpoint enabled", "addr", pprofAddr,
+				"warning", "this exposes goroutine dumps and heap — bind to loopback only")
+			srv := &http.Server{Addr: pprofAddr, Handler: pprofMux}
+			if err := srv.ListenAndServe(); err != nil {
+				slog.Error("pprof server stopped", "error", err)
+			}
+		}()
 	}
 
 	// Start HTTP(S) server in a goroutine.
