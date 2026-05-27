@@ -5,6 +5,11 @@ Security: The sandbox uses multiple layers of defense:
 2. Blocked module imports (os, sys, subprocess, etc.)
 3. AST validation rejecting dunder attribute access (__class__, __subclasses__, etc.)
 4. Restricted DuckDB connection wrapper blocking dangerous commands
+
+These layers are defense-in-depth on top of the container-level trust boundary
+(read-only fs, dropped capabilities, no-new-privileges); they MUST NOT be relied
+upon for new threat models — see docs/adr/017-python-pipeline-trust-model.md for
+the trust contract.
 """
 
 from __future__ import annotations

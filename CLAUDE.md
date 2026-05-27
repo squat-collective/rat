@@ -781,6 +781,15 @@ Use ConnectRPC instead of raw gRPC...
 - **Container security**: non-root, read-only filesystem where possible
 - **Dependency scanning**: Dependabot for Go/Python/TS
 
+### Pipeline trust model
+
+Python pipelines (`pipeline.py`, executed via `runner/src/rat_runner/python_exec.py`) are
+**second-party trusted code** — operator-written, loaded from the platform's S3 bucket. The
+runner container hardening (`read_only: true`, `cap_drop: [ALL]`, `no-new-privileges`, memory
++ pid limits) is the real trust boundary; the `exec()` blocklist is defense-in-depth only.
+Never expose a "submit arbitrary Python" API to end users, and never rely on the blocklist
+for new threat models. See [ADR-017](docs/adr/017-python-pipeline-trust-model.md).
+
 ---
 
 ## Reference
