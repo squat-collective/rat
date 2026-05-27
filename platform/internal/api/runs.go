@@ -206,22 +206,35 @@ func (s *Server) HandleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Inject cloud credentials if cloud plugin is available.
-	// Out of scope for the platform-side handler commit: passing these to the
-	// executor as env overrides for the runner container is a follow-up
-	// requiring executor plugin changes (see ADR-018).
+	// Inject cloud credentials if a cloud provider plugin is available and the
+	// caller is authenticated. The runner-side integration (closing the loop
+	// from ADR-018) consumes `run.S3Overrides` as the per-run S3Credentials in
+	// the SubmitRequest proto — see executor.s3OverridesToProto and the runner
+	// server's _s3_credentials_to_dict.
+	//
+	// Failure to fetch credentials is logged but never blocks the run — pipelines
+	// that don't need cloud credentials (the no-cloud-plugin path) must keep
+	// working. The Expiry field is checked by the HTTP handler (cloud.go) but is
+	// NOT propagated to the runner: it's a freshness gate for ratd only.
+	//
+	// The cloud plugin call is OUTSIDE any DB transaction (per ADR-022).
 	if s.Cloud != nil && s.Cloud.CloudEnabled() {
 		user := plugins.UserFromContext(r.Context())
 		if user != nil {
 			creds, err := s.Cloud.GetCredentials(r.Context(), user.UserID, req.Namespace)
 			if err != nil {
-				slog.Warn("cloud credentials unavailable, using defaults", "error", err)
+				// Don't fail the run — non-cloud-aware pipelines still work.
+				slog.Warn("cloud credentials unavailable, proceeding without overrides",
+					"run_id", run.ID, "namespace", req.Namespace, "error", err)
 			} else if creds != nil {
+				// Keys MUST match the lowercase proto field names consumed by
+				// s3OverridesToProto (executor/plugin.go and warmpool.go) and by
+				// the runner's _s3_credentials_to_dict.
 				run.S3Overrides = map[string]string{
-					"ACCESS_KEY":    creds.AccessKey,
-					"SECRET_KEY":    creds.SecretKey,
-					"SESSION_TOKEN": creds.SessionToken,
-					"REGION":        creds.Region,
+					"access_key_id":     creds.AccessKey,
+					"secret_access_key": creds.SecretKey,
+					"session_token":     creds.SessionToken,
+					"region":            creds.Region,
 				}
 			}
 		}

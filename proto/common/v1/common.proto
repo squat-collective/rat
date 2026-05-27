@@ -138,4 +138,7 @@ message S3Credentials {
   string region = 4;              // S3 region (e.g., "us-east-1")
   string bucket = 5;              // target S3 bucket name
   bool use_ssl = 6;               // whether to use HTTPS for S3 connections
+  // SENSITIVE — STS / temporary credentials only (empty for long-lived IAM users).
+  // Must be redacted in logs and debug output.
+  string session_token = 7;       // AWS STS session token for temporary credentials
 }

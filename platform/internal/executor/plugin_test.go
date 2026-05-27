@@ -231,3 +231,58 @@ func TestPluginStartStop_BackgroundPollRuns(t *testing.T) {
 	exec.Stop()
 	// Should not hang — goroutine exited
 }
+
+func TestPluginSubmit_ForwardsS3OverridesAsProtoCredentials(t *testing.T) {
+	// The cloud-plugin integration (api/runs.go) populates run.S3Overrides
+	// with snake_case keys matching the proto field names. The plugin
+	// executor must serialise those into a S3Credentials proto so the
+	// downstream executor plugin and runner container can apply them.
+	var captured *executorv1.SubmitRequest
+	mock := &mockExecutorClient{
+		submitFunc: func(_ context.Context, req *connect.Request[executorv1.SubmitRequest]) (*connect.Response[executorv1.SubmitResponse], error) {
+			captured = req.Msg
+			return connect.NewResponse(&executorv1.SubmitResponse{}), nil
+		},
+	}
+	store := newMockRunStore()
+	exec := newPluginExecutorWithClient(mock, store)
+
+	run := testRun()
+	run.S3Overrides = map[string]string{
+		"access_key_id":     "AKIA-TEST",
+		"secret_access_key": "shh-secret",
+		"session_token":     "sts-session-xyz",
+		"region":            "eu-west-3",
+	}
+
+	err := exec.Submit(context.Background(), run, testPipeline())
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+	require.NotNil(t, captured.S3Credentials)
+	assert.Equal(t, "AKIA-TEST", captured.S3Credentials.AccessKeyId)
+	assert.Equal(t, "shh-secret", captured.S3Credentials.SecretAccessKey)
+	assert.Equal(t, "sts-session-xyz", captured.S3Credentials.SessionToken)
+	assert.Equal(t, "eu-west-3", captured.S3Credentials.Region)
+}
+
+func TestPluginSubmit_NoOverrides_NilS3Credentials(t *testing.T) {
+	// When no cloud plugin vends credentials the run.S3Overrides map is empty.
+	// The proto field must be nil so the executor / runner falls back to its
+	// environment-level S3 config rather than zero-value credentials.
+	var captured *executorv1.SubmitRequest
+	mock := &mockExecutorClient{
+		submitFunc: func(_ context.Context, req *connect.Request[executorv1.SubmitRequest]) (*connect.Response[executorv1.SubmitResponse], error) {
+			captured = req.Msg
+			return connect.NewResponse(&executorv1.SubmitResponse{}), nil
+		},
+	}
+	store := newMockRunStore()
+	exec := newPluginExecutorWithClient(mock, store)
+
+	run := testRun()
+	// run.S3Overrides intentionally left nil — the no-cloud-plugin path.
+	err := exec.Submit(context.Background(), run, testPipeline())
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+	assert.Nil(t, captured.S3Credentials, "S3Credentials must be nil without cloud overrides")
+}

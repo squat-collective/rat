@@ -125,6 +125,12 @@ func newWarmPoolExecutorWithClient(client runnerv1connect.RunnerServiceClient, r
 // Submit sends a pipeline run to the runner service.
 // On success, updates the run status to "running" and tracks it in the active map.
 // On failure, updates the run status to "failed".
+//
+// When the cloud plugin has vended per-run credentials (see api/runs.go
+// HandleCreateRun), they are attached as S3Credentials on the proto request.
+// The runner merges them over its env-level S3Config — per-run overrides win.
+// When the map is empty (no cloud plugin, or non-cloud-aware pipeline), the
+// field is left nil and the runner falls back to its env-level config.
 func (e *WarmPoolExecutor) Submit(ctx context.Context, run *domain.Run, pipeline *domain.Pipeline) error {
 	req := connect.NewRequest(&runnerv1.SubmitPipelineRequest{
 		Namespace:         pipeline.Namespace,
@@ -133,6 +139,7 @@ func (e *WarmPoolExecutor) Submit(ctx context.Context, run *domain.Run, pipeline
 		Trigger:           run.Trigger,
 		PublishedVersions: pipeline.PublishedVersions,
 		RunId:             run.ID.String(),
+		S3Credentials:     s3OverridesToProto(run.S3Overrides),
 	})
 	propagateRequestID(ctx, req)
 

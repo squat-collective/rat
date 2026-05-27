@@ -232,16 +232,23 @@ func (e *PluginExecutor) poll(ctx context.Context) {
 
 // s3OverridesToProto converts the domain map[string]string S3 overrides to the proto message.
 // Returns nil if the map is empty (no overrides).
+//
+// The map keys are the proto field names in their snake_case wire form, so the
+// same conversion works for credentials vended by the cloud plugin (see
+// api/runs.go HandleCreateRun) and for any other source that populates
+// run.S3Overrides. SessionToken is included for STS / temporary credentials —
+// long-lived IAM users leave it empty.
 func s3OverridesToProto(m map[string]string) *commonv1.S3Credentials {
 	if len(m) == 0 {
 		return nil
 	}
 	return &commonv1.S3Credentials{
-		Endpoint:       m["endpoint"],
-		AccessKeyId:    m["access_key_id"],
+		Endpoint:        m["endpoint"],
+		AccessKeyId:     m["access_key_id"],
 		SecretAccessKey: m["secret_access_key"],
-		Region:         m["region"],
-		Bucket:         m["bucket"],
+		Region:          m["region"],
+		Bucket:          m["bucket"],
+		SessionToken:    m["session_token"],
 	}
 }
 
