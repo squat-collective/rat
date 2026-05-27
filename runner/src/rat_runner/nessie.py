@@ -24,6 +24,12 @@ F = TypeVar("F", bound=Callable[..., Any])
 # their own error messages without hard-coding a magic number.
 BRANCH_CREATE_MAX_RETRIES = 3
 
+# Number of attempts merge_branch will make when the merge POST returns 409
+# CONFLICT — meaning the target ref (main) moved between our GET and our
+# POST, typically because a concurrent run merged first. Each attempt
+# re-fetches the target hash and re-posts.
+MERGE_CONFLICT_MAX_RETRIES = 3
+
 
 def _is_transient_error(exc: Exception) -> bool:
     """Return True if the exception is a transient HTTP or connection error.
@@ -179,29 +185,61 @@ def merge_branch(
     the `{ref}@{hash}` syntax (the `expected-hash` query-string form is
     not accepted on /history/merge — confirmed against Nessie 0.99.x).
     Without it the merge returns 400 "Expected hash must be provided".
+
+    Failure classification:
+      * 5xx / URLError / TimeoutError — transient, retried by the outer
+        @retry_on_transient decorator with exponential backoff.
+      * 409 CONFLICT on the merge POST — the target ref moved between
+        our GET and our POST (another concurrent run merged first).
+        We refetch the target hash and retry up to MERGE_CONFLICT_MAX_RETRIES
+        times. This loop is local because the outer decorator treats all
+        4xx as permanent; only 409 on the merge endpoint is recoverable.
+      * Other 4xx — permanent, raised immediately.
     """
     source_ref = _get_reference(nessie_config, source)
     source_hash = source_ref["hash"]
 
-    target_ref = _get_reference(nessie_config, target)
-    target_hash = target_ref["hash"]
+    # Refetch target hash on every attempt — that's the whole point of the
+    # 409 retry: another run moved `target` and we need the current head.
+    last_409: urllib.error.HTTPError | None = None
+    for attempt in range(MERGE_CONFLICT_MAX_RETRIES):
+        target_ref = _get_reference(nessie_config, target)
+        target_hash = target_ref["hash"]
 
-    # Path-embed the expected target hash with @-syntax (URL-encoded).
-    target_path = (
-        _encode_branch(target) + urllib.parse.quote("@" + target_hash, safe="")
-    )
-    url = f"{nessie_config.api_v2_url}/trees/{target_path}/history/merge"
-    payload = {
-        "fromRefName": source,
-        "fromHash": source_hash,
-    }
+        # Path-embed the expected target hash with @-syntax (URL-encoded).
+        target_path = (
+            _encode_branch(target) + urllib.parse.quote("@" + target_hash, safe="")
+        )
+        url = f"{nessie_config.api_v2_url}/trees/{target_path}/history/merge"
+        payload = {
+            "fromRefName": source,
+            "fromHash": source_hash,
+        }
 
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method="POST")
-    req.add_header("Content-Type", "application/json")
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
 
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        resp.read()  # consume response
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()  # consume response
+            return
+        except urllib.error.HTTPError as e:
+            if e.code != 409:
+                raise
+            last_409 = e
+            logger.warning(
+                "Nessie merge 409 CONFLICT on attempt %d/%d "
+                "(target %s moved during merge window) — refetching target hash",
+                attempt + 1,
+                MERGE_CONFLICT_MAX_RETRIES,
+                target,
+            )
+            # Loop: next iteration re-GETs target and re-POSTs.
+
+    # Exhausted 409 retries — surface the last 409 to the caller.
+    assert last_409 is not None
+    raise last_409
 
 
 def delete_branch(

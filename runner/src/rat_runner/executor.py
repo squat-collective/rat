@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
+import urllib.error
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -44,8 +45,11 @@ from rat_runner.json_log import clear_run_context, set_run_context
 from rat_runner.log import RunLogger, run_log_extras
 from rat_runner.maintenance import run_maintenance
 from rat_runner.models import MergeStrategy, PipelineConfig, QualityTestResult, RunState, RunStatus
+from rat_runner.failed_merge_audit import record_failed_merge
 from rat_runner.nessie import (
     BRANCH_CREATE_MAX_RETRIES,
+    MERGE_CONFLICT_MAX_RETRIES,
+    _get_reference,
     create_branch,
     delete_branch,
     merge_branch,
@@ -106,6 +110,13 @@ class _PipelineContext:
     location: str = ""
     result: pa.Table | None = None
     row_count: int = 0
+
+    # Set in Phase 5 when a merge attempt fails terminally. When True the
+    # finally block MUST NOT delete the ephemeral branch — it holds data
+    # that Phase 3 wrote and Phase 4 quality-tested but couldn't merge
+    # into main. An operator will recover it manually via the
+    # `failed_merges` audit row.
+    retain_branch: bool = False
 
 
 def _archive_landing_zones(
@@ -550,12 +561,47 @@ def _phase4_quality_tests(ctx: _PipelineContext) -> list[QualityTestResult]:
 # ── Phase 5: Branch resolution ───────────────────────────────────────
 
 
+def _classify_merge_error(exc: BaseException) -> tuple[str, str]:
+    """Return (error_kind, human_message) for an exception raised by merge_branch.
+
+    Categories:
+      * "conflict_exhausted" — 409 CONFLICT, even after internal refetch
+        retries. The target ref kept moving; another long-running pipeline
+        likely has it pinned.
+      * "transient_exhausted" — 5xx / network / timeout, after the outer
+        retry_on_transient decorator gave up.
+      * "permanent_4xx" — any other 4xx (400 bad request, 404 not found,
+        403 forbidden) — request is malformed or the branch was already
+        gone.
+      * "unknown" — anything else.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code == 409:
+            return "conflict_exhausted", (
+                f"target moved during merge window after "
+                f"{MERGE_CONFLICT_MAX_RETRIES} refetch attempts (HTTP 409)"
+            )
+        if 400 <= exc.code < 500:
+            return "permanent_4xx", f"HTTP {exc.code}: {exc.reason}"
+        if exc.code >= 500:
+            return "transient_exhausted", f"HTTP {exc.code}: {exc.reason}"
+    if isinstance(exc, (urllib.error.URLError, TimeoutError)):
+        return "transient_exhausted", f"{type(exc).__name__}: {exc}"
+    return "unknown", f"{type(exc).__name__}: {exc}"
+
+
 def _phase5_resolve_branch(ctx: _PipelineContext, quality_results: list[QualityTestResult]) -> None:
     """Merge or discard the ephemeral branch based on quality test results.
 
     Since Phase 0 guarantees branch creation succeeded (or aborted the run),
     there is always an ephemeral branch to resolve here: merge to main on
     quality pass, delete on quality failure.
+
+    On terminal merge failure (transient retries exhausted, 409 refetches
+    exhausted, or permanent 4xx) the branch is RETAINED — Phase 3 wrote
+    data and Phase 4 quality-tested it, and silently dropping it would
+    erase work an operator can recover. We POST an audit record to ratd
+    so the failure shows up in the `failed_merges` table.
     """
     if has_error_failures(quality_results):
         ctx.log.error("Quality tests failed — discarding branch (no data on main)")
@@ -568,13 +614,57 @@ def _phase5_resolve_branch(ctx: _PipelineContext, quality_results: list[QualityT
         return
 
     ctx.log.info(f"Merging branch '{ctx.branch_name}' to main")
+
+    # Best-effort: capture the source/target hashes BEFORE attempting the
+    # merge so the audit row has something useful even if Nessie blows up
+    # mid-call. Failures here are silenced — they're not the audit's job
+    # to surface, and the merge call below will reproduce them.
+    source_hash: str | None = None
+    target_hash: str | None = None
+    try:
+        source_hash = _get_reference(ctx.nessie_config, ctx.branch_name).get("hash")
+        target_hash = _get_reference(ctx.nessie_config, "main").get("hash")
+    except Exception:
+        pass
+
     try:
         merge_branch(ctx.nessie_config, ctx.branch_name, target="main")
         ctx.log.info("Branch merged to main")
     except Exception as e:
-        ctx.log.error(f"Branch merge failed: {e}")
+        ctx.retain_branch = True
+        error_kind, human = _classify_merge_error(e)
+        msg = (
+            f"branch merge failed: {human} — branch {ctx.branch_name} retained for recovery"
+        )
+        # Structured ERROR log with the fields a human will grep for.
+        logger.error(
+            "Phase 5 merge failed — branch retained",
+            extra={
+                "branch": ctx.branch_name,
+                "run": ctx.run.run_id,
+                "error_kind": error_kind,
+                "merge_lost_data": True,
+            },
+            exc_info=True,
+        )
+        ctx.log.error(msg)
+        try:
+            record_failed_merge(
+                ctx.run,
+                ctx.branch_name,
+                source_hash,
+                target_hash,
+                error_kind=error_kind,
+                error_message=str(e),
+            )
+        except Exception as audit_exc:  # noqa: BLE001 — never let audit kill the run
+            logger.warning(
+                "failed_merges audit POST raised: %s",
+                audit_exc,
+                extra={"branch": ctx.branch_name, "run": ctx.run.run_id},
+            )
         ctx.run.status = RunStatus.FAILED
-        ctx.run.error = f"Branch merge failed: {e}"
+        ctx.run.error = msg
         return
 
     _post_success(ctx)
@@ -727,7 +817,12 @@ def execute_pipeline(
         # We use run.branch (set after create_branch succeeds) as the
         # signal — guarantees we never try to delete "main" or an
         # uninitialised branch name.
-        if run.branch and run.branch != "main":
+        #
+        # EXCEPTION: when Phase 5 set retain_branch=True the branch holds
+        # data that Phase 3 wrote and Phase 4 quality-tested but couldn't
+        # merge into main. Deleting it would erase recoverable work, so we
+        # leave it for the operator (see `failed_merges` audit row).
+        if run.branch and run.branch != "main" and not ctx.retain_branch:
             try:
                 delete_branch(nessie_config, run.branch)
             except Exception:
@@ -737,6 +832,12 @@ def execute_pipeline(
                     exc_info=True,
                     extra=run_log_extras(run),
                 )
+        elif ctx.retain_branch:
+            logger.error(
+                "Branch '%s' retained — Phase 5 merge failed; recover via failed_merges audit",
+                run.branch,
+                extra={**run_log_extras(run), "merge_lost_data": True},
+            )
 
         if ctx.engine is not None:
             ctx.engine.close()

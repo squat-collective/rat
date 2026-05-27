@@ -509,6 +509,116 @@ class TestMergeBranchRetry:
         assert mock_urlopen.call_count == 4
 
 
+class TestMergeBranchConflictRetry:
+    """In-function retry of 409 CONFLICT on the merge POST (concurrent
+    merge moved target). merge_branch should refetch the target hash and
+    retry up to MERGE_CONFLICT_MAX_RETRIES times before giving up.
+    """
+
+    @staticmethod
+    def _src_ref(hash_: str = "src0") -> MagicMock:
+        return _ok_response(
+            {"reference": {"name": "run-r1", "hash": hash_, "type": "BRANCH"}}
+        )
+
+    @staticmethod
+    def _tgt_ref(hash_: str) -> MagicMock:
+        return _ok_response(
+            {"reference": {"name": "main", "hash": hash_, "type": "BRANCH"}}
+        )
+
+    @staticmethod
+    def _merge_ok() -> MagicMock:
+        resp = MagicMock()
+        resp.read.return_value = b"{}"
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    @patch("rat_runner.nessie.time.sleep")
+    @patch("rat_runner.nessie.urllib.request.urlopen")
+    def test_merge_conflict_409_refetches_target_hash_and_retries(
+        self, mock_urlopen: MagicMock, mock_sleep: MagicMock
+    ):
+        """A 409 on the merge POST triggers an internal refetch of the
+        target hash and a re-post — no outer-decorator backoff sleeps."""
+        # Attempt 1:
+        #   _get_reference(source) → src
+        #   _get_reference(target) → hashA
+        #   POST merge → 409 CONFLICT
+        # Attempt 2:
+        #   _get_reference(target) → hashB  (NOTE: refetch — source not re-fetched)
+        #   POST merge → 200 OK
+        mock_urlopen.side_effect = [
+            self._src_ref("src0"),
+            self._tgt_ref("hashA"),
+            _http_error(409, "Conflict"),
+            self._tgt_ref("hashB"),
+            self._merge_ok(),
+        ]
+
+        merge_branch(_nessie(), "run-r1", target="main")
+
+        # 5 urlopen calls: src + 2× target + 2× merge POST.
+        assert mock_urlopen.call_count == 5
+        # The transient-retry backoff sleep MUST NOT fire — 409 is handled
+        # in-function, not by the @retry_on_transient decorator.
+        mock_sleep.assert_not_called()
+
+        # Confirm the SECOND merge POST URL used the fresh target hash (hashB).
+        merge_calls = [
+            c for c in mock_urlopen.call_args_list
+            if "/history/merge" in c[0][0].full_url
+        ]
+        assert len(merge_calls) == 2
+        assert "main%40hashA" in merge_calls[0][0][0].full_url
+        assert "main%40hashB" in merge_calls[1][0][0].full_url
+
+    @patch("rat_runner.nessie.time.sleep")
+    @patch("rat_runner.nessie.urllib.request.urlopen")
+    def test_merge_conflict_409_exhausts_retries_and_raises(
+        self, mock_urlopen: MagicMock, mock_sleep: MagicMock
+    ):
+        """When every attempt 409s, merge_branch raises HTTPError(409)."""
+        # 3 attempts. Each attempt: 1 target GET + 1 merge POST = 2 calls.
+        # Plus the initial source GET = 1 + 3×2 = 7 calls total.
+        mock_urlopen.side_effect = [
+            self._src_ref(),
+            self._tgt_ref("hashA"),
+            _http_error(409, "Conflict"),
+            self._tgt_ref("hashB"),
+            _http_error(409, "Conflict"),
+            self._tgt_ref("hashC"),
+            _http_error(409, "Conflict"),
+        ]
+
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            merge_branch(_nessie(), "run-r1", target="main")
+        assert exc_info.value.code == 409
+        # 3 in-function attempts, no transient-decorator retries.
+        assert mock_urlopen.call_count == 7
+        mock_sleep.assert_not_called()
+
+    @patch("rat_runner.nessie.time.sleep")
+    @patch("rat_runner.nessie.urllib.request.urlopen")
+    def test_merge_non_409_4xx_raises_immediately_no_refetch(
+        self, mock_urlopen: MagicMock, mock_sleep: MagicMock
+    ):
+        """A 400 on the merge POST is permanent and raised on the first
+        attempt — no in-function refetch, no decorator retry."""
+        mock_urlopen.side_effect = [
+            self._src_ref(),
+            self._tgt_ref("hashA"),
+            _http_error(400, "Bad Request"),
+        ]
+
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            merge_branch(_nessie(), "run-r1", target="main")
+        assert exc_info.value.code == 400
+        assert mock_urlopen.call_count == 3
+        mock_sleep.assert_not_called()
+
+
 class TestUrlopenTimeoutParameter:
     """Verify that every urlopen call in nessie.py passes timeout=10."""
 

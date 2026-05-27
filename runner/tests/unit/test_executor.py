@@ -1435,3 +1435,246 @@ class TestExecutePipelinePluginType:
         fake_type.execute.assert_called_once()
         assert fake_type.execute.call_args[0][0] == "from data"
         assert run.status == RunStatus.SUCCESS
+
+
+class TestPhase5MergeFailure:
+    """Phase 5 merge failures must:
+      * NOT delete the ephemeral branch (it holds the only copy of the data)
+      * POST a failed_merges audit row to ratd
+      * Mark the run FAILED with a recovery-friendly error message
+    """
+
+    @staticmethod
+    def _http_error(code: int, msg: str = "err"):
+        import urllib.error
+
+        return urllib.error.HTTPError(
+            url="http://nessie/api/v2/trees/main/history/merge",
+            code=code,
+            msg=msg,
+            hdrs=None,  # type: ignore[arg-type]
+            fp=None,
+        )
+
+    @patch(f"{_EXEC_PREFIX}.record_failed_merge")
+    @patch(f"{_EXEC_PREFIX}._get_reference")
+    @patch(f"{_EXEC_PREFIX}.has_error_failures", return_value=False)
+    @patch(f"{_EXEC_PREFIX}.run_quality_tests", return_value=[])
+    @patch(f"{_EXEC_PREFIX}.delete_branch")
+    @patch(f"{_EXEC_PREFIX}.merge_branch")
+    @patch(f"{_EXEC_PREFIX}.create_branch", return_value="hash123")
+    @patch(f"{_EXEC_PREFIX}.write_iceberg")
+    @patch(f"{_EXEC_PREFIX}.DuckDBEngine")
+    @patch(f"{_EXEC_PREFIX}.read_s3_text")
+    def test_merge_permanent_4xx_fails_terminally_branch_retained(
+        self,
+        mock_read: MagicMock,
+        mock_engine_cls: MagicMock,
+        mock_write: MagicMock,
+        mock_create: MagicMock,
+        mock_merge: MagicMock,
+        mock_delete: MagicMock,
+        mock_quality: MagicMock,
+        mock_has_fail: MagicMock,
+        mock_get_ref: MagicMock,
+        mock_audit: MagicMock,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+    ):
+        """400 on the merge POST → branch NOT deleted; audit row sent."""
+        mock_read.side_effect = lambda cfg, key: "SELECT 1" if key.endswith(".sql") else None
+        mock_engine = MagicMock()
+        mock_engine.query_arrow.return_value = pa.table({"x": [1]})
+        mock_engine_cls.return_value = mock_engine
+        mock_write.return_value = 1
+        mock_get_ref.return_value = {"hash": "deadbeef"}
+        mock_merge.side_effect = self._http_error(400, "Bad Request")
+
+        run = _make_run()
+        execute_pipeline(run, s3_config, nessie_config)
+
+        assert run.status == RunStatus.FAILED
+        assert "branch merge failed" in run.error
+        assert "retained for recovery" in run.error
+        # Branch retained — delete_branch was NOT called in the finally.
+        mock_delete.assert_not_called()
+        # Audit POST sent with classified error_kind.
+        mock_audit.assert_called_once()
+        kwargs = mock_audit.call_args.kwargs
+        assert kwargs["error_kind"] == "permanent_4xx"
+
+    @patch(f"{_EXEC_PREFIX}.record_failed_merge")
+    @patch(f"{_EXEC_PREFIX}._get_reference")
+    @patch(f"{_EXEC_PREFIX}.has_error_failures", return_value=False)
+    @patch(f"{_EXEC_PREFIX}.run_quality_tests", return_value=[])
+    @patch(f"{_EXEC_PREFIX}.delete_branch")
+    @patch(f"{_EXEC_PREFIX}.merge_branch")
+    @patch(f"{_EXEC_PREFIX}.create_branch", return_value="hash123")
+    @patch(f"{_EXEC_PREFIX}.write_iceberg")
+    @patch(f"{_EXEC_PREFIX}.DuckDBEngine")
+    @patch(f"{_EXEC_PREFIX}.read_s3_text")
+    def test_merge_retries_exhausted_branch_retained(
+        self,
+        mock_read: MagicMock,
+        mock_engine_cls: MagicMock,
+        mock_write: MagicMock,
+        mock_create: MagicMock,
+        mock_merge: MagicMock,
+        mock_delete: MagicMock,
+        mock_quality: MagicMock,
+        mock_has_fail: MagicMock,
+        mock_get_ref: MagicMock,
+        mock_audit: MagicMock,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+    ):
+        """503 on merge after retries exhausted → branch retained, audit sent.
+
+        The executor sees the URLError that bubbles out of merge_branch after
+        the inner @retry_on_transient decorator gives up; classify as
+        transient_exhausted.
+        """
+        import urllib.error
+
+        mock_read.side_effect = lambda cfg, key: "SELECT 1" if key.endswith(".sql") else None
+        mock_engine = MagicMock()
+        mock_engine.query_arrow.return_value = pa.table({"x": [1]})
+        mock_engine_cls.return_value = mock_engine
+        mock_write.return_value = 1
+        mock_get_ref.return_value = {"hash": "deadbeef"}
+        mock_merge.side_effect = urllib.error.URLError("Connection refused")
+
+        run = _make_run()
+        execute_pipeline(run, s3_config, nessie_config)
+
+        assert run.status == RunStatus.FAILED
+        assert "retained for recovery" in run.error
+        mock_delete.assert_not_called()  # branch NOT swept
+        mock_audit.assert_called_once()
+        assert mock_audit.call_args.kwargs["error_kind"] == "transient_exhausted"
+
+    @patch(f"{_EXEC_PREFIX}.record_failed_merge")
+    @patch(f"{_EXEC_PREFIX}._get_reference")
+    @patch(f"{_EXEC_PREFIX}.has_error_failures", return_value=False)
+    @patch(f"{_EXEC_PREFIX}.run_quality_tests", return_value=[])
+    @patch(f"{_EXEC_PREFIX}.delete_branch")
+    @patch(f"{_EXEC_PREFIX}.merge_branch")
+    @patch(f"{_EXEC_PREFIX}.create_branch", return_value="hash123")
+    @patch(f"{_EXEC_PREFIX}.write_iceberg")
+    @patch(f"{_EXEC_PREFIX}.DuckDBEngine")
+    @patch(f"{_EXEC_PREFIX}.read_s3_text")
+    def test_merge_409_conflict_exhausted_branch_retained(
+        self,
+        mock_read: MagicMock,
+        mock_engine_cls: MagicMock,
+        mock_write: MagicMock,
+        mock_create: MagicMock,
+        mock_merge: MagicMock,
+        mock_delete: MagicMock,
+        mock_quality: MagicMock,
+        mock_has_fail: MagicMock,
+        mock_get_ref: MagicMock,
+        mock_audit: MagicMock,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+    ):
+        """409 bubbling out of merge_branch (after inner refetches gave up)
+        → audit row with error_kind='conflict_exhausted'."""
+        mock_read.side_effect = lambda cfg, key: "SELECT 1" if key.endswith(".sql") else None
+        mock_engine = MagicMock()
+        mock_engine.query_arrow.return_value = pa.table({"x": [1]})
+        mock_engine_cls.return_value = mock_engine
+        mock_write.return_value = 1
+        mock_get_ref.return_value = {"hash": "deadbeef"}
+        mock_merge.side_effect = self._http_error(409, "Conflict")
+
+        run = _make_run()
+        execute_pipeline(run, s3_config, nessie_config)
+
+        assert run.status == RunStatus.FAILED
+        mock_delete.assert_not_called()
+        mock_audit.assert_called_once()
+        assert mock_audit.call_args.kwargs["error_kind"] == "conflict_exhausted"
+        assert "retained for recovery" in run.error
+
+
+class TestPhase5MergeTransientThenSuccess:
+    """End-to-end transient-then-success path: a 503 on a sub-call inside
+    merge_branch is retried by the @retry_on_transient decorator and the
+    run reaches SUCCESS without an audit row."""
+
+    @patch(f"{_EXEC_PREFIX}.record_failed_merge")
+    @patch("rat_runner.nessie.time.sleep")
+    @patch("rat_runner.nessie.urllib.request.urlopen")
+    @patch(f"{_EXEC_PREFIX}.has_error_failures", return_value=False)
+    @patch(f"{_EXEC_PREFIX}.run_quality_tests", return_value=[])
+    @patch(f"{_EXEC_PREFIX}.delete_branch")
+    @patch(f"{_EXEC_PREFIX}.create_branch", return_value="hash123")
+    @patch(f"{_EXEC_PREFIX}.write_iceberg")
+    @patch(f"{_EXEC_PREFIX}.DuckDBEngine")
+    @patch(f"{_EXEC_PREFIX}.read_s3_text")
+    def test_merge_transient_error_retries_then_succeeds(
+        self,
+        mock_read: MagicMock,
+        mock_engine_cls: MagicMock,
+        mock_write: MagicMock,
+        mock_create: MagicMock,
+        mock_delete: MagicMock,
+        mock_quality: MagicMock,
+        mock_has_fail: MagicMock,
+        mock_urlopen: MagicMock,
+        mock_sleep: MagicMock,
+        mock_audit: MagicMock,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+    ):
+        """The merge phase calls the REAL nessie code path. urlopen yields
+        a 503 once on _get_reference, retries, then succeeds. No audit."""
+        import json
+        import urllib.error
+
+        def _ok(data: dict) -> MagicMock:
+            r = MagicMock()
+            r.read.return_value = json.dumps(data).encode()
+            r.__enter__ = lambda s: s
+            r.__exit__ = MagicMock(return_value=False)
+            return r
+
+        ref_payload = {"reference": {"name": "main", "hash": "abc", "type": "BRANCH"}}
+        # Two `_get_reference` calls before the merge POST in Phase 5 (executor
+        # captures hashes pre-merge), then merge_branch itself does src+tgt+POST.
+        # On 503 _get_reference retries internally.
+        merge_ok = MagicMock()
+        merge_ok.read.return_value = b"{}"
+        merge_ok.__enter__ = lambda s: s
+        merge_ok.__exit__ = MagicMock(return_value=False)
+
+        # The executor's pre-merge hash capture is the FIRST consumer of urlopen
+        # (2× _get_reference). Then merge_branch consumes the rest.
+        responses: list = [
+            _ok(ref_payload),  # pre-merge src hash
+            _ok(ref_payload),  # pre-merge tgt hash
+            urllib.error.HTTPError(  # merge_branch: src _get_reference fails 503
+                url="x", code=503, msg="Service Unavailable",
+                hdrs=None, fp=None,  # type: ignore[arg-type]
+            ),
+            _ok(ref_payload),  # retry succeeds
+            _ok(ref_payload),  # merge_branch: tgt _get_reference
+            merge_ok,          # merge POST 200
+        ]
+        mock_urlopen.side_effect = responses
+
+        mock_read.side_effect = lambda cfg, key: "SELECT 1" if key.endswith(".sql") else None
+        mock_engine = MagicMock()
+        mock_engine.query_arrow.return_value = pa.table({"x": [1]})
+        mock_engine_cls.return_value = mock_engine
+        mock_write.return_value = 1
+
+        run = _make_run()
+        execute_pipeline(run, s3_config, nessie_config)
+
+        # SUCCESS — transient handled by the decorator, no audit row.
+        assert run.status == RunStatus.SUCCESS, run.error
+        mock_audit.assert_not_called()
+        # Backoff sleep DID fire (we wouldn't have retried without it).
+        assert mock_sleep.call_count >= 1
