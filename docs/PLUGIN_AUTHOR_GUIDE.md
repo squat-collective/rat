@@ -1,7 +1,7 @@
 # RAT Plugin Author Guide
 
 > Build a RAT plugin in one afternoon. Battle-tested patterns extracted from
-> the 14 plugins living under `examples/rat-plugin-*`.
+> the 14 plugins living under `plugins/rat-plugin-*`.
 
 ---
 
@@ -22,7 +22,7 @@ Wave 5.
 ## Quickstart
 
 A minimal Go plugin needs five files. Copy the layout from
-[`examples/rat-plugin-secrets/`](../examples/rat-plugin-secrets/) — it's the
+[`plugins/rat-plugin-secrets/`](../plugins/rat-plugin-secrets/) — it's the
 smallest reference plugin in the tree.
 
 ```
@@ -159,9 +159,9 @@ Build from the repo root (the `Makefile` wraps this):
 docker build \
   --build-context platform=platform \
   --build-context sdk=sdk-go \
-  -f examples/rat-plugin-myplugin/Dockerfile \
+  -f plugins/rat-plugin-myplugin/Dockerfile \
   -t rat-plugin-myplugin \
-  examples/rat-plugin-myplugin
+  plugins/rat-plugin-myplugin
 ```
 
 Run with:
@@ -208,7 +208,7 @@ POST /api/v1/x/interconnect/register
 ```
 
 Other plugins discover and call it through the broker. See
-[`examples/rat-plugin-secrets/main.go`](../examples/rat-plugin-secrets/main.go)
+[`plugins/rat-plugin-secrets/main.go`](../plugins/rat-plugin-secrets/main.go)
 for the registration pattern (loop forever so an interconnect restart
 doesn't silently drop the capability).
 
@@ -225,8 +225,8 @@ doesn't silently drop the capability).
 
 Reference plugins by topic:
 
-- **Encryption / secret storage** → [`rat-plugin-secrets`](../examples/rat-plugin-secrets/)
-- **SQL data pipelines** → [`rat-plugin-pg-sync`](../examples/rat-plugin-pg-sync/)
-- **Time-travel data viewers** → [`rat-plugin-diff`](../examples/rat-plugin-diff/)
-- **Capability registry + broker** → [`rat-plugin-interconnect`](../examples/rat-plugin-interconnect/)
-- **Configurable AI provider** → [`rat-plugin-ai-provider`](../examples/rat-plugin-ai-provider/)
+- **Encryption / secret storage** → [`rat-plugin-secrets`](../plugins/rat-plugin-secrets/)
+- **SQL data pipelines** → [`rat-plugin-pg-sync`](../plugins/rat-plugin-pg-sync/)
+- **Time-travel data viewers** → [`rat-plugin-diff`](../plugins/rat-plugin-diff/)
+- **Capability registry + broker** → [`rat-plugin-interconnect`](../plugins/rat-plugin-interconnect/)
+- **Configurable AI provider** → [`rat-plugin-ai-provider`](../plugins/rat-plugin-ai-provider/)

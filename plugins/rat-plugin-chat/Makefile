@@ -8,9 +8,9 @@ build:
 	cd $(ROOT) && docker build \
 		--build-context platform=platform \
 		--build-context sdk=sdk-go \
-		-f examples/rat-plugin-chat/Dockerfile \
+		-f plugins/rat-plugin-chat/Dockerfile \
 		-t rat-plugin-chat \
-		examples/rat-plugin-chat
+		plugins/rat-plugin-chat
 
 test:
 	docker run --rm \

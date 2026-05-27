@@ -11,9 +11,9 @@ build:
 	cd $(ROOT) && docker build \
 		--build-context platform=platform \
 		--build-context sdk=sdk-go \
-		-f examples/rat-plugin-interconnect/Dockerfile \
+		-f plugins/rat-plugin-interconnect/Dockerfile \
 		-t rat-plugin-interconnect \
-		examples/rat-plugin-interconnect
+		plugins/rat-plugin-interconnect
 
 # Run the Go tests (platform module mounted for the replace directive).
 test:

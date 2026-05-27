@@ -1,6 +1,6 @@
 // Package sdk is the shared helper library for RAT example plugins.
 //
-// It exists because every example plugin under examples/rat-plugin-*
+// It exists because every example plugin under plugins/rat-plugin-*
 // grew the same ~150 LOC of boilerplate: a fresh per-startup token, an
 // SRI hash over the embedded bundle, a token-auth middleware, a
 // phone-home retry loop, the standard env-var fan-out, and a Describe

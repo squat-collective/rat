@@ -8,9 +8,9 @@ build:
 	cd $(ROOT) && docker build \
 		--build-context platform=platform \
 		--build-context sdk=sdk-go \
-		-f examples/rat-plugin-pg-sync/Dockerfile \
+		-f plugins/rat-plugin-pg-sync/Dockerfile \
 		-t rat-plugin-pg-sync \
-		examples/rat-plugin-pg-sync
+		plugins/rat-plugin-pg-sync
 
 test:
 	docker run --rm \

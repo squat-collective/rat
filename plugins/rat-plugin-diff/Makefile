@@ -8,9 +8,9 @@ build:
 	cd $(ROOT) && docker build \
 		--build-context platform=platform \
 		--build-context sdk=sdk-go \
-		-f examples/rat-plugin-diff/Dockerfile \
+		-f plugins/rat-plugin-diff/Dockerfile \
 		-t rat-plugin-diff \
-		examples/rat-plugin-diff
+		plugins/rat-plugin-diff
 
 run:
 	docker rm -f diff 2>/dev/null || true

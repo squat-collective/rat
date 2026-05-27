@@ -8,9 +8,9 @@ build:
 	cd $(ROOT) && docker build \
 		--build-context platform=platform \
 		--build-context sdk=sdk-go \
-		-f examples/rat-plugin-mcp-docs/Dockerfile \
+		-f plugins/rat-plugin-mcp-docs/Dockerfile \
 		-t rat-plugin-mcp-docs \
-		examples/rat-plugin-mcp-docs
+		plugins/rat-plugin-mcp-docs
 
 test:
 	docker run --rm \

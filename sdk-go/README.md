@@ -1,6 +1,6 @@
 # `sdk-go` — shared helpers for RAT example plugins
 
-> Internal helper library for the Go plugins under `examples/rat-plugin-*`.
+> Internal helper library for the Go plugins under `plugins/rat-plugin-*`.
 > Not published or versioned — vendored via a local `replace` directive.
 
 ## What it is

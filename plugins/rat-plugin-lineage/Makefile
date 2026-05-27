@@ -8,9 +8,9 @@ build:
 	cd $(ROOT) && docker build \
 		--build-context platform=platform \
 		--build-context sdk=sdk-go \
-		-f examples/rat-plugin-lineage/Dockerfile \
+		-f plugins/rat-plugin-lineage/Dockerfile \
 		-t rat-plugin-lineage \
-		examples/rat-plugin-lineage
+		plugins/rat-plugin-lineage
 
 # Local UI watch — convenient for iterating on the React Flow components
 # without rebuilding the docker image each time.

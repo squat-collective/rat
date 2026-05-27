@@ -76,7 +76,7 @@ func (e *syncEngine) Apply(ctx context.Context, t *TableSync) error {
 	}
 	// The runner looks for the conventional filename `pipeline.sql` (or
 	// `pipeline.py`) under the pipeline's S3 dir — not a name-mirrored
-	// file. See examples/rat-plugin-demo-loader/install.go for the same
+	// file. See plugins/rat-plugin-demo-loader/install.go for the same
 	// convention.
 	if err := e.ratd.WriteFile(ctx, strings.TrimRight(created.S3Path, "/")+"/pipeline.sql", sql); err != nil {
 		return fmt.Errorf("write pipeline file: %w", err)

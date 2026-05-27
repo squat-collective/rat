@@ -83,7 +83,7 @@ A **one-click sample-data installer**. Ships three self-contained demos (🚀 Co
 ### Install a plugin (editable mode)
 
 ```bash
-cd examples/rat-plugin-dbt-compat
+cd plugins/rat-plugin-dbt-compat
 pip install -e '.[dev]'
 ```
 
@@ -104,35 +104,35 @@ for group in ['rat.strategies', 'rat.hooks', 'rat.jinja_helpers', 'rat.pipeline_
 ```bash
 # dbt-compat (simplest — no I/O dependencies)
 docker run --rm \
-  -v $(pwd)/examples/rat-plugin-dbt-compat:/plugin \
+  -v $(pwd)/plugins/rat-plugin-dbt-compat:/plugin \
   -v $(pwd)/runner:/runner \
   -w /plugin python:3.12-slim \
   sh -c "pip install -q uv && uv pip install --system -q -e /runner -e '.[dev]' && pytest -v tests/"
 
 # row-stats
 docker run --rm \
-  -v $(pwd)/examples/rat-plugin-row-stats:/plugin \
+  -v $(pwd)/plugins/rat-plugin-row-stats:/plugin \
   -v $(pwd)/runner:/runner \
   -w /plugin python:3.12-slim \
   sh -c "pip install -q uv && uv pip install --system -q -e /runner -e '.[dev]' && pytest -v tests/"
 
 # soft-delete
 docker run --rm \
-  -v $(pwd)/examples/rat-plugin-soft-delete:/plugin \
+  -v $(pwd)/plugins/rat-plugin-soft-delete:/plugin \
   -v $(pwd)/runner:/runner \
   -w /plugin python:3.12-slim \
   sh -c "pip install -q uv && uv pip install --system -q -e /runner -e '.[dev]' && pytest -v tests/"
 
 # prql
 docker run --rm \
-  -v $(pwd)/examples/rat-plugin-prql:/plugin \
+  -v $(pwd)/plugins/rat-plugin-prql:/plugin \
   -v $(pwd)/runner:/runner \
   -w /plugin python:3.12-slim \
   sh -c "pip install -q uv && uv pip install --system -q -e /runner -e '.[dev]' && pytest -v tests/"
 
 # http-source
 docker run --rm \
-  -v $(pwd)/examples/rat-plugin-http-source:/plugin \
+  -v $(pwd)/plugins/rat-plugin-http-source:/plugin \
   -v $(pwd)/runner:/runner \
   -w /plugin python:3.12-slim \
   sh -c "pip install -q uv && uv pip install --system -q -e /runner -e '.[dev]' && pytest -v tests/"

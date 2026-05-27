@@ -12,9 +12,9 @@ build:
 	cd $(ROOT) && docker build \
 		--build-context platform=platform \
 		--build-context sdk=sdk-go \
-		-f examples/rat-plugin-event-notifier/Dockerfile \
+		-f plugins/rat-plugin-event-notifier/Dockerfile \
 		-t rat-plugin-event-notifier \
-		examples/rat-plugin-event-notifier
+		plugins/rat-plugin-event-notifier
 
 # Run the Go tests (platform module mounted for the replace directive).
 test:

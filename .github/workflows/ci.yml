@@ -264,7 +264,7 @@ jobs:
         run: docker compose -f infra/docker-compose.test.yml --profile test down -v
 
   # ── Example Plugin Tests ──────────────────────────────────────
-  # Each examples/rat-plugin-* directory ships a Makefile with a `test`
+  # Each plugins/rat-plugin-* directory ships a Makefile with a `test`
   # target that runs `go test ./...` against the plugin (with the platform
   # module mounted via go.mod replace). Without this matrix, plugin tests
   # bit-rot silently — a change to platform's plugin SDK can break every

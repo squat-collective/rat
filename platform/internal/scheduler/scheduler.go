@@ -104,7 +104,7 @@ func (s *Scheduler) Stop() {
 // retry. Replaces an older per-submission 3 s sleep that was a workaround
 // for a DuckDB crash *inside the runner's execution path* (many parallel
 // DuckDB connections "terminate called without an active exception" — see
-// examples/rat-plugin-demo-loader/install.go for the user-facing mirror).
+// plugins/rat-plugin-demo-loader/install.go for the user-facing mirror).
 // The scheduler talks to the runner over gRPC, and the runner already
 // serializes submissions under a lock and rejects beyond its concurrency
 // cap, so per-tick fan-out at this limit is safe and far faster than the

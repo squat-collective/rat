@@ -76,7 +76,7 @@ appears. Open the portal dashboard to see the widget and the **Events** nav item
 
 ```bash
 docker run --rm \
-  -v "$(pwd)/examples/rat-plugin-event-notifier":/work \
+  -v "$(pwd)/plugins/rat-plugin-event-notifier":/work \
   -v "$(pwd)/platform":/platform \
   -w /work golang:1.24-alpine \
   sh -c "go mod tidy && go test ./..."

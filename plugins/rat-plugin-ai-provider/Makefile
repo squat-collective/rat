@@ -14,9 +14,9 @@ build:
 	cd $(ROOT) && docker build \
 		--build-context platform=platform \
 		--build-context sdk=sdk-go \
-		-f examples/rat-plugin-ai-provider/Dockerfile \
+		-f plugins/rat-plugin-ai-provider/Dockerfile \
 		-t rat-plugin-ai-provider \
-		examples/rat-plugin-ai-provider
+		plugins/rat-plugin-ai-provider
 
 # Run the Go tests (platform module mounted for the replace directive).
 test:

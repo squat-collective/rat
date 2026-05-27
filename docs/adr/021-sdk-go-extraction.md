@@ -4,7 +4,7 @@
 
 ## Context
 
-By the end of Wave 4 every example plugin under `examples/rat-plugin-*`
+By the end of Wave 4 every example plugin under `plugins/rat-plugin-*`
 had grown the same ~150 LOC of boilerplate: per-startup token, SRI
 hashing, `X-RAT-Plugin-Token` middleware, phone-home retry loop,
 env-var fan-out, mux wiring, and a verbose `DescribeResponse`
@@ -36,7 +36,7 @@ The Dockerfile pattern uses Docker's named build contexts:
 docker build \
   --build-context platform=platform \
   --build-context sdk=sdk-go \
-  -f examples/rat-plugin-*/Dockerfile ...
+  -f plugins/rat-plugin-*/Dockerfile ...
 ```
 
 ## Consequences
