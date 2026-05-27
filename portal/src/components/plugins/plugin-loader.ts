@@ -56,6 +56,26 @@ export async function loadPlugins(nonce: string): Promise<PluginRegistry> {
     registrations.set(name, reg);
   };
 
+  // Remove any <script> tags injected by a previous loadPlugins() call. The
+  // wrapping component re-runs this on every navigation (nonce changes per
+  // request via middleware); without this, document.head would accumulate one
+  // copy of every plugin bundle per navigation (~1-2 MB leak after a dozen
+  // page changes).
+  //
+  // Note: removing the DOM node does NOT un-execute the bundle's top-level
+  // code — the IIFE has already run and registered via __RAT_REGISTER_PLUGIN.
+  // That's fine: each bundle's registration is a static descriptor, so the
+  // next call re-runs the IIFE on the freshly injected <script> and overwrites
+  // the entry in `registrations` with an identical value. Idempotent.
+  //
+  // Edge case: if a previous load is still in flight (its Promise.all hasn't
+  // resolved), we don't cancel it — pending <script> onload handlers will
+  // still fire and write into the OLD `registrations` Map (now unreachable).
+  // The new call sets up its own registrations Map and proceeds independently.
+  document.head
+    .querySelectorAll("script[data-rat-plugin]")
+    .forEach((el) => el.remove());
+
   try {
     const res = await fetch(`${PUBLIC_API_URL}/api/v1/plugins?status=enabled`);
     if (!res.ok) {
@@ -92,6 +112,8 @@ export async function loadPlugins(nonce: string): Promise<PluginRegistry> {
             script.src = `${PUBLIC_API_URL}/api/v1/plugins/${p.name}/ui/bundle.js`;
             script.nonce = nonce;
             script.async = true;
+            // Tag so the next loadPlugins() call can clean up before re-injecting.
+            script.dataset.ratPlugin = p.name;
             if (hash) {
               // SRI: the browser hashes the fetched bytes and refuses to
               // execute the script if they don't match. crossOrigin is

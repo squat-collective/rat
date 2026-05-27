@@ -96,6 +96,73 @@ describe("loadPlugins", () => {
       "http://localhost:8080/api/v1/plugins/my-plugin/ui/bundle.js",
     );
     expect((scripts[0] as HTMLScriptElement).nonce).toBe("test-nonce");
+    // The loader tags every injected <script> so a later loadPlugins() call
+    // can clean it up before re-injecting.
+    expect((scripts[0] as HTMLScriptElement).dataset.ratPlugin).toBe("my-plugin");
+  });
+
+  it("removes_old_plugin_script_tags_before_re-inject", async () => {
+    // Two enabled plugins, both with bundles. Use mockImplementation so each
+    // fetch() call returns a fresh Response — Response bodies are single-use
+    // streams, so mockResolvedValue (which returns the SAME instance) breaks
+    // on the second call.
+    const pluginListJson = JSON.stringify([
+      {
+        name: "plugin-a",
+        status: "enabled",
+        descriptor: {
+          ui: {
+            bundle_url: "http://a:3000/bundle.js",
+            bundle_hash: "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          },
+        },
+      },
+      {
+        name: "plugin-b",
+        status: "enabled",
+        descriptor: {
+          ui: {
+            bundle_url: "http://b:3000/bundle.js",
+            bundle_hash: "sha256-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+          },
+        },
+      },
+    ]);
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () => new Response(pluginListJson, { status: 200 }),
+    );
+
+    const origCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+      const el = origCreateElement(tag);
+      if (tag === "script") {
+        setTimeout(() => el.dispatchEvent(new Event("load")), 0);
+      }
+      return el;
+    });
+
+    // First load — should inject two tags.
+    await loadPlugins("nonce-1");
+    expect(
+      document.head.querySelectorAll("script[data-rat-plugin]").length,
+    ).toBe(2);
+
+    // Second load (simulates navigation: nonce changes per request) — must
+    // remove the old tags and inject fresh ones. No accumulation.
+    await loadPlugins("nonce-2");
+    const allTags = document.head.querySelectorAll("script[data-rat-plugin]");
+    expect(allTags.length).toBe(2);
+    expect(
+      document.head.querySelectorAll('script[data-rat-plugin="plugin-a"]')
+        .length,
+    ).toBe(1);
+    expect(
+      document.head.querySelectorAll('script[data-rat-plugin="plugin-b"]')
+        .length,
+    ).toBe(1);
+    // The freshly injected tags carry the new nonce.
+    expect((allTags[0] as HTMLScriptElement).nonce).toBe("nonce-2");
+    expect((allTags[1] as HTMLScriptElement).nonce).toBe("nonce-2");
   });
 
   it("merges registrations from multiple plugins", async () => {
