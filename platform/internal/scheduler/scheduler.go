@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -33,6 +34,13 @@ type Scheduler struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 	EventBus  EventPublisher // Optional: publishes schedule_fired events when set.
+
+	// Last-tick observability — updated atomically at the end of every tick()
+	// so the /metrics handler can read them without locking. Exposed via
+	// LastTickStats(); see ratd_scheduler_last_tick_* metrics in
+	// platform/internal/api/health.go.
+	lastTickDuration   atomic.Int64 // nanoseconds of the most recent tick
+	lastTickDispatched atomic.Int32 // count of schedules dispatched in the most recent tick
 }
 
 // New creates a Scheduler with the given stores and check interval.
@@ -134,6 +142,13 @@ type dueDispatch struct {
 //     errgroup capped at maxConcurrentScheduleDispatches so 100 same-tick
 //     schedules dispatch in <2 s instead of >5 min.
 func (s *Scheduler) tick(ctx context.Context) {
+	tickStart := time.Now()
+	dispatched := 0
+	defer func() {
+		s.lastTickDuration.Store(int64(time.Since(tickStart)))
+		s.lastTickDispatched.Store(int32(dispatched))
+	}()
+
 	schedules, err := s.schedules.ListSchedules(ctx)
 	if err != nil {
 		slog.Error("scheduler: failed to list schedules", "error", err)
@@ -213,7 +228,15 @@ func (s *Scheduler) tick(ctx context.Context) {
 		return
 	}
 
+	dispatched = len(dispatches)
 	s.dispatchDue(ctx, now, dispatches)
+}
+
+// LastTickStats returns the duration and dispatch count of the most recent
+// scheduler tick. Returns (0, 0) if no tick has fired yet. Safe for
+// concurrent reads — used by the /metrics handler.
+func (s *Scheduler) LastTickStats() (time.Duration, int) {
+	return time.Duration(s.lastTickDuration.Load()), int(s.lastTickDispatched.Load())
 }
 
 // dispatchDue fans out the actual executor.Submit calls for the planned

@@ -238,6 +238,19 @@ func main() {
 	registry := mgr.Registry()
 	srv.Plugins = registry
 	srv.PluginRegistry = registry
+	// Plugin fleet metrics: closure walks registry.All() per scrape — cheap
+	// (RLock + slice copy of a handful of pointers) and avoids pulling the
+	// plugins package into api/.
+	srv.PluginHealthStats = func() (int, int) {
+		all := registry.All()
+		healthy := 0
+		for _, p := range all {
+			if p.Status == domain.PluginStatusEnabled {
+				healthy++
+			}
+		}
+		return len(all), healthy
+	}
 
 	// Register any plugins declared in rat.yaml config (backward compat).
 	// These are registered immediately via health-check + describe.
@@ -424,6 +437,19 @@ func main() {
 		srv.Settings = postgres.NewSettingsStore(pool)
 
 		srv.DBHealth = postgres.NewHealthChecker(pool)
+		// Pool-saturation metrics: expose pgxpool.Stat() to /metrics via a
+		// closure so the api package never imports pgx. Returning int32
+		// (pgx's native type) avoids a per-scrape integer cast.
+		srv.DBPoolStats = func() (int32, int32) {
+			st := pool.Stat()
+			return st.TotalConns(), st.AcquiredConns()
+		}
+		if heartbeatPool != nil {
+			srv.HeartbeatPoolStats = func() (int32, int32) {
+				st := heartbeatPool.Stat()
+				return st.TotalConns(), st.AcquiredConns()
+			}
+		}
 		slog.Info("postgres stores initialized")
 
 		// Wire plugin catalog persistence now that Postgres is available.
@@ -658,6 +684,14 @@ func main() {
 				sched.EventBus = eventBus
 			}
 			sched.Start(ctx)
+			// Scheduler tick metrics: published as Prometheus gauges by the
+			// /metrics handler. Closure captures *sched so the api package
+			// doesn't import scheduler. The first scrape before any tick
+			// has fired returns (0, 0) — fine for both gauges.
+			srv.SchedulerMetrics = func() (float64, int) {
+				dur, dispatched := sched.LastTickStats()
+				return dur.Seconds(), dispatched
+			}
 			stopScheduler = func() { sched.Stop() }
 			slog.Info("scheduler started")
 		}

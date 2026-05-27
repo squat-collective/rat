@@ -876,3 +876,37 @@ func TestScheduler_DispatchDue_TickLatency(t *testing.T) {
 	assert.Less(t, elapsed, 5*time.Second,
 		"100 same-tick dispatches should fan out in <5s, got %s", elapsed)
 }
+
+// LastTickStats must return (0, 0) before tick() ever runs (the /metrics
+// handler can be scraped during the first 30s when no tick has fired yet),
+// then reflect the most recent tick's duration and dispatch count.
+func TestScheduler_LastTickStats_InitialIsZero(t *testing.T) {
+	sched := New(newMockScheduleStore(), newMockPipelineStore(), newMockRunStore(), newMockExecutor(), 30*time.Second)
+	dur, dispatched := sched.LastTickStats()
+	assert.Equal(t, time.Duration(0), dur)
+	assert.Equal(t, 0, dispatched)
+}
+
+func TestScheduler_LastTickStats_RecordsDuration_NoDispatches(t *testing.T) {
+	// An empty schedule store still ticks — duration is recorded even when
+	// there's nothing to dispatch (so operators can confirm the loop is alive).
+	sched := New(newMockScheduleStore(), newMockPipelineStore(), newMockRunStore(), newMockExecutor(), 30*time.Second)
+	sched.tick(context.Background())
+
+	dur, dispatched := sched.LastTickStats()
+	assert.Greater(t, dur, time.Duration(0), "duration should be recorded even with no schedules")
+	assert.Equal(t, 0, dispatched)
+}
+
+func TestScheduler_LastTickStats_CountsDispatches(t *testing.T) {
+	const totalSchedules = 3
+	schedStore, pipelineStore, runStore := makeDueSchedules(t, totalSchedules)
+	exec := newMockExecutor()
+	sched := New(schedStore, pipelineStore, runStore, exec, 30*time.Second)
+
+	sched.tick(context.Background())
+
+	dur, dispatched := sched.LastTickStats()
+	assert.Greater(t, dur, time.Duration(0))
+	assert.Equal(t, totalSchedules, dispatched)
+}

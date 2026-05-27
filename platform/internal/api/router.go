@@ -351,6 +351,18 @@ type Server struct {
 	RunnerHealth     HealthChecker     // Runner gRPC health check. Nil = skip.
 	QueryHealth      HealthChecker     // ratq gRPC health check. Nil = skip.
 
+	// Metrics callables — exported as Prometheus gauges by HandleMetrics.
+	// Each is optional; the corresponding metric is omitted when nil so dev
+	// or test servers without the dependency wired don't emit zeros that
+	// look like saturated pools / empty plugin fleets. Use closures over the
+	// concrete pgxpool.Pool / plugins.Registry / scheduler.Scheduler in main.go
+	// so this api package never imports those packages (avoids cycles and
+	// keeps the test helpers dependency-light).
+	DBPoolStats        func() (total, acquired int32)   // main pgxpool.Pool.Stat()
+	HeartbeatPoolStats func() (total, acquired int32)   // dedicated heartbeat pool (nil when unused)
+	PluginHealthStats  func() (total, healthy int)      // plugins.Registry.All() count + filter
+	SchedulerMetrics   func() (lastTickSeconds float64, dispatched int) // scheduler.LastTickStats()
+
 	// Caches reduce Postgres load for slow-changing data.
 	// Nil caches are safe — handlers check before using.
 	NamespaceCache *cache.Cache[string, []domain.Namespace]   // key: "all" (namespace list rarely changes)
