@@ -1,8 +1,36 @@
 # ratd REST API Specification
 
 > Base URL: `http://localhost:8080/api/v1`
-> Auth: None (Community). Bearer token (Pro, via auth plugin).
+> Auth: None (Community); `RAT_API_KEY` shared secret optional; Bearer token (Pro, via auth plugin).
 > Format: JSON request/response. Arrow IPC for query results.
+>
+> **Freshness note (2026-05):** The endpoint inventory at the bottom of
+> this file lists ~75 endpoints; the actual router registers ~99 unique
+> paths today (see [`platform/internal/api/`](../platform/internal/api/)
+> for the source of truth). Recent additions not yet documented in this
+> file:
+>
+> | Area | Endpoints | Source file |
+> |---|---|---|
+> | Cloud credentials | `/cloud/credentials` | `cloud.go` |
+> | Identity (Pro) | `/identity/users`, `/identity/groups`, `/identity/capabilities`, `/me` | `identity.go` |
+> | Permissions (Pro) | `/permissions/{access,check,grants,groups,resources,verbs}` | `permissions.go` |
+> | Plugin lifecycle | `/api/v1/plugins/{name}/config`, `/api/v1/internal/plugins/register` | `plugins.go`, `internal_routes.go` |
+> | Health probes | `/health/live`, `/health/ready` | `health.go` |
+> | Metrics | `/metrics` | `metrics.go` |
+> | Reaper admin | `/admin/retention/{config,run,status}` | `retention.go` |
+> | Internal callbacks | `/api/v1/internal/runs/{runID}/status`, `/api/v1/internal/failed-merges` | `internal_routes.go` |
+>
+> The Wave 8 enforcement-filter wiring also changed semantics on
+> `GET /pipelines`, `GET /pipelines/{ns}/{layer}/{name}`, `GET /runs`,
+> `GET /runs/{id}`, and `GET /namespaces`: in a Pro deployment with the
+> enforcement plugin enabled, those endpoints post-filter to what the
+> caller can read, and `total` reflects the visible count rather than
+> the raw SQL count. The response shape is otherwise unchanged.
+>
+> A full regeneration of this spec from router source is on the
+> follow-up docs list; until then, treat the bottom-of-file inventory as
+> a guide to the *shape* of the API, not a complete catalogue.
 
 ---
 

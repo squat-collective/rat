@@ -346,17 +346,17 @@ NESSIE_URL=http://nessie:19120/api/v1
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `PORT` | No | `8080` | HTTP port for the REST API (legacy, used when `LISTEN_ADDR` is unset). |
-| `LISTEN_ADDR` | No | `127.0.0.1:8080` | Public listener address (`host:port`) for end-user APIs. Bind to `0.0.0.0:8080` in compose / k8s. |
-| `INTERNAL_LISTEN_ADDR` | No | `127.0.0.1:8090` | Private listener for service-to-service callbacks (`POST /api/v1/internal/runs/{id}/status`, `POST /internal/plugins/register`). MUST NOT be exposed beyond the container network. Compose binds it to `0.0.0.0:8090` inside the network and `127.0.0.1:8090` on the host. Change only if 8090 conflicts on the host. See [ADR-019](adr/019-internal-listener-split.md). |
+| `RAT_LISTEN_ADDR` | No | `127.0.0.1:8080` | Public listener address (`host:port`) for end-user APIs. Bind to `0.0.0.0:8080` in compose / k8s. Default binds to localhost only — opening it to the network without `RAT_API_KEY` set logs a warning. |
+| `PORT` | No | `8080` | Legacy single-port form. Used as `:${PORT}` when `RAT_LISTEN_ADDR` is unset. Prefer `RAT_LISTEN_ADDR` for new deployments. |
+| `INTERNAL_LISTEN_ADDR` | No | `127.0.0.1:8090` | Private listener for service-to-service callbacks (`POST /api/v1/internal/runs/{id}/status`, `POST /api/v1/internal/plugins/register`). MUST NOT be exposed beyond the container network. Compose binds it to `0.0.0.0:8090` inside the network and `127.0.0.1:8090` on the host. Refuses to start if equal to `RAT_LISTEN_ADDR`. See [ADR-019](adr/019-internal-listener-split.md). |
+| `RAT_API_KEY` | No | — | When set, every request to the public listener must carry `Authorization: Bearer <key>` or `X-API-Key: <key>`. The internal listener is unaffected (its auth model is network isolation). Use for single-tenant CE deployments behind a reverse proxy where you want a simple shared secret. Pro deployments use the auth plugin instead. |
+| `CORS_ORIGINS` | No | — | Comma-separated list of allowed origins for CORS. Defaults to no CORS (same-origin only). Set to `http://localhost:3000` for portal-on-different-port dev setups, or your portal's public URL in production. |
+| `RATE_LIMIT` | No | `100` | Requests per minute per client IP on the public listener. Set to `0` to disable. Applied after auth so authenticated requests share the per-IP budget. |
+| `SCHEDULER_ENABLED` | No | `true` | When `false`, ratd starts without the cron scheduler — useful for multi-replica deployments where only one instance should fire schedules. Pair with manual leader election (or rely on Postgres advisory lock — see [ADR-022](adr/022-leader-election.md)). |
+| `TLS_CERT_FILE`, `TLS_KEY_FILE` | No | — | When both are set, the public listener serves HTTPS instead of HTTP. Mutually inclusive (only one set → startup error). For typical deployments, prefer terminating TLS at a reverse proxy and leaving ratd on plain HTTP. |
 | `RAT_HEARTBEAT_POOL_ENABLED` | No | `true` | When `true`, the leader heartbeat uses a dedicated 1-connection pgx pool so handler load can't starve it. Set to `false` for tiny deployments where one extra Postgres connection isn't worth it (falls back to the shared pool, loses the saturation guard). See [ADR-023](adr/023-leader-heartbeat-dedicated-pool.md). |
+| `RAT_PPROF_ADDR` | No | — | Enables Go pprof endpoints (goroutine, heap, allocs, CPU profile, trace) on a dedicated listener. Disabled by default. **SECURITY**: pprof exposes sensitive runtime state — NEVER bind to a public interface. Use `127.0.0.1:6060` in production and access via SSH tunnel. |
 | `EDITION` | No | `community` | Edition identifier. Returned in `GET /health` and `GET /api/v1/features`. |
-
-### RAT_PPROF_ADDR
-- Purpose: enables Go pprof endpoints (goroutine, heap, allocs, CPU profile, trace) on a dedicated listener.
-- Default: "" (disabled).
-- When to enable: production debugging, performance investigation, leak hunting.
-- SECURITY: pprof exposes sensitive runtime state. NEVER bind to a public interface. Use 127.0.0.1:6060 in production; access via SSH tunnel.
 
 ---
 
