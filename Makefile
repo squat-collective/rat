@@ -90,7 +90,7 @@ test-py: ## Run all Python tests (runner + query — uses pre-built images if av
 	else \
 		echo "⚠️  Pre-built runner test image not found, installing deps from scratch (run 'make test-images' to speed this up)..."; \
 		docker run --rm -v $$(pwd)/runner:/app -w /app $(PY_IMAGE) \
-			sh -c "pip install -q uv 2>/dev/null && uv pip install --system -q -e '.[dev]' && pytest -v"; \
+			sh -c "pip install -q uv 2>/dev/null && uv sync --locked --extra dev -q && .venv/bin/pytest -v"; \
 	fi
 	@if docker image inspect $(PY_TEST_QUERY_IMAGE) >/dev/null 2>&1; then \
 		echo "🚀 Using pre-built query test image..."; \
@@ -101,7 +101,7 @@ test-py: ## Run all Python tests (runner + query — uses pre-built images if av
 	else \
 		echo "⚠️  Pre-built query test image not found, installing deps from scratch (run 'make test-images' to speed this up)..."; \
 		docker run --rm -v $$(pwd)/query:/app -w /app $(PY_IMAGE) \
-			sh -c "pip install -q uv 2>/dev/null && uv pip install --system -q -e '.[dev]' && pytest -v"; \
+			sh -c "pip install -q uv 2>/dev/null && uv sync --locked --extra dev -q && .venv/bin/pytest -v"; \
 	fi
 
 test-images: ## Build pre-built Python test images (speeds up test-py)
