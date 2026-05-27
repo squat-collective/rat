@@ -545,15 +545,20 @@ func NewRouter(srv *Server) chi.Router {
 // NewInternalRouter creates the PRIVATE chi router for service-to-service
 // callbacks. It hosts ONLY internal endpoints:
 //
-//   - POST /api/v1/internal/runs/{runID}/status — runner posts terminal run status
-//   - POST /api/v1/internal/failed-merges        — runner records a Phase 5 merge failure
-//   - POST /internal/plugins/register           — plugins phone home at boot
+//   - POST /api/v1/internal/runs/{runID}/status        — runner posts terminal run status
+//   - POST /api/v1/internal/failed-merges              — runner records a Phase 5 merge failure
+//   - POST /api/v1/internal/plugins/register           — plugins phone home at boot (canonical)
+//   - POST /internal/plugins/register                  — DEPRECATED alias, logs a WARN; remove in a future release
 //
 // SECURITY MODEL: this router has NO authentication. It assumes the caller is
 // trusted because the listener it serves on must be bound to a network the
 // public can't reach (loopback, the Docker bridge, a VPC private subnet…).
 // The operator is responsible for keeping the internal listener off the
 // public network. Never expose the internal port to the host or the internet.
+//
+// See ADR-019 and the top-of-file trust-model block in internal_routes.go
+// for the full contract. The actual route wiring is centralised in
+// MountAllInternalRoutes — this function only sets up middleware.
 //
 // Health endpoints are mirrored here so a Docker/Kubernetes probe targeting
 // the internal port still works without round-tripping to 8080.
@@ -571,23 +576,10 @@ func NewInternalRouter(srv *Server) chi.Router {
 	// Optional body-size cap so a runaway client can't blow up memory.
 	r.Use(limitJSONBody)
 
-	// Health (so container probes pointed at the internal port still work).
-	r.Get("/health", srv.HandleHealth)
-	r.Get("/health/live", srv.HandleHealthLive)
-	r.Get("/health/ready", srv.HandleHealthReady)
-
-	// Run-status callback from the runner.
-	MountInternalRoutes(r, srv)
-
-	// Failed-merge audit callback from the runner (Phase 5 terminal failure).
-	// Mounted unconditionally — the handler tolerates a nil FailedMerges store
-	// (logs a warning, 200s) so dev-mode without Postgres still works.
-	MountInternalFailedMergesRoute(r, srv)
-
-	// Plugin phone-home (plugins POST here at boot to register themselves).
-	if srv.PluginManager != nil {
-		MountPluginInternalRoutes(r, srv)
-	}
+	// Single source of truth for which endpoints live on the internal
+	// listener. See platform/internal/api/internal_routes.go for the
+	// full trust-model block + the InternalRouterConfig knobs.
+	MountAllInternalRoutes(r, DefaultInternalRouterConfig(), srv)
 
 	return r
 }

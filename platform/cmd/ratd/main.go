@@ -837,6 +837,11 @@ func main() {
 	}
 
 	publicRouter := api.NewRouter(srv)
+	// NewInternalRouter delegates route wiring to
+	// api.MountAllInternalRoutes (see platform/internal/api/internal_routes.go
+	// for the single source of truth + the trust-model block). Every
+	// internal endpoint is mounted there; this call site stays a one-liner
+	// so a future "what's on :8090?" question has a single file to read.
 	internalRouter := api.NewInternalRouter(srv)
 
 	// Public listen address: RAT_LISTEN_ADDR > PORT (legacy) > default 127.0.0.1:8080.
