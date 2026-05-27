@@ -65,7 +65,12 @@ describe("loadPlugins", () => {
         {
           name: "my-plugin",
           status: "enabled",
-          descriptor: { ui: { bundle_url: "http://plugin:3000/bundle.js" } },
+          descriptor: {
+            ui: {
+              bundle_url: "http://plugin:3000/bundle.js",
+              bundle_hash: "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            },
+          },
         },
       ]), { status: 200 }),
     );
@@ -99,12 +104,22 @@ describe("loadPlugins", () => {
         {
           name: "plugin-a",
           status: "enabled",
-          descriptor: { ui: { bundle_url: "http://a:3000/bundle.js" } },
+          descriptor: {
+            ui: {
+              bundle_url: "http://a:3000/bundle.js",
+              bundle_hash: "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            },
+          },
         },
         {
           name: "plugin-b",
           status: "enabled",
-          descriptor: { ui: { bundle_url: "http://b:3000/bundle.js" } },
+          descriptor: {
+            ui: {
+              bundle_url: "http://b:3000/bundle.js",
+              bundle_hash: "sha256-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+            },
+          },
         },
       ]), { status: 200 }),
     );
@@ -142,18 +157,95 @@ describe("loadPlugins", () => {
     expect(reg.navItems[1].label).toBe("B");
   });
 
+  it("refuses to inject script for unsigned bundle in strict mode (default)", async () => {
+    // Default mode: NEXT_PUBLIC_RAT_ALLOW_UNSIGNED_BUNDLES is not set.
+    vi.stubEnv("NEXT_PUBLIC_RAT_ALLOW_UNSIGNED_BUNDLES", "");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify([
+        {
+          name: "evil-plugin",
+          status: "enabled",
+          // bundle_url present, bundle_hash absent → must be rejected.
+          descriptor: { ui: { bundle_url: "http://evil:3000/bundle.js" } },
+        },
+      ]), { status: 200 }),
+    );
+
+    const reg = await loadPlugins("test-nonce");
+
+    const scripts = document.head.querySelectorAll("script[src*='bundle.js']");
+    expect(scripts.length).toBe(0);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("refusing to load unsigned bundle"),
+    );
+    // Promise still resolves cleanly — the wider load doesn't hang.
+    expect(reg).toEqual({ slots: {}, navItems: [], routes: [] });
+
+    vi.unstubAllEnvs();
+  });
+
+  it("loads unsigned bundle with a warning when NEXT_PUBLIC_RAT_ALLOW_UNSIGNED_BUNDLES=true", async () => {
+    vi.stubEnv("NEXT_PUBLIC_RAT_ALLOW_UNSIGNED_BUNDLES", "true");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify([
+        {
+          name: "dev-plugin",
+          status: "enabled",
+          descriptor: { ui: { bundle_url: "http://dev:3000/bundle.js" } },
+        },
+      ]), { status: 200 }),
+    );
+
+    const origCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tag: string) => {
+      const el = origCreateElement(tag);
+      if (tag === "script") {
+        setTimeout(() => el.dispatchEvent(new Event("load")), 0);
+      }
+      return el;
+    });
+
+    await loadPlugins("test-nonce");
+
+    const scripts = document.head.querySelectorAll("script[src*='bundle.js']");
+    expect(scripts.length).toBe(1);
+    // No SRI applied — integrity is unset (jsdom returns undefined or "").
+    expect((scripts[0] as HTMLScriptElement).integrity || "").toBe("");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("script integrity not verified"),
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    vi.unstubAllEnvs();
+  });
+
   it("merges routes from multiple plugins", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify([
         {
           name: "plugin-a",
           status: "enabled",
-          descriptor: { ui: { bundle_url: "http://a:3000/bundle.js" } },
+          descriptor: {
+            ui: {
+              bundle_url: "http://a:3000/bundle.js",
+              bundle_hash: "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            },
+          },
         },
         {
           name: "plugin-b",
           status: "enabled",
-          descriptor: { ui: { bundle_url: "http://b:3000/bundle.js" } },
+          descriptor: {
+            ui: {
+              bundle_url: "http://b:3000/bundle.js",
+              bundle_hash: "sha256-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+            },
+          },
         },
       ]), { status: 200 }),
     );

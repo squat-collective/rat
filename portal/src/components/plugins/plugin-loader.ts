@@ -38,7 +38,16 @@ interface PluginListEntry {
  * 2. Sets up window.__RAT_REGISTER_PLUGIN
  * 3. Injects <script> tags for each plugin bundle (via ratd proxy)
  * 4. Merges all registrations into a single PluginRegistry
+ *
+ * SRI strict mode (default): bundles without `descriptor.ui.bundle_hash` are
+ * rejected at load time — no <script> tag is injected. Set the build-time env
+ * `NEXT_PUBLIC_RAT_ALLOW_UNSIGNED_BUNDLES=true` to downgrade to a warning
+ * (dev-only escape hatch; never enable in production).
  */
+function allowUnsignedBundles(): boolean {
+  return process.env.NEXT_PUBLIC_RAT_ALLOW_UNSIGNED_BUNDLES === "true";
+}
+
 export async function loadPlugins(nonce: string): Promise<PluginRegistry> {
   const registrations = new Map<string, PluginRegistration>();
 
@@ -68,11 +77,21 @@ export async function loadPlugins(nonce: string): Promise<PluginRegistry> {
       withUI.map(
         (p) =>
           new Promise<void>((resolve) => {
+            const hash = p.descriptor?.ui?.bundle_hash;
+            if (!hash && !allowUnsignedBundles()) {
+              // Strict SRI: refuse to inject the <script> tag at all.
+              // Resolve so the wider Promise.all doesn't hang on this plugin.
+              console.error(
+                `[plugin-loader] ${p.name} has no bundle_hash — refusing to load unsigned bundle. ` +
+                  `Set NEXT_PUBLIC_RAT_ALLOW_UNSIGNED_BUNDLES=true for dev.`,
+              );
+              resolve();
+              return;
+            }
             const script = document.createElement("script");
             script.src = `${PUBLIC_API_URL}/api/v1/plugins/${p.name}/ui/bundle.js`;
             script.nonce = nonce;
             script.async = true;
-            const hash = p.descriptor?.ui?.bundle_hash;
             if (hash) {
               // SRI: the browser hashes the fetched bytes and refuses to
               // execute the script if they don't match. crossOrigin is
@@ -81,6 +100,7 @@ export async function loadPlugins(nonce: string): Promise<PluginRegistry> {
               script.integrity = hash;
               script.crossOrigin = "anonymous";
             } else {
+              // ALLOW_UNSIGNED_BUNDLES escape hatch — preserve prior behaviour.
               console.warn(
                 `[plugin-loader] ${p.name} has no bundle_hash — script integrity not verified. ` +
                   `Add bundle_hash to its Describe() response to enable SRI.`,
