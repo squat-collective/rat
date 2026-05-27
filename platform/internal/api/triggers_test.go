@@ -238,6 +238,46 @@ func (m *memoryTriggerStore) UpdateTriggerFired(_ context.Context, triggerID str
 	return fmt.Errorf("trigger not found")
 }
 
+// UpdateTriggerFiredCAS is the race-safe variant used by the trigger
+// evaluator. It mirrors the SQL CAS at the in-memory layer: the update only
+// applies when the stored last_triggered_at matches expectedPrev (treating
+// NULL == NULL as a match). Returns false when the expected value does not
+// match — that is the "another path already fired" outcome.
+func (m *memoryTriggerStore) UpdateTriggerFiredCAS(
+	_ context.Context,
+	triggerID string,
+	newTriggeredAt time.Time,
+	runID uuid.UUID,
+	expectedPrev *time.Time,
+) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	uid, err := uuid.Parse(triggerID)
+	if err != nil {
+		return false, fmt.Errorf("invalid trigger ID")
+	}
+	for i, t := range m.triggers {
+		if t.ID != uid {
+			continue
+		}
+		// IS NOT DISTINCT FROM semantics: equal if both nil, or both
+		// non-nil and pointing at equal times.
+		current := m.triggers[i].LastTriggeredAt
+		match := (current == nil && expectedPrev == nil) ||
+			(current != nil && expectedPrev != nil && current.Equal(*expectedPrev))
+		if !match {
+			return false, nil
+		}
+		_ = t
+		stamped := newTriggeredAt
+		m.triggers[i].LastTriggeredAt = &stamped
+		m.triggers[i].LastRunID = &runID
+		return true, nil
+	}
+	return false, nil
+}
+
 // mockExecutor records Submit calls for assertion.
 type mockExecutor struct {
 	mu      sync.Mutex

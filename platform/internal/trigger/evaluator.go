@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 	"github.com/rat-data/rat/platform/internal/api"
 	"github.com/rat-data/rat/platform/internal/domain"
@@ -279,7 +280,24 @@ func (e *Evaluator) isDue(t domain.PipelineTrigger, cronSched cron.Schedule, now
 	return !nextRun.After(now)
 }
 
-// fireAndUpdate looks up the pipeline, creates a run, submits it, and updates trigger state.
+// fireAndUpdate claims the trigger via CAS, then creates and submits a run.
+//
+// Race context: tick() (30s ticker) and handleRunCompleted (LISTEN/NOTIFY)
+// can both decide the same cron_dependency trigger is "due" at the same
+// moment — one reads via FindTriggersByType in the tick path, the other via
+// the same call in the event path. Without CAS, both would call
+// UpdateTriggerFired and two runs would be created for the same upstream
+// event.
+//
+// Fix: we claim the trigger FIRST via UpdateTriggerFiredCAS. The CAS UPDATE
+// only succeeds when last_triggered_at still equals the value we observed at
+// evaluation start (t.LastTriggeredAt). The race-loser gets fired==false and
+// silently returns without creating a run. Only the winner proceeds.
+//
+// We pass uuid.Nil as last_run_id during the claim and refresh it via a
+// follow-up UpdateTriggerFired once the run exists. The brief window where
+// last_run_id lags last_triggered_at is acceptable — it is used for
+// observability only, not correctness.
 func (e *Evaluator) fireAndUpdate(ctx context.Context, t domain.PipelineTrigger, triggerLabel string) {
 	pipeline, err := e.pipelines.GetPipelineByID(ctx, t.PipelineID.String())
 	if err != nil {
@@ -288,6 +306,22 @@ func (e *Evaluator) fireAndUpdate(ctx context.Context, t domain.PipelineTrigger,
 	}
 	if pipeline == nil {
 		slog.Warn("trigger evaluator: pipeline not found for trigger", "trigger_id", t.ID, "pipeline_id", t.PipelineID)
+		return
+	}
+
+	// Claim the trigger via CAS BEFORE creating the run. expectedPrev is
+	// the LastTriggeredAt we observed when listing triggers — if another
+	// path beat us between the read and now, the UPDATE matches 0 rows
+	// and we silently skip.
+	now := time.Now()
+	fired, err := e.triggers.UpdateTriggerFiredCAS(ctx, t.ID.String(), now, uuid.Nil, t.LastTriggeredAt)
+	if err != nil {
+		slog.Error("trigger evaluator: failed to CAS-claim trigger", "trigger_id", t.ID, "error", err)
+		return
+	}
+	if !fired {
+		slog.Debug("trigger fired by another path, skipping",
+			"trigger_id", t.ID, "trigger_type", t.Type)
 		return
 	}
 
@@ -306,8 +340,11 @@ func (e *Evaluator) fireAndUpdate(ctx context.Context, t domain.PipelineTrigger,
 		slog.Error("trigger evaluator: executor submit failed", "run_id", run.ID, "error", err)
 	}
 
+	// Backfill last_run_id now that the run has an ID. We already own the
+	// trigger fire (CAS won above), so the plain UpdateTriggerFired is
+	// safe here — no concurrent fire is possible.
 	if err := e.triggers.UpdateTriggerFired(ctx, t.ID.String(), run.ID); err != nil {
-		slog.Error("trigger evaluator: failed to update trigger fired state", "trigger_id", t.ID, "error", err)
+		slog.Error("trigger evaluator: failed to backfill last_run_id", "trigger_id", t.ID, "error", err)
 	}
 
 	slog.Info("trigger evaluator: fired run", "trigger_id", t.ID, "trigger_type", t.Type, "run_id", run.ID)

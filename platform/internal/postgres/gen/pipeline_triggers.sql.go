@@ -7,6 +7,7 @@ package gen
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -378,4 +379,51 @@ type UpdateTriggerFiredParams struct {
 func (q *Queries) UpdateTriggerFired(ctx context.Context, arg UpdateTriggerFiredParams) error {
 	_, err := q.db.Exec(ctx, updateTriggerFired, arg.ID, arg.LastRunID)
 	return err
+}
+
+const updateTriggerFiredCAS = `-- name: UpdateTriggerFiredCAS :one
+UPDATE pipeline_triggers
+SET last_triggered_at = $3::timestamptz,
+    last_run_id = $2,
+    updated_at = now()
+WHERE id = $1
+  AND last_triggered_at IS NOT DISTINCT FROM $4::timestamptz
+RETURNING id, pipeline_id, type, config, enabled, cooldown_seconds,
+          last_triggered_at, last_run_id, created_at, updated_at
+`
+
+type UpdateTriggerFiredCASParams struct {
+	ID                      uuid.UUID
+	LastRunID               pgtype.UUID
+	NewTriggeredAt          time.Time
+	ExpectedLastTriggeredAt *time.Time
+}
+
+// Compare-and-swap fire of a trigger. Only updates when the current
+// last_triggered_at matches the expected value (or both are NULL).
+// Returns the updated row on success; pgx.ErrNoRows when another
+// evaluation path already fired the trigger (the race-loser silently
+// skips submission). IS NOT DISTINCT FROM handles the NULL == NULL case
+// correctly so the very first fire (expected=NULL) succeeds.
+func (q *Queries) UpdateTriggerFiredCAS(ctx context.Context, arg UpdateTriggerFiredCASParams) (PipelineTrigger, error) {
+	row := q.db.QueryRow(ctx, updateTriggerFiredCAS,
+		arg.ID,
+		arg.LastRunID,
+		arg.NewTriggeredAt,
+		arg.ExpectedLastTriggeredAt,
+	)
+	var i PipelineTrigger
+	err := row.Scan(
+		&i.ID,
+		&i.PipelineID,
+		&i.Type,
+		&i.Config,
+		&i.Enabled,
+		&i.CooldownSeconds,
+		&i.LastTriggeredAt,
+		&i.LastRunID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

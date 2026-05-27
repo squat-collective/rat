@@ -39,6 +39,13 @@ type PipelineTriggerStore interface {
 	FindTriggersByPipelineSuccess(ctx context.Context, namespace, layer, pipeline string) ([]domain.PipelineTrigger, error)
 	FindTriggersByFilePattern(ctx context.Context, namespace, zoneName string) ([]domain.PipelineTrigger, error)
 	UpdateTriggerFired(ctx context.Context, triggerID string, runID uuid.UUID) error
+	// UpdateTriggerFiredCAS is the race-safe variant of UpdateTriggerFired.
+	// The update only fires when the stored last_triggered_at matches
+	// expectedPrev (NULL == NULL counts as a match). Returns true on success,
+	// false when another concurrent evaluation path already fired the trigger.
+	// Used by the trigger evaluator to prevent duplicate runs when tick() and
+	// the run_completed LISTEN/NOTIFY handler race on the same trigger.
+	UpdateTriggerFiredCAS(ctx context.Context, triggerID string, newTriggeredAt time.Time, runID uuid.UUID, expectedPrev *time.Time) (bool, error)
 }
 
 // CreateTriggerRequest is the JSON body for POST /api/v1/pipelines/{namespace}/{layer}/{name}/triggers.

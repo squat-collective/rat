@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -198,6 +199,40 @@ func (s *TriggerStore) UpdateTriggerFired(ctx context.Context, triggerID string,
 		ID:        uid,
 		LastRunID: pgtype.UUID{Bytes: runID, Valid: true},
 	})
+}
+
+// UpdateTriggerFiredCAS performs a compare-and-swap on the trigger fire state.
+// It only updates when the row's current last_triggered_at matches expectedPrev
+// (NULL == NULL counts as a match — handled by IS NOT DISTINCT FROM at the SQL
+// layer). Returns true when the row was updated, false when another evaluation
+// path already fired the trigger (the race-loser silently skips submission).
+// pgx.ErrNoRows is mapped to (false, nil) — it is the expected race outcome,
+// not an error.
+func (s *TriggerStore) UpdateTriggerFiredCAS(
+	ctx context.Context,
+	triggerID string,
+	newTriggeredAt time.Time,
+	runID uuid.UUID,
+	expectedPrev *time.Time,
+) (bool, error) {
+	uid, err := uuid.Parse(triggerID)
+	if err != nil {
+		return false, fmt.Errorf("invalid trigger id: %w", err)
+	}
+	_, err = s.q.UpdateTriggerFiredCAS(ctx, gen.UpdateTriggerFiredCASParams{
+		ID:                      uid,
+		LastRunID:               pgtype.UUID{Bytes: runID, Valid: true},
+		NewTriggeredAt:          newTriggeredAt,
+		ExpectedLastTriggeredAt: expectedPrev,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Another evaluation path fired this trigger first. Not an error.
+			return false, nil
+		}
+		return false, fmt.Errorf("update trigger fired cas: %w", err)
+	}
+	return true, nil
 }
 
 func triggerRowToDomain(r gen.PipelineTrigger) domain.PipelineTrigger {

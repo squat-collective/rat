@@ -792,6 +792,116 @@ func TestTriggerStore_UpdateTriggerFired(t *testing.T) {
 	assert.Equal(t, run.ID, *got.LastRunID)
 }
 
+// TestUpdateTriggerFiredCAS_MatchingExpected_Updates verifies the happy path:
+// when the caller supplies the trigger's current last_triggered_at as the
+// expected value, the CAS update succeeds and returns true.
+func TestUpdateTriggerFiredCAS_MatchingExpected_Updates(t *testing.T) {
+	pool := testPool(t)
+	pStore := postgres.NewPipelineStore(pool)
+	rStore := postgres.NewRunStore(pool)
+	tStore := postgres.NewTriggerStore(pool)
+	ctx := context.Background()
+
+	pipeline := createTestPipeline(t, pStore, "default", "bronze", "cas-match")
+	trigger := createTestTrigger(t, tStore, pipeline.ID, domain.TriggerTypeCron, json.RawMessage(`{"cron": "0 * * * *"}`))
+
+	// First fire: NULL -> now. We pass nil as expectedPrev to match the
+	// fresh trigger (no prior fire).
+	firstStamp := time.Now().UTC().Truncate(time.Microsecond)
+	run1 := &domain.Run{PipelineID: pipeline.ID, Status: domain.RunStatusPending, Trigger: "trigger"}
+	require.NoError(t, rStore.CreateRun(ctx, run1))
+
+	fired, err := tStore.UpdateTriggerFiredCAS(ctx, trigger.ID.String(), firstStamp, run1.ID, nil)
+	require.NoError(t, err)
+	require.True(t, fired, "first CAS fire (NULL == NULL) must succeed")
+
+	got, err := tStore.GetTrigger(ctx, trigger.ID.String())
+	require.NoError(t, err)
+	require.NotNil(t, got.LastTriggeredAt)
+	assert.WithinDuration(t, firstStamp, *got.LastTriggeredAt, time.Millisecond)
+
+	// Second fire: caller passes the stamp we just read as expectedPrev.
+	expected := got.LastTriggeredAt
+	secondStamp := firstStamp.Add(time.Second)
+	run2 := &domain.Run{PipelineID: pipeline.ID, Status: domain.RunStatusPending, Trigger: "trigger"}
+	require.NoError(t, rStore.CreateRun(ctx, run2))
+
+	fired, err = tStore.UpdateTriggerFiredCAS(ctx, trigger.ID.String(), secondStamp, run2.ID, expected)
+	require.NoError(t, err)
+	assert.True(t, fired, "CAS fire with matching expected must succeed")
+
+	got, err = tStore.GetTrigger(ctx, trigger.ID.String())
+	require.NoError(t, err)
+	require.NotNil(t, got.LastRunID)
+	assert.Equal(t, run2.ID, *got.LastRunID)
+}
+
+// TestUpdateTriggerFiredCAS_StaleExpected_ReturnsFalse verifies the race-loser
+// path: when the expected last_triggered_at differs from what's stored,
+// the UPDATE matches 0 rows and the wrapper returns (false, nil).
+func TestUpdateTriggerFiredCAS_StaleExpected_ReturnsFalse(t *testing.T) {
+	pool := testPool(t)
+	pStore := postgres.NewPipelineStore(pool)
+	rStore := postgres.NewRunStore(pool)
+	tStore := postgres.NewTriggerStore(pool)
+	ctx := context.Background()
+
+	pipeline := createTestPipeline(t, pStore, "default", "bronze", "cas-stale")
+	trigger := createTestTrigger(t, tStore, pipeline.ID, domain.TriggerTypeCron, json.RawMessage(`{"cron": "0 * * * *"}`))
+
+	// Prime the trigger so it has a non-NULL last_triggered_at.
+	initialRun := &domain.Run{PipelineID: pipeline.ID, Status: domain.RunStatusPending, Trigger: "init"}
+	require.NoError(t, rStore.CreateRun(ctx, initialRun))
+	require.NoError(t, tStore.UpdateTriggerFired(ctx, trigger.ID.String(), initialRun.ID))
+
+	// Caller's "expected" is a stale timestamp far in the past.
+	stale := time.Now().Add(-24 * time.Hour).UTC().Truncate(time.Microsecond)
+	run := &domain.Run{PipelineID: pipeline.ID, Status: domain.RunStatusPending, Trigger: "trigger"}
+	require.NoError(t, rStore.CreateRun(ctx, run))
+
+	fired, err := tStore.UpdateTriggerFiredCAS(ctx, trigger.ID.String(), time.Now(), run.ID, &stale)
+	require.NoError(t, err, "stale CAS is the expected race outcome, not an error")
+	assert.False(t, fired, "CAS with stale expected must return false")
+
+	// Also covers the NULL-vs-non-NULL mismatch — passing nil expectedPrev
+	// against a trigger that has already fired must also return false.
+	fired, err = tStore.UpdateTriggerFiredCAS(ctx, trigger.ID.String(), time.Now(), run.ID, nil)
+	require.NoError(t, err)
+	assert.False(t, fired, "CAS with nil expected against non-NULL stored must return false")
+}
+
+// TestUpdateTriggerFiredCAS_BothNullExpected_Updates covers the first-fire
+// case where the stored last_triggered_at is NULL and the caller correctly
+// passes nil. IS NOT DISTINCT FROM treats NULL == NULL as a match.
+func TestUpdateTriggerFiredCAS_BothNullExpected_Updates(t *testing.T) {
+	pool := testPool(t)
+	pStore := postgres.NewPipelineStore(pool)
+	rStore := postgres.NewRunStore(pool)
+	tStore := postgres.NewTriggerStore(pool)
+	ctx := context.Background()
+
+	pipeline := createTestPipeline(t, pStore, "default", "bronze", "cas-first")
+	trigger := createTestTrigger(t, tStore, pipeline.ID, domain.TriggerTypeCron, json.RawMessage(`{"cron": "0 * * * *"}`))
+
+	// Fresh trigger — LastTriggeredAt is NULL.
+	got, err := tStore.GetTrigger(ctx, trigger.ID.String())
+	require.NoError(t, err)
+	require.Nil(t, got.LastTriggeredAt, "precondition: fresh trigger has no prior fire")
+
+	stamp := time.Now().UTC().Truncate(time.Microsecond)
+	run := &domain.Run{PipelineID: pipeline.ID, Status: domain.RunStatusPending, Trigger: "first"}
+	require.NoError(t, rStore.CreateRun(ctx, run))
+
+	fired, err := tStore.UpdateTriggerFiredCAS(ctx, trigger.ID.String(), stamp, run.ID, nil)
+	require.NoError(t, err)
+	assert.True(t, fired, "first fire (NULL == NULL) must succeed")
+
+	got, err = tStore.GetTrigger(ctx, trigger.ID.String())
+	require.NoError(t, err)
+	require.NotNil(t, got.LastTriggeredAt)
+	assert.WithinDuration(t, stamp, *got.LastTriggeredAt, time.Millisecond)
+}
+
 func TestTriggerStore_DisabledTrigger_NotFoundByFinds(t *testing.T) {
 	pool := testPool(t)
 	pStore := postgres.NewPipelineStore(pool)
