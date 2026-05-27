@@ -96,6 +96,10 @@ services:
       # S3 — same creds as ratd, for DuckDB table reads
       <<: *s3-credentials
       NESSIE_URL: http://nessie:19120/api/v1
+      # Per-query timeout in seconds. A watchdog calls conn.interrupt()
+      # once the deadline passes; callers get DEADLINE_EXCEEDED. Override
+      # via QUERY_TIMEOUT_SECS in your .env (default: 60).
+      QUERY_TIMEOUT_SECS: "${QUERY_TIMEOUT_SECS:-60}"
       # Federated user-data Postgres. ratq's DuckDB ATTACHes this on
       # startup so queries can JOIN across Iceberg + Postgres (e.g.
       # SELECT … FROM userdata.public.country_codes c JOIN

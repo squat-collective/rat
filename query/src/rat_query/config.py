@@ -64,10 +64,17 @@ class DuckDBConfig:
 
     Aligned with runner/src/rat_runner/config.py — keep fields, defaults,
     and env var names identical across both services.
+
+    `query_timeout_seconds` is read by ratq's engine to bound user-submitted
+    SQL via a watchdog that calls conn.interrupt() when the deadline passes.
+    The runner currently ignores it (pipeline SQL is plugin-author-controlled
+    rather than user-facing), but the field is kept on both sides so the two
+    configs do not drift.
     """
 
     memory_limit: str = "2GB"
     threads: int = 4
+    query_timeout_seconds: int = 60
 
     @classmethod
     def from_env(cls) -> DuckDBConfig:
@@ -80,9 +87,23 @@ class DuckDBConfig:
             ) from None
         if threads < 1:
             raise ValueError(f"DUCKDB_THREADS must be a positive integer, got {threads}")
+
+        raw_timeout = os.environ.get("QUERY_TIMEOUT_SECS", "60")
+        try:
+            query_timeout_seconds = int(raw_timeout)
+        except ValueError:
+            raise ValueError(
+                f"QUERY_TIMEOUT_SECS must be a valid integer, got {raw_timeout!r}"
+            ) from None
+        if query_timeout_seconds < 1:
+            raise ValueError(
+                f"QUERY_TIMEOUT_SECS must be a positive integer, got {query_timeout_seconds}"
+            )
+
         return cls(
             memory_limit=os.environ.get("DUCKDB_MEMORY_LIMIT", "2GB"),
             threads=threads,
+            query_timeout_seconds=query_timeout_seconds,
         )
 
 

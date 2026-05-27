@@ -61,8 +61,15 @@ _BLOCKED_FUNCTIONS = re.compile(
 # Maximum query length in characters (100KB) — prevents abuse via enormous queries.
 _MAX_QUERY_LENGTH = 100_000
 
-# Default query timeout in seconds — prevents runaway queries from consuming resources.
-_DEFAULT_QUERY_TIMEOUT_SECONDS = 30
+
+class QueryTimeoutError(RuntimeError):
+    """Raised when a query exceeds its per-query timeout.
+
+    The watchdog thread fires conn.interrupt() once the deadline passes; DuckDB
+    surfaces that as a duckdb.InterruptException which the engine re-raises as
+    this exception so callers can distinguish a timeout from a generic failure
+    (the server maps it to a DEADLINE_EXCEEDED gRPC status).
+    """
 
 
 def _strip_sql_comments(sql: str) -> str:
@@ -250,7 +257,7 @@ class QueryEngine:
         self,
         sql: str,
         limit: int = 1000,
-        timeout_seconds: int = _DEFAULT_QUERY_TIMEOUT_SECONDS,
+        timeout_seconds: int | None = None,
     ) -> pa.Table:
         """Execute SQL and return result as a PyArrow Table.
 
@@ -263,6 +270,16 @@ class QueryEngine:
         1. Query length limit (_MAX_QUERY_LENGTH)
         2. Blocked statement keywords (INSERT, DROP, etc.)
         3. Blocked functions (read_parquet, http_get, etc.)
+
+        Per-query timeout:
+            A watchdog threading.Timer calls self._conn.interrupt() after
+            ``timeout_seconds`` (defaults to DuckDBConfig.query_timeout_seconds).
+            DuckDB surfaces the interrupt as duckdb.InterruptException, which
+            we re-raise as QueryTimeoutError so the caller can map it to a
+            DEADLINE_EXCEEDED gRPC status. PRAGMA-based statement_timeout was
+            tried first but only bounds IO waits in DuckDB; pure-CPU runaways
+            (e.g. SELECT count(*) FROM range(huge)) ignore it. The watchdog
+            approach actually interrupts a busy execution loop.
         """
         if len(sql) > _MAX_QUERY_LENGTH:
             raise ValueError(f"Query too long ({len(sql)} chars, max {_MAX_QUERY_LENGTH})")
@@ -280,19 +297,38 @@ class QueryEngine:
         if limit > 0:
             wrapped = f"SELECT * FROM ({wrapped}) AS _q LIMIT {limit}"
 
-        # Set per-query timeout to prevent runaway queries (DuckDB 1.1+).
-        has_timeout = False
-        try:
-            self._conn.execute(f"SET statement_timeout='{timeout_seconds}s'")
-            has_timeout = True
-        except duckdb.CatalogException:
-            pass  # DuckDB version doesn't support statement_timeout
+        effective_timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else self._duckdb_config.query_timeout_seconds
+        )
+
+        timed_out = threading.Event()
+
+        def _on_deadline() -> None:
+            # Mark the timeout BEFORE calling interrupt so the except branch
+            # can reliably distinguish "user pressed cancel later" from
+            # "watchdog fired".
+            timed_out.set()
+            try:
+                self._conn.interrupt()
+            except Exception:
+                logger.exception("conn.interrupt() failed inside watchdog")
+
+        timer = threading.Timer(effective_timeout, _on_deadline)
+        timer.daemon = True
+        timer.start()
         try:
             result = self._conn.execute(wrapped)
             return _to_arrow_table(result.arrow())
+        except duckdb.InterruptException as e:
+            if timed_out.is_set():
+                raise QueryTimeoutError(
+                    f"query exceeded {effective_timeout}s timeout"
+                ) from e
+            raise
         finally:
-            if has_timeout:
-                self._conn.execute("RESET statement_timeout")
+            timer.cancel()
 
     def describe_table(self, schema: str, name: str) -> list[tuple[str, str]]:
         """Return (column_name, column_type) pairs for a table/view."""

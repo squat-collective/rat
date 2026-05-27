@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import threading
 from unittest.mock import MagicMock, patch
 
+import duckdb
 import pyarrow as pa
 import pytest
 
-from rat_query.config import S3Config
+from rat_query.config import DuckDBConfig, S3Config
 from rat_query.engine import (
     _MAX_QUERY_LENGTH,
     QueryEngine,
+    QueryTimeoutError,
     _quote_ns_table_refs,
     _strip_sql_comments,
     _validate_identifier,
@@ -129,7 +132,10 @@ class TestQueryEngine:
 
         assert isinstance(result, pa.Table)
         assert len(result) == 3
-        # Verify the SQL was wrapped with LIMIT (skip SET/RESET timeout calls)
+        # Verify the SQL was wrapped with LIMIT. The watchdog timeout no
+        # longer issues SET/RESET statements (it interrupts via the
+        # connection's interrupt() method instead), so any LIMIT-bearing
+        # execute call must be our wrapped query.
         sql_calls = [c.args[0] for c in mock_conn.execute.call_args_list]
         limit_calls = [s for s in sql_calls if "LIMIT 100" in s]
         assert len(limit_calls) == 1
@@ -504,3 +510,155 @@ class TestQueryLengthLimit:
 
     def test_max_query_length_constant_value(self):
         assert _MAX_QUERY_LENGTH == 100_000
+
+
+class TestQueryTimeout:
+    """Tests for the per-query watchdog timeout (QueryTimeoutError).
+
+    The watchdog starts a threading.Timer that fires conn.interrupt() once
+    the deadline passes; DuckDB surfaces the interrupt as InterruptException
+    which the engine re-raises as QueryTimeoutError so callers can map it
+    to a DEADLINE_EXCEEDED gRPC status.
+    """
+
+    def test_fast_query_completes_well_within_timeout(self, s3_config: S3Config):
+        """Happy path — query finishes promptly, watchdog is cancelled cleanly
+        so its deadline callback never fires (observable as conn.interrupt()
+        having been called)."""
+        table = pa.table({"x": [1]})
+        reader = pa.RecordBatchReader.from_batches(table.schema, table.to_batches())
+
+        with patch("rat_query.engine.duckdb.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_connect.return_value = mock_conn
+            mock_result = MagicMock()
+            mock_result.arrow.return_value = reader
+            mock_conn.execute.return_value = mock_result
+
+            engine = QueryEngine(
+                s3_config, DuckDBConfig(query_timeout_seconds=60)
+            )
+
+            result = engine.query_arrow("SELECT 1")
+            assert isinstance(result, pa.Table)
+
+        # The watchdog must have been cancelled before its 60-second deadline,
+        # so conn.interrupt() should NOT have been called for this fast query.
+        # (We can't reliably assert "no Timer threads alive" because Python's
+        # threading bookkeeping can lag by a few ms after .cancel() returns.)
+        assert not mock_conn.interrupt.called
+
+    def test_query_raises_query_timeout_error_on_interrupt(self, s3_config: S3Config):
+        """When DuckDB raises InterruptException after the watchdog fired,
+        the engine surfaces a QueryTimeoutError with the configured
+        deadline in the message."""
+        with patch("rat_query.engine.duckdb.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_connect.return_value = mock_conn
+
+            # Use a 0.05s deadline so the watchdog fires while the
+            # execute() call below is blocked.
+            engine = QueryEngine(
+                s3_config, DuckDBConfig(query_timeout_seconds=1)
+            )
+
+            # Simulate a long-running query: execute() blocks until the
+            # watchdog calls interrupt(), then raises InterruptException.
+            interrupt_called = threading.Event()
+
+            def fake_interrupt() -> None:
+                interrupt_called.set()
+
+            def fake_execute(*args, **kwargs):
+                # Block until the watchdog fires.
+                interrupt_called.wait(timeout=5.0)
+                raise duckdb.InterruptException("interrupted")
+
+            mock_conn.interrupt.side_effect = fake_interrupt
+            # Only the user query path should "hang"; setup calls (SET,
+            # INSTALL, …) happen before query_arrow and used the default
+            # MagicMock side effect.
+            mock_conn.execute.side_effect = fake_execute
+
+            with pytest.raises(QueryTimeoutError, match=r"exceeded 1s timeout"):
+                engine.query_arrow("SELECT 1")
+
+            assert mock_conn.interrupt.called
+
+    def test_query_timeout_does_not_mask_non_timeout_interrupts(
+        self, s3_config: S3Config
+    ):
+        """If DuckDB raises InterruptException for a reason OTHER than the
+        watchdog (e.g. an explicit external cancel), we should re-raise
+        the original error rather than mislabel it as a timeout."""
+        with patch("rat_query.engine.duckdb.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_connect.return_value = mock_conn
+
+            # Long timeout — the watchdog will NOT fire during the test.
+            engine = QueryEngine(
+                s3_config, DuckDBConfig(query_timeout_seconds=300)
+            )
+
+            mock_conn.execute.side_effect = duckdb.InterruptException(
+                "external cancel"
+            )
+
+            with pytest.raises(duckdb.InterruptException, match="external cancel"):
+                engine.query_arrow("SELECT 1")
+
+    def test_timer_is_cancelled_after_successful_query(self, s3_config: S3Config):
+        """Once a query returns successfully the watchdog Timer must be
+        cancelled — otherwise it could fire AFTER the request finished
+        and interrupt the very next query on the shared connection."""
+        table = pa.table({"x": [1]})
+        reader = pa.RecordBatchReader.from_batches(table.schema, table.to_batches())
+
+        with patch("rat_query.engine.duckdb.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_connect.return_value = mock_conn
+            mock_result = MagicMock()
+            mock_result.arrow.return_value = reader
+            mock_conn.execute.return_value = mock_result
+
+            engine = QueryEngine(
+                s3_config, DuckDBConfig(query_timeout_seconds=60)
+            )
+
+            with patch("rat_query.engine.threading.Timer") as mock_timer_cls:
+                fake_timer = MagicMock()
+                mock_timer_cls.return_value = fake_timer
+
+                engine.query_arrow("SELECT 1")
+
+                assert mock_timer_cls.called
+                fake_timer.start.assert_called_once()
+                fake_timer.cancel.assert_called_once()
+
+    def test_explicit_timeout_overrides_config_default(self, s3_config: S3Config):
+        """Callers can pass timeout_seconds to override the configured
+        default — useful for very fast preview queries or for tests."""
+        table = pa.table({"x": [1]})
+        reader = pa.RecordBatchReader.from_batches(table.schema, table.to_batches())
+
+        with patch("rat_query.engine.duckdb.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_connect.return_value = mock_conn
+            mock_result = MagicMock()
+            mock_result.arrow.return_value = reader
+            mock_conn.execute.return_value = mock_result
+
+            engine = QueryEngine(
+                s3_config, DuckDBConfig(query_timeout_seconds=120)
+            )
+
+            with patch("rat_query.engine.threading.Timer") as mock_timer_cls:
+                fake_timer = MagicMock()
+                mock_timer_cls.return_value = fake_timer
+
+                engine.query_arrow("SELECT 1", timeout_seconds=5)
+
+                # First positional arg is the interval — check we used the
+                # override (5), not the config default (120).
+                interval = mock_timer_cls.call_args.args[0]
+                assert interval == 5

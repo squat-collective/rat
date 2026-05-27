@@ -3,10 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 
+	connect "connectrpc.com/connect"
 	"github.com/go-chi/chi/v5"
 	"github.com/rat-data/rat/platform/internal/domain"
 )
@@ -124,6 +127,16 @@ func (s *Server) HandleExecuteQuery(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.Query.ExecuteQuery(r.Context(), req.SQL, req.Namespace, req.Limit)
 	if err != nil {
+		// ratq's watchdog interrupts long-running queries and the server
+		// surfaces a ConnectRPC DEADLINE_EXCEEDED. Surface that as 504
+		// with a clear message so callers can distinguish "your query is
+		// too slow" from "we crashed" (which stays as 500).
+		var connectErr *connect.Error
+		if errors.As(err, &connectErr) && connectErr.Code() == connect.CodeDeadlineExceeded {
+			slog.Warn("query timed out", "error", err)
+			errorJSON(w, fmt.Sprintf("query timed out: %s", connectErr.Message()), "DEADLINE_EXCEEDED", http.StatusGatewayTimeout)
+			return
+		}
 		internalError(w, "internal error", err)
 		return
 	}

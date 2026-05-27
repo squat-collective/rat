@@ -106,12 +106,14 @@ class TestDuckDBConfig:
         config = DuckDBConfig()
         assert config.memory_limit == "2GB"
         assert config.threads == 4
+        assert config.query_timeout_seconds == 60
 
     def test_from_env_defaults(self):
         with patch.dict("os.environ", {}, clear=True):
             config = DuckDBConfig.from_env()
         assert config.memory_limit == "2GB"
         assert config.threads == 4
+        assert config.query_timeout_seconds == 60
 
     def test_from_env_custom(self):
         env = {"DUCKDB_MEMORY_LIMIT": "4GB", "DUCKDB_THREADS": "8"}
@@ -119,6 +121,12 @@ class TestDuckDBConfig:
             config = DuckDBConfig.from_env()
         assert config.memory_limit == "4GB"
         assert config.threads == 8
+
+    def test_from_env_reads_query_timeout_secs(self):
+        env = {"QUERY_TIMEOUT_SECS": "15"}
+        with patch.dict("os.environ", env, clear=True):
+            config = DuckDBConfig.from_env()
+        assert config.query_timeout_seconds == 15
 
 
 class TestDuckDBConfigValidation:
@@ -146,6 +154,24 @@ class TestDuckDBConfigValidation:
         env = {"DUCKDB_THREADS": "2.5"}
         with patch.dict("os.environ", env, clear=True):
             with pytest.raises(ValueError, match="valid integer"):
+                DuckDBConfig.from_env()
+
+    def test_from_env_rejects_zero_query_timeout(self):
+        env = {"QUERY_TIMEOUT_SECS": "0"}
+        with patch.dict("os.environ", env, clear=True):
+            with pytest.raises(ValueError, match="QUERY_TIMEOUT_SECS.*positive integer"):
+                DuckDBConfig.from_env()
+
+    def test_from_env_rejects_negative_query_timeout(self):
+        env = {"QUERY_TIMEOUT_SECS": "-10"}
+        with patch.dict("os.environ", env, clear=True):
+            with pytest.raises(ValueError, match="QUERY_TIMEOUT_SECS.*positive integer"):
+                DuckDBConfig.from_env()
+
+    def test_from_env_rejects_non_numeric_query_timeout(self):
+        env = {"QUERY_TIMEOUT_SECS": "soon"}
+        with patch.dict("os.environ", env, clear=True):
+            with pytest.raises(ValueError, match="QUERY_TIMEOUT_SECS.*valid integer"):
                 DuckDBConfig.from_env()
 
 

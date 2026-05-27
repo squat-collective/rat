@@ -86,6 +86,26 @@ class TestExecuteQuery:
 
         ctx.set_code.assert_called()
 
+    def test_query_timeout_returns_deadline_exceeded(self):
+        """When the engine raises QueryTimeoutError the server must surface
+        DEADLINE_EXCEEDED (NOT generic INTERNAL) so clients can tell the
+        difference between "your query is too slow" and "we crashed"."""
+        from rat_query.engine import QueryTimeoutError
+
+        servicer = _make_servicer()
+        servicer._engine.query_arrow.side_effect = QueryTimeoutError(
+            "query exceeded 2s timeout"
+        )
+
+        ctx = MagicMock()
+        req = query_pb2.ExecuteQueryRequest(sql="SELECT * FROM huge_table", limit=100)
+        servicer.ExecuteQuery(req, ctx)
+
+        ctx.set_code.assert_called_once_with(grpc.StatusCode.DEADLINE_EXCEEDED)
+        details_arg = ctx.set_details.call_args.args[0]
+        assert "timed out" in details_arg.lower()
+        assert "2s" in details_arg
+
 
 class TestGetSchema:
     def test_success(self):
