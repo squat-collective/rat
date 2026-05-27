@@ -665,15 +665,31 @@ func main() {
 		// Leader election via Postgres advisory lock. Only the replica that
 		// acquires the lock starts background workers. If the leader dies,
 		// Postgres releases the lock and another replica takes over.
+		//
+		// A heartbeat goroutine pings Postgres every 5s while leader; two
+		// consecutive failures force a voluntary unlock so a partitioned
+		// replica cannot indefinitely hold the lock without running workers.
 		tryLock := func(ctx context.Context) (bool, error) {
 			var acquired bool
 			err := pool.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", leader.AdvisoryLockID).Scan(&acquired)
 			return acquired, err
 		}
-		elector := leader.New(tryLock, leader.RetryInterval, startBackgroundWorkers)
+		ping := func(ctx context.Context) error { return pool.Ping(ctx) }
+		unlock := func(ctx context.Context) error {
+			_, err := pool.Exec(ctx, "SELECT pg_advisory_unlock($1)", leader.AdvisoryLockID)
+			return err
+		}
+		elector := leader.New(
+			tryLock,
+			leader.RetryInterval,
+			startBackgroundWorkers,
+			leader.WithPing(ping),
+			leader.WithUnlock(unlock),
+		)
 		elector.Start(ctx)
 		stopLeader = func() { elector.Stop() }
-		slog.Info("leader election started (advisory lock)")
+		slog.Info("leader election started (advisory lock)",
+			"heartbeat_interval", leader.DefaultHeartbeatInterval)
 	default:
 		// No database — start workers directly (single-instance mode).
 		stopFn := startBackgroundWorkers(ctx)
