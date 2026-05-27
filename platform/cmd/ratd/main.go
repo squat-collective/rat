@@ -360,6 +360,7 @@ func main() {
 		srv.Pipelines = pipelineStore
 		srv.Versions = postgres.NewVersionStore(pool)
 		srv.Publisher = postgres.NewPipelinePublisher(pool)
+		srv.TxRunner = postgres.NewTxRunner(pool)
 		srv.Runs = runStore
 		srv.Namespaces = postgres.NewNamespaceStore(pool)
 		srv.Schedules = postgres.NewScheduleStore(pool)

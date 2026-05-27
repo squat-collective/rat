@@ -500,21 +500,29 @@ func (s *Server) fireTriggerIfReady(ctx context.Context, trigger domain.Pipeline
 		Trigger:    triggerLabel,
 	}
 
-	if err := s.Runs.CreateRun(ctx, run); err != nil {
-		slog.Error("failed to create triggered run", "trigger_id", trigger.ID, "error", err)
+	// Atomic: create the run AND mark the trigger as fired in one tx so a
+	// crash between the two cannot leave us with a pending run whose
+	// trigger looks unfired (the next evaluator pass would then fire a
+	// duplicate). Submit is HTTP IO and runs OUTSIDE the tx, per the
+	// TxRunner contract.
+	createAndRecord := func(t TxStores) error {
+		if err := t.Runs.CreateRun(ctx, run); err != nil {
+			return err
+		}
+		return t.Triggers.UpdateTriggerFired(ctx, trigger.ID.String(), run.ID)
+	}
+	if err := s.runFireTx(ctx, createAndRecord); err != nil {
+		slog.Error("failed to fire trigger atomically", "trigger_id", trigger.ID, "error", err)
 		return
 	}
 
-	// Submit to executor
+	// Submit to executor AFTER the tx commits. The run is already pending —
+	// if Submit fails the reaper will fail or retry it later, but we never
+	// leave the trigger state inconsistent with the run.
 	if s.Executor != nil {
 		if err := s.Executor.Submit(ctx, run, pipeline); err != nil {
 			slog.Error("executor submit failed for triggered run", "run_id", run.ID, "error", err)
 		}
-	}
-
-	// Update trigger fired state
-	if err := s.Triggers.UpdateTriggerFired(ctx, trigger.ID.String(), run.ID); err != nil {
-		slog.Error("failed to update trigger fired state", "trigger_id", trigger.ID, "error", err)
 	}
 
 	slog.Info("trigger fired", "trigger_id", trigger.ID, "trigger_type", trigger.Type, "run_id", run.ID)

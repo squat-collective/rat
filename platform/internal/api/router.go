@@ -311,6 +311,7 @@ type Server struct {
 	Pipelines     PipelineStore
 	Versions      VersionStore
 	Publisher     PipelinePublisher // Optional: wraps publish/rollback in a DB transaction.
+	TxRunner      TxRunner          // Optional: runs multi-step handlers atomically. See api/tx.go.
 	Runs          RunStore
 	Namespaces    NamespaceStore
 	Schedules     ScheduleStore

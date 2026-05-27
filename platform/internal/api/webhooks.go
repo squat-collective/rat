@@ -91,12 +91,26 @@ func (s *Server) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) {
 		Trigger:    triggerLabel,
 	}
 
-	if err := s.Runs.CreateRun(r.Context(), run); err != nil {
+	// Atomic: create the run AND record the trigger as fired in one tx.
+	// Previously these were separate statements; a crash between them left
+	// the run in pending but the trigger looking unfired — the next webhook
+	// hit (or trigger evaluator pass) would fire a duplicate run.
+	// Executor.Submit is HTTP IO and stays OUTSIDE the tx — see api.TxRunner
+	// contract: no IO inside the callback.
+	createAndRecord := func(t TxStores) error {
+		if err := t.Runs.CreateRun(r.Context(), run); err != nil {
+			return err
+		}
+		return t.Triggers.UpdateTriggerFired(r.Context(), trigger.ID.String(), run.ID)
+	}
+	if err := s.runFireTx(r.Context(), createAndRecord); err != nil {
 		internalError(w, "internal error", err)
 		return
 	}
 
-	// Submit to executor.
+	// Submit to executor AFTER the tx commits — the run already exists in
+	// pending state, so a Submit failure is recoverable: the reaper will
+	// either retry or fail the run. Never block tx commit on the runner.
 	// Use a dedicated context with timeout rather than the request context
 	// (which will be cancelled when the HTTP response is sent) or a bare
 	// context.Background() (which has no timeout and could hang indefinitely).
@@ -106,11 +120,6 @@ func (s *Server) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) {
 		if err := s.Executor.Submit(submitCtx, run, pipeline); err != nil {
 			slog.Error("executor submit failed for webhook trigger", "run_id", run.ID, "error", err)
 		}
-	}
-
-	// Update trigger fired state
-	if err := s.Triggers.UpdateTriggerFired(r.Context(), trigger.ID.String(), run.ID); err != nil {
-		slog.Error("failed to update trigger fired state", "trigger_id", trigger.ID, "error", err)
 	}
 
 	slog.Info("webhook trigger fired", "trigger_id", trigger.ID, "run_id", run.ID)
