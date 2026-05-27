@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rat-data/rat/platform/internal/plugins"
@@ -64,6 +65,19 @@ func (s *Server) HandleGetCloudCredentials(w http.ResponseWriter, r *http.Reques
 	}
 	if creds == nil {
 		errorJSON(w, "cloud provider returned no credentials", "UPSTREAM_ERROR", http.StatusBadGateway)
+		return
+	}
+
+	// Guard against a buggy/misconfigured plugin handing out already-expired
+	// credentials. Without this, the caller would only learn the creds are
+	// stale on the next S3 call, with a confusing "AccessDenied" / "ExpiredToken"
+	// error far from the source.
+	//
+	// A zero Expiry means "no expiry" — some providers (long-lived IAM users,
+	// keyless setups) legitimately omit it, so we only reject when Expiry is
+	// non-zero AND already in the past.
+	if !creds.Expiry.IsZero() && creds.Expiry.Before(time.Now()) {
+		errorJSON(w, "cloud plugin returned expired credentials", "UPSTREAM_ERROR", http.StatusBadGateway)
 		return
 	}
 

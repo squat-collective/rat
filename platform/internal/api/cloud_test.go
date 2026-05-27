@@ -135,7 +135,9 @@ func TestHandleGetCloudCredentials_InvalidNamespace_Returns400(t *testing.T) {
 }
 
 func TestHandleGetCloudCredentials_HappyPath_ReturnsCredentials(t *testing.T) {
-	expiry := time.Date(2026, 5, 27, 12, 0, 0, 0, time.UTC)
+	// Use a future-relative expiry so the handler's "expired credentials"
+	// guard (cloud.go) doesn't trip the wall-clock here.
+	expiry := time.Now().Add(1 * time.Hour).UTC().Truncate(time.Second)
 	cp := &mockCloudProvider{
 		enabled: true,
 		creds: &domain.CloudCredentials{
@@ -204,4 +206,52 @@ func TestHandleGetCloudCredentials_UpstreamError_Returns502(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
+}
+
+func TestHandleGetCloudCredentials_ExpiredCredentials_Returns502(t *testing.T) {
+	// A buggy plugin returns credentials that are already expired. Without
+	// validation the caller would only discover this on the next S3 call,
+	// with a confusing AccessDenied / ExpiredToken error.
+	cp := &mockCloudProvider{
+		enabled: true,
+		creds: &domain.CloudCredentials{
+			AccessKey: "AKIA-STALE",
+			SecretKey: "secret-shh",
+			Region:    "us-east-1",
+			Expiry:    time.Now().Add(-1 * time.Minute),
+		},
+	}
+	router := newCloudTestRouter(cp, true)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/cloud/credentials?namespace=acme", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadGateway, rec.Code)
+
+	var body api.APIError
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	assert.Equal(t, "UPSTREAM_ERROR", body.Error.Code)
+	assert.Contains(t, body.Error.Message, "expired")
+}
+
+func TestHandleGetCloudCredentials_ZeroExpiry_PassesThrough(t *testing.T) {
+	// Long-lived IAM users have no expiry (zero time.Time). The handler
+	// must NOT treat that as "expired" — it means "no expiry".
+	cp := &mockCloudProvider{
+		enabled: true,
+		creds: &domain.CloudCredentials{
+			AccessKey: "AKIA-LONGLIVED",
+			SecretKey: "secret-shh",
+			Region:    "us-east-1",
+			// Expiry intentionally zero — long-lived credential.
+		},
+	}
+	router := newCloudTestRouter(cp, true)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/cloud/credentials?namespace=acme", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
 }

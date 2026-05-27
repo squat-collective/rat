@@ -46,7 +46,9 @@ func TestHandlePluginBundle_ProxiesBundleContent(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "application/javascript", rec.Header().Get("Content-Type"))
-	assert.Equal(t, "public, max-age=300", rec.Header().Get("Cache-Control"))
+	// no-cache is intentional (commit 843b260): plugin bundles change with
+	// platform_token rotation and SRI hash refresh, so no client-side caching.
+	assert.Equal(t, "no-cache, must-revalidate", rec.Header().Get("Cache-Control"))
 
 	body, _ := io.ReadAll(rec.Body)
 	assert.Contains(t, string(body), "__RAT_REGISTER_PLUGIN")

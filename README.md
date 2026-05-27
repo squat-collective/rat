@@ -15,10 +15,13 @@ Part of [Le Squat](https://squat-collective.github.io/website/) — an undergrou
 ```bash
 git clone https://github.com/squat-collective/rat.git
 cd rat
-make up
+make setup   # generate protobuf stubs, build SDK, pull base images
+make up      # start all 7 services
 ```
 
 Open [http://localhost:3000](http://localhost:3000) — you're running.
+
+> **Common issues**: the first `make up` takes ~30 seconds for plugins to phone home and register themselves. The portal sidebar may show a brief empty state before plugins appear — give it a moment. Skipping `make setup` on a fresh clone will fail with a "missing protobuf stubs" error; always run `make setup` first.
 
 ## Architecture
 
