@@ -19,7 +19,10 @@ func TestPhoneHome_SucceedsOnFirstAttempt(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.URL.Path != "/internal/plugins/register" {
+		// The SDK posts to the harmonised /api/v1/internal/ path; ratd
+		// keeps /internal/plugins/register as a deprecated alias but
+		// new SDK builds should hit the canonical shape.
+		if r.URL.Path != "/api/v1/internal/plugins/register" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		body, _ := io.ReadAll(r.Body)

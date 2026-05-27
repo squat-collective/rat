@@ -140,8 +140,15 @@ func PhoneHomeWithOptions(ctx context.Context, ratdInternalURL, name, addr strin
 }
 
 // phoneHome is the shared core. opts are assumed already resolved.
+//
+// Endpoint shape: /api/v1/internal/plugins/register is the canonical
+// post-harmonisation URL (every internal route under /api/v1/internal/*).
+// ratd also serves the legacy /internal/plugins/register as a deprecated
+// alias for one release cycle, so older SDK builds keep working — but new
+// SDK consumers write here. See ADR-019 + internal_routes.go in ratd for
+// the trust model and the deprecation contract.
 func phoneHome(ctx context.Context, ratdInternalURL, name, addr string, opts PhoneHomeOptions) error {
-	endpoint := ratdInternalURL + "/internal/plugins/register"
+	endpoint := ratdInternalURL + "/api/v1/internal/plugins/register"
 	body, err := json.Marshal(map[string]string{"name": name, "addr": addr})
 	if err != nil {
 		return fmt.Errorf("marshal register body: %w", err)
