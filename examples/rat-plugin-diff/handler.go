@@ -6,6 +6,7 @@ import (
 	connect "connectrpc.com/connect"
 	pluginv1 "github.com/rat-data/rat/platform/gen/plugin/v1"
 	"github.com/rat-data/rat/platform/gen/plugin/v1/pluginv1connect"
+	sdk "github.com/rat-data/rat/sdk-go"
 )
 
 const pluginVersion = "0.1.0"
@@ -33,25 +34,15 @@ func (h *Handler) HealthCheck(
 func (h *Handler) Describe(
 	_ context.Context, _ *connect.Request[pluginv1.DescribeRequest],
 ) (*connect.Response[pluginv1.DescribeResponse], error) {
-	return connect.NewResponse(&pluginv1.DescribeResponse{
-		Name:        h.name,
-		Version:     pluginVersion,
-		Description: "Activity feed of every change in the system. Polls ratd every 15s for plugins/configs, pipelines, schedules, secrets, namespaces, tables, and runs; emits structured events. Drill into any table-level event to see the row-level diff between two Iceberg snapshots.",
-		Routes: []*pluginv1.RouteDeclaration{
-			{Method: "GET", Path: "/events", Description: "Recent activity events (newest first). Query params: kind=<prefix>, limit=<n>"},
-			{Method: "GET", Path: "/tables/{ns}/{layer}/{name}/snapshots", Description: "List Iceberg snapshots for a table (newest first)"},
-			{Method: "POST", Path: "/tables/{ns}/{layer}/{name}/diff", Description: "Row-level diff between two snapshots. Body: {snapshot_a, snapshot_b, limit?}"},
-		},
-		PlatformToken: h.platformToken,
-		Ui: &pluginv1.PluginUIDescriptor{
-			BundleUrl:  h.bundleURL,
-			BundleHash: h.bundleHash,
-			NavItems: []*pluginv1.UINavItem{
-				{Label: "Diff", Icon: "git-compare", Path: "/x/diff", Priority: 14},
-			},
-			Routes: []*pluginv1.UIRoute{
-				{Path: "/x/diff", ComponentName: "DiffApp"},
-			},
-		},
-	}), nil
+	resp := sdk.NewDescribe(h.name, pluginVersion,
+		"Activity feed of every change in the system. Polls ratd every 15s for plugins/configs, pipelines, schedules, secrets, namespaces, tables, and runs; emits structured events. Drill into any table-level event to see the row-level diff between two Iceberg snapshots.").
+		WithRoute("GET", "/events", "Recent activity events (newest first). Query params: kind=<prefix>, limit=<n>").
+		WithRoute("GET", "/tables/{ns}/{layer}/{name}/snapshots", "List Iceberg snapshots for a table (newest first)").
+		WithRoute("POST", "/tables/{ns}/{layer}/{name}/diff", "Row-level diff between two snapshots. Body: {snapshot_a, snapshot_b, limit?}").
+		WithUI(h.bundleURL, h.bundleHash,
+			[]*pluginv1.UINavItem{{Label: "Diff", Icon: "git-compare", Path: "/x/diff", Priority: 14}},
+			[]*pluginv1.UIRoute{{Path: "/x/diff", ComponentName: "DiffApp"}}).
+		WithPlatformToken(h.platformToken).
+		Build()
+	return connect.NewResponse(resp), nil
 }

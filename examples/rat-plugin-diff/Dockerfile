@@ -2,6 +2,7 @@ FROM golang:1.24-alpine AS builder
 WORKDIR /build
 
 COPY --from=platform . /platform/
+COPY --from=sdk . /sdk-go/
 COPY . .
 
 RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /diff .

@@ -1,6 +1,8 @@
 # RAT secrets plugin. Build from the repo root:
 #
-#   docker build --build-context platform=platform \
+#   docker build \
+#     --build-context platform=platform \
+#     --build-context sdk=sdk-go \
 #     -f examples/rat-plugin-secrets/Dockerfile \
 #     -t rat-plugin-secrets examples/rat-plugin-secrets
 #
@@ -9,6 +11,7 @@ FROM golang:1.24-alpine AS builder
 WORKDIR /build
 
 COPY --from=platform . /platform/
+COPY --from=sdk . /sdk-go/
 COPY . .
 
 RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /secrets .
