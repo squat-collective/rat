@@ -33,16 +33,18 @@ type event struct {
 type Handler struct {
 	pluginv1connect.UnimplementedPluginServiceHandler
 
-	name      string
-	bundleURL string
-	cfg       *configStore
+	name          string
+	bundleURL     string
+	bundleHash    string // SRI format ("sha256-<base64>") — surfaced in Describe so the portal can set <script integrity>
+	platformToken string // per-startup random — advertised in Describe; ratd's proxy then injects it as X-RAT-Plugin-Token
+	cfg           *configStore
 
 	mu     sync.Mutex
 	events []event // most-recent-last, capped at the configured max
 }
 
-func newHandler(name, bundleURL string, cfg *configStore) *Handler {
-	return &Handler{name: name, bundleURL: bundleURL, cfg: cfg}
+func newHandler(name, bundleURL, bundleHash, platformToken string, cfg *configStore) *Handler {
+	return &Handler{name: name, bundleURL: bundleURL, bundleHash: bundleHash, platformToken: platformToken, cfg: cfg}
 }
 
 // HealthCheck reports that the plugin is ready to serve. ratd calls this on
@@ -72,8 +74,10 @@ func (h *Handler) Describe(
 			{Method: "GET", Path: "/events", Description: "Recent platform events seen by the notifier"},
 		},
 		ConfigSchemaJson: configSchemaJSON,
+		PlatformToken:    h.platformToken,
 		Ui: &pluginv1.PluginUIDescriptor{
-			BundleUrl: h.bundleURL,
+			BundleUrl:  h.bundleURL,
+			BundleHash: h.bundleHash,
 			Slots: []*pluginv1.UISlotDeclaration{
 				{SlotId: "dashboard-widgets", ComponentName: "EventNotifierWidget", Priority: 50},
 			},

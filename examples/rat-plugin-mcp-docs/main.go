@@ -10,6 +10,18 @@
 // interconnect plugin (if present); the chat plugin discovers MCP servers by
 // looking up capabilities under that prefix.
 //
+// Platform-token auth (see DescribeResponse.platform_token in
+// proto/plugin/v1/plugin.proto): on startup we generate a fresh
+// 32-byte hex token, advertise it via Describe, and wrap the REST
+// surface (notably /mcp) with middleware that rejects any inbound
+// request lacking the matching X-RAT-Plugin-Token header. ratd's
+// reverse proxy reads the token from the registry and injects it on
+// every forwarded call, so capability invocations brokered through
+// the interconnect keep working — but a direct peer-to-peer call to
+// http://mcp-docs:50100/mcp from another container on the docker
+// network now gets 401. /health and the ConnectRPC plugin-service
+// paths stay unauthenticated. No UI bundle ⇒ no bundle_hash.
+//
 // Environment:
 //
 //	RATD_URL          ratd base URL              (default http://ratd:8080)
@@ -22,6 +34,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -41,6 +55,45 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// randomToken returns a fresh 32-byte hex secret for the
+// X-RAT-Plugin-Token contract documented at the top of this file.
+func randomToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failing is a critical OS-level problem; we
+		// cannot safely continue without a real secret.
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
+
+// tokenAuth wraps the REST mux. It rejects any request lacking the
+// expected X-RAT-Plugin-Token header EXCEPT for /bundle.js (the
+// portal's <script> tag can't add custom headers — this plugin has no
+// bundle but we keep the carve-out for consistency) and /health (used
+// by container orchestration for liveness). The ConnectRPC
+// plugin-service paths are NOT routed through this middleware — they
+// are registered on their own subtree above and reached by ratd via
+// direct gRPC, not the reverse proxy.
+//
+// expected == "" disables the check (opt-out).
+func tokenAuth(expected string, next http.Handler) http.Handler {
+	if expected == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/bundle.js" || r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Header.Get("X-RAT-Plugin-Token") != expected {
+			http.Error(w, "missing or invalid platform token", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
@@ -54,15 +107,29 @@ func main() {
 	mcp := NewServer(name, pluginVersion)
 	registerTools(mcp, rat)
 
-	h := newHandler(name)
-	mux := http.NewServeMux()
-	pluginPath, pluginHTTP := pluginv1connect.NewPluginServiceHandler(h)
-	mux.Handle(pluginPath, pluginHTTP)
-	mux.Handle("/mcp", mcp)
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	platformToken := randomToken()
+	h := newHandler(name, platformToken)
+
+	// restMux serves the REST endpoints that ratd proxies under
+	// /api/v1/x/mcp-docs/*. We wrap it with tokenAuth so a
+	// peer-to-peer hit from another container on the docker network is
+	// rejected with 401.
+	restMux := http.NewServeMux()
+	restMux.Handle("/mcp", mcp)
+	restMux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
+
+	mux := http.NewServeMux()
+	// ConnectRPC plugin-service paths — NOT wrapped: ratd reaches
+	// these via direct gRPC, not the reverse proxy, and learns the
+	// token from Describe over this very channel.
+	pluginPath, pluginHTTP := pluginv1connect.NewPluginServiceHandler(h)
+	mux.Handle(pluginPath, pluginHTTP)
+	// REST endpoints — wrapped. /health inside restMux is allow-listed
+	// by tokenAuth so container liveness probes still work.
+	mux.Handle("/", tokenAuth(platformToken, restMux))
 
 	slog.Info("starting mcp-docs", "port", port, "ratd_url", ratdURL, "tools", len(mcp.tools))
 

@@ -11,7 +11,7 @@ import (
 func newTestHandler() *Handler {
 	cfg := newConfigStore("http://ratd:8080", "event-notifier",
 		notifierConfig{MaxEvents: defaultMaxEvents})
-	return newHandler("event-notifier", "http://event-notifier:50090/bundle.js", cfg)
+	return newHandler("event-notifier", "http://event-notifier:50090/bundle.js", "sha256-test", "test-token", cfg)
 }
 
 func TestHealthCheckServing(t *testing.T) {

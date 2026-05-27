@@ -13,11 +13,12 @@ const pluginVersion = "0.1.0"
 type Handler struct {
 	pluginv1connect.UnimplementedPluginServiceHandler
 
-	name string
+	name          string
+	platformToken string // per-startup random — advertised in Describe; ratd's proxy then injects it as X-RAT-Plugin-Token
 }
 
-func newHandler(name string) *Handler {
-	return &Handler{name: name}
+func newHandler(name, platformToken string) *Handler {
+	return &Handler{name: name, platformToken: platformToken}
 }
 
 func (h *Handler) HealthCheck(
@@ -43,5 +44,6 @@ func (h *Handler) Describe(
 			{Method: "POST", Path: "/mcp", Description: "JSON-RPC 2.0 MCP endpoint (initialize, tools/list, tools/call)"},
 			{Method: "GET", Path: "/health", Description: "Health probe"},
 		},
+		PlatformToken: h.platformToken,
 	}), nil
 }

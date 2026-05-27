@@ -10,7 +10,7 @@ import (
 )
 
 func TestHealthCheckServing(t *testing.T) {
-	h := newHandler("ai-provider", "http://ai-provider:50094/bundle.js")
+	h := newHandler("ai-provider", "http://ai-provider:50094/bundle.js", "sha256-test", "test-token")
 	resp, err := h.HealthCheck(context.Background(), connect.NewRequest(&pluginv1.HealthCheckRequest{}))
 	if err != nil {
 		t.Fatalf("HealthCheck error: %v", err)
@@ -21,7 +21,7 @@ func TestHealthCheckServing(t *testing.T) {
 }
 
 func TestDescribeCarriesConfigSchema(t *testing.T) {
-	h := newHandler("ai-provider", "http://ai-provider:50094/bundle.js")
+	h := newHandler("ai-provider", "http://ai-provider:50094/bundle.js", "sha256-test", "test-token")
 	resp, err := h.Describe(context.Background(), connect.NewRequest(&pluginv1.DescribeRequest{}))
 	if err != nil {
 		t.Fatalf("Describe error: %v", err)

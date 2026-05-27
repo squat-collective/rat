@@ -16,12 +16,14 @@ const pluginVersion = "0.1.0"
 type Handler struct {
 	pluginv1connect.UnimplementedPluginServiceHandler
 
-	name      string
-	bundleURL string
+	name          string
+	bundleURL     string
+	bundleHash    string // SRI format ("sha256-<base64>") — surfaced in Describe so the portal can set <script integrity>
+	platformToken string // per-startup random — advertised in Describe; ratd's proxy then injects it as X-RAT-Plugin-Token
 }
 
-func newHandler(name, bundleURL string) *Handler {
-	return &Handler{name: name, bundleURL: bundleURL}
+func newHandler(name, bundleURL, bundleHash, platformToken string) *Handler {
+	return &Handler{name: name, bundleURL: bundleURL, bundleHash: bundleHash, platformToken: platformToken}
 }
 
 func (h *Handler) HealthCheck(
@@ -45,8 +47,10 @@ func (h *Handler) Describe(
 		Routes: []*pluginv1.RouteDeclaration{
 			{Method: "POST", Path: "/chat", Description: "Ask the dev assistant; brokered to the AI provider"},
 		},
+		PlatformToken: h.platformToken,
 		Ui: &pluginv1.PluginUIDescriptor{
-			BundleUrl: h.bundleURL,
+			BundleUrl:  h.bundleURL,
+			BundleHash: h.bundleHash,
 			Slots: []*pluginv1.UISlotDeclaration{
 				{SlotId: "pipeline-editor-sidebar", ComponentName: "DevAssistantPanel", Priority: 50},
 			},
