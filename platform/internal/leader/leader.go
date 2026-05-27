@@ -94,6 +94,13 @@ func WithHeartbeatInterval(d time.Duration) Option {
 	return func(e *Elector) { e.heartbeatInterval = d }
 }
 
+// WithClock injects a Clock implementation. Production callers omit this
+// and get the real-time systemClock; tests pass a fakeClock so they can
+// drive heartbeat and election ticks deterministically via Advance.
+func WithClock(c Clock) Option {
+	return func(e *Elector) { e.clock = c }
+}
+
 // Elector manages leader election using Postgres advisory locks.
 // It periodically tries to acquire the lock and calls OnElected when
 // leadership is gained. While elected, a heartbeat goroutine probes the
@@ -106,6 +113,7 @@ type Elector struct {
 	retryInterval     time.Duration
 	heartbeatInterval time.Duration
 	onElected         OnElected
+	clock             Clock
 
 	mu              sync.Mutex
 	isLeader        bool
@@ -130,6 +138,7 @@ func New(tryLock TryLockFunc, retryInterval time.Duration, onElected OnElected, 
 		retryInterval:     retryInterval,
 		heartbeatInterval: DefaultHeartbeatInterval,
 		onElected:         onElected,
+		clock:             systemClock{},
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -150,7 +159,7 @@ func (e *Elector) Start(ctx context.Context) {
 		// Try immediately on startup.
 		e.tryAcquire(ctx)
 
-		ticker := time.NewTicker(e.retryInterval)
+		ticker := e.clock.NewTicker(e.retryInterval)
 		defer ticker.Stop()
 
 		for {
@@ -160,7 +169,7 @@ func (e *Elector) Start(ctx context.Context) {
 				// is already cancelled and would refuse the query.
 				e.relinquish(context.Background(), false)
 				return
-			case <-ticker.C:
+			case <-ticker.C():
 				e.tryAcquire(ctx)
 			}
 		}
@@ -238,7 +247,7 @@ func (e *Elector) startHeartbeat(parent context.Context) {
 
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(e.heartbeatInterval)
+		ticker := e.clock.NewTicker(e.heartbeatInterval)
 		defer ticker.Stop()
 
 		var consecutiveFailures int
@@ -246,7 +255,7 @@ func (e *Elector) startHeartbeat(parent context.Context) {
 			select {
 			case <-hbCtx.Done():
 				return
-			case <-ticker.C:
+			case <-ticker.C():
 				err := e.ping(hbCtx)
 				if err != nil {
 					consecutiveFailures++

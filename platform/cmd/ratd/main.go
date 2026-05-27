@@ -299,15 +299,16 @@ func main() {
 
 	// Shutdown hooks — populated below, called in order during graceful shutdown.
 	var (
-		stopLeader       func()
-		stopScheduler    func()
-		stopEvaluator    func()
-		stopReaper       func()
-		stopExecutor     func()
-		stopEventBus     func()
-		stopHealthLoop   func()
-		stopDispatcher   func()
-		closePool        func()
+		stopLeader         func()
+		stopScheduler      func()
+		stopEvaluator      func()
+		stopReaper         func()
+		stopExecutor       func()
+		stopEventBus       func()
+		stopHealthLoop     func()
+		stopDispatcher     func()
+		closePool          func()
+		closeHeartbeatPool func()
 	)
 
 	// Event bus — populated below when DATABASE_URL is set.
@@ -322,6 +323,7 @@ func main() {
 	// Wire Postgres stores when DATABASE_URL is set.
 	// If not set, stores are nil (useful for development/testing without a DB).
 	var pool *pgxpool.Pool
+	var heartbeatPool *pgxpool.Pool
 	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
 		ctx := context.Background()
 
@@ -332,6 +334,22 @@ func main() {
 			os.Exit(1)
 		}
 		closePool = func() { pool.Close() }
+
+		// Dedicated single-connection pool for the leader heartbeat ping.
+		// If RAT_HEARTBEAT_POOL_ENABLED=false, fall back to the shared pool
+		// (saves one Postgres connection in tiny single-instance setups).
+		if os.Getenv("RAT_HEARTBEAT_POOL_ENABLED") != "false" {
+			hbPool, hbErr := postgres.NewHeartbeatPool(ctx, dbURL)
+			if hbErr != nil {
+				slog.Error("failed to connect heartbeat pool", "error", hbErr)
+				os.Exit(1)
+			}
+			heartbeatPool = hbPool
+			closeHeartbeatPool = func() { heartbeatPool.Close() }
+		} else {
+			slog.Info("heartbeat pool disabled — falling back to shared pool",
+				"env", "RAT_HEARTBEAT_POOL_ENABLED=false")
+		}
 
 		if err := postgres.Migrate(ctx, pool); err != nil {
 			slog.Error("failed to run migrations", "error", err)
@@ -675,7 +693,16 @@ func main() {
 			err := pool.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", leader.AdvisoryLockID).Scan(&acquired)
 			return acquired, err
 		}
-		ping := func(ctx context.Context) error { return pool.Ping(ctx) }
+		// Heartbeat ping uses its own pool so a saturated main pool can't
+		// starve liveness checks. Falls back to the shared pool when the
+		// dedicated one is disabled via RAT_HEARTBEAT_POOL_ENABLED=false.
+		pingPool := pool
+		heartbeatSource := "shared-pool"
+		if heartbeatPool != nil {
+			pingPool = heartbeatPool
+			heartbeatSource = "dedicated-pool"
+		}
+		ping := func(ctx context.Context) error { return pingPool.Ping(ctx) }
 		unlock := func(ctx context.Context) error {
 			_, err := pool.Exec(ctx, "SELECT pg_advisory_unlock($1)", leader.AdvisoryLockID)
 			return err
@@ -690,7 +717,8 @@ func main() {
 		elector.Start(ctx)
 		stopLeader = func() { elector.Stop() }
 		slog.Info("leader election started (advisory lock)",
-			"heartbeat_interval", leader.DefaultHeartbeatInterval)
+			"heartbeat_interval", leader.DefaultHeartbeatInterval,
+			"heartbeat_source", heartbeatSource)
 	default:
 		// No database — start workers directly (single-instance mode).
 		stopFn := startBackgroundWorkers(ctx)
@@ -856,7 +884,9 @@ func main() {
 		slog.Error("internal http shutdown error", "error", err)
 	}
 
-	// Ordered cleanup: health loop → dispatcher → leader → executor → event bus → database pool.
+	// Ordered cleanup: health loop → dispatcher → leader → executor → event bus → heartbeat pool → database pool.
+	// Heartbeat pool closes before the main pool so any final leader.Stop()
+	// unlock attempt (which uses the main pool) still has a connection.
 	if stopHealthLoop != nil {
 		stopHealthLoop()
 		slog.Info("plugin health loop stopped")
@@ -884,6 +914,10 @@ func main() {
 	if srv.WebhookRateLimiterStop != nil {
 		srv.WebhookRateLimiterStop()
 		slog.Info("webhook rate limiter stopped")
+	}
+	if closeHeartbeatPool != nil {
+		closeHeartbeatPool()
+		slog.Info("heartbeat pool closed")
 	}
 	if closePool != nil {
 		closePool()

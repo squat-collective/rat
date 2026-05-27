@@ -259,10 +259,14 @@ func TestElector_StopBeforeStart_DoesNotPanic(t *testing.T) {
 
 // TestLeader_HeartbeatPing_Succeeds_LeadershipHeld asserts the happy path:
 // the heartbeat keeps succeeding and the leader retains the lock.
+//
+// Uses fakeClock.Advance to drive heartbeat ticks deterministically — no
+// time.Sleep, no flakes on slow CI runners.
 func TestLeader_HeartbeatPing_Succeeds_LeadershipHeld(t *testing.T) {
 	lock := &mockLock{acquired: true}
 	ping := &mockPing{} // err=nil, always succeeds
 	unlock := &mockUnlock{}
+	clock := newFakeClock()
 	var stoppedWorkers atomic.Bool
 
 	elector := New(
@@ -274,16 +278,26 @@ func TestLeader_HeartbeatPing_Succeeds_LeadershipHeld(t *testing.T) {
 		WithPing(ping.ping),
 		WithUnlock(unlock.unlock),
 		WithHeartbeatInterval(10*time.Millisecond),
+		WithClock(clock),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	elector.Start(ctx)
 
-	// Wait long enough for several heartbeat ticks.
-	time.Sleep(70 * time.Millisecond)
+	// Wait for the heartbeat goroutine to register its ticker so Advance
+	// has someone to notify. tryAcquire calls onElected first, then
+	// startHeartbeat — once IsLeader is true the ticker is registered.
+	require.Eventually(t, elector.IsLeader, time.Second, time.Millisecond,
+		"should become leader and register the heartbeat ticker")
+
+	// Drive 5 heartbeat ticks. Each Advance fires the ticker; the heartbeat
+	// goroutine increments ping.calls before reading the next tick.
+	for i := 0; i < 5; i++ {
+		clock.Advance(10 * time.Millisecond)
+	}
 
 	assert.True(t, elector.IsLeader(), "should still be leader while heartbeat succeeds")
-	assert.Greater(t, ping.getCalls(), 2, "heartbeat should have ticked multiple times")
+	assert.GreaterOrEqual(t, ping.getCalls(), 3, "heartbeat should have ticked multiple times")
 	assert.Equal(t, 0, unlock.getCalls(), "should not have voluntarily unlocked")
 	assert.False(t, stoppedWorkers.Load(), "workers should not have been stopped")
 
@@ -293,10 +307,13 @@ func TestLeader_HeartbeatPing_Succeeds_LeadershipHeld(t *testing.T) {
 
 // TestLeader_TwoConsecutiveHeartbeatFails_VoluntarilyReleases asserts that
 // after the failure threshold is reached the leader unlocks and steps down.
+//
+// Uses fakeClock.Advance for deterministic tick delivery.
 func TestLeader_TwoConsecutiveHeartbeatFails_VoluntarilyReleases(t *testing.T) {
 	lock := &mockLock{acquired: true}
 	ping := &mockPing{} // starts healthy; we flip to failing after election
 	unlock := &mockUnlock{}
+	clock := newFakeClock()
 	var stoppedWorkers atomic.Bool
 
 	elector := New(
@@ -308,6 +325,7 @@ func TestLeader_TwoConsecutiveHeartbeatFails_VoluntarilyReleases(t *testing.T) {
 		WithPing(ping.ping),
 		WithUnlock(unlock.unlock),
 		WithHeartbeatInterval(10*time.Millisecond),
+		WithClock(clock),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -318,19 +336,21 @@ func TestLeader_TwoConsecutiveHeartbeatFails_VoluntarilyReleases(t *testing.T) {
 
 	elector.Start(ctx)
 
-	// Wait for election (and at least one healthy ping) before injecting
-	// failures, so we know the heartbeat goroutine is actually running.
-	require.Eventually(t, elector.IsLeader, 500*time.Millisecond, 5*time.Millisecond,
+	// Wait for election + heartbeat goroutine registration.
+	require.Eventually(t, elector.IsLeader, time.Second, time.Millisecond,
 		"should become leader")
-	require.Eventually(t, func() bool { return ping.getCalls() >= 1 }, 500*time.Millisecond, 5*time.Millisecond,
-		"heartbeat goroutine should have ticked at least once")
 
-	// Now inject the network partition.
+	// One healthy tick to prove the heartbeat goroutine is running.
+	clock.Advance(10 * time.Millisecond)
+	require.GreaterOrEqual(t, ping.getCalls(), 1,
+		"heartbeat goroutine should have ticked once before injecting failures")
+
+	// Inject the network partition, then advance the two failure ticks.
 	ping.setErr(fmt.Errorf("network partition: i/o timeout"))
+	clock.Advance(10 * time.Millisecond) // failure #1
+	clock.Advance(10 * time.Millisecond) // failure #2 — trips the threshold
 
-	// Two consecutive failures need at least 2 heartbeat ticks (~20ms).
-	// Give plenty of margin for the goroutine scheduler.
-	require.Eventually(t, func() bool { return !elector.IsLeader() }, 500*time.Millisecond, 5*time.Millisecond,
+	require.Eventually(t, func() bool { return !elector.IsLeader() }, time.Second, time.Millisecond,
 		"leader should voluntarily step down after 2 consecutive heartbeat failures")
 
 	assert.Equal(t, 1, unlock.getCalls(), "should have called pg_advisory_unlock exactly once")
@@ -341,9 +361,13 @@ func TestLeader_TwoConsecutiveHeartbeatFails_VoluntarilyReleases(t *testing.T) {
 
 // TestLeader_HeartbeatRecovers_BeforeThreshold asserts that an intermittent
 // failure (1 in a row, then success) does NOT trigger a step-down.
+//
+// Uses fakeClock.Advance to deterministically order the failure/recovery
+// sequence.
 func TestLeader_HeartbeatRecovers_BeforeThreshold(t *testing.T) {
 	lock := &mockLock{acquired: true}
 	unlock := &mockUnlock{}
+	clock := newFakeClock()
 
 	// Fail-then-recover pattern: 1 failure, then success.
 	var pingMu sync.Mutex
@@ -365,13 +389,20 @@ func TestLeader_HeartbeatRecovers_BeforeThreshold(t *testing.T) {
 		WithPing(pingFn),
 		WithUnlock(unlock.unlock),
 		WithHeartbeatInterval(10*time.Millisecond),
+		WithClock(clock),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	elector.Start(ctx)
 
-	// Wait enough for multiple ticks.
-	time.Sleep(80 * time.Millisecond)
+	require.Eventually(t, elector.IsLeader, time.Second, time.Millisecond,
+		"should become leader")
+
+	// Drive 4 ticks: tick 1 fails, ticks 2-4 succeed. The failure counter
+	// resets to 0 on tick 2, so we never reach the threshold.
+	for i := 0; i < 4; i++ {
+		clock.Advance(10 * time.Millisecond)
+	}
 
 	assert.True(t, elector.IsLeader(), "1 transient failure should not lose leadership")
 	assert.Equal(t, 0, unlock.getCalls(), "should not have unlocked")
@@ -382,10 +413,14 @@ func TestLeader_HeartbeatRecovers_BeforeThreshold(t *testing.T) {
 
 // TestLeader_GracefulShutdown_UnlocksAdvisoryLock asserts that Stop() calls
 // the unlock function (explicit release rather than relying on session death).
+//
+// Uses fakeClock — graceful shutdown doesn't depend on tick timing, but the
+// fake keeps the test deterministic.
 func TestLeader_GracefulShutdown_UnlocksAdvisoryLock(t *testing.T) {
 	lock := &mockLock{acquired: true}
 	ping := &mockPing{}
 	unlock := &mockUnlock{}
+	clock := newFakeClock()
 	var stoppedWorkers atomic.Bool
 
 	elector := New(
@@ -397,13 +432,14 @@ func TestLeader_GracefulShutdown_UnlocksAdvisoryLock(t *testing.T) {
 		WithPing(ping.ping),
 		WithUnlock(unlock.unlock),
 		WithHeartbeatInterval(10*time.Millisecond),
+		WithClock(clock),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	elector.Start(ctx)
 
 	// Wait for the leader to be elected.
-	require.Eventually(t, elector.IsLeader, 200*time.Millisecond, 5*time.Millisecond,
+	require.Eventually(t, elector.IsLeader, time.Second, time.Millisecond,
 		"should become leader")
 
 	// Graceful shutdown — context cancel triggers relinquish via the loop.
