@@ -217,6 +217,9 @@ func (s *raceRunStore) DeleteRunsOlderThan(_ context.Context, _ time.Time) (int,
 func (s *raceRunStore) ListStuckRuns(_ context.Context, _ time.Time) ([]domain.Run, error) {
 	return nil, nil
 }
+func (s *raceRunStore) ListStuckPendingRuns(_ context.Context, _ time.Time) ([]domain.Run, error) {
+	return nil, nil
+}
 func (s *raceRunStore) LatestRunPerPipeline(_ context.Context, _ []uuid.UUID) (map[uuid.UUID]*domain.Run, error) {
 	return nil, nil
 }

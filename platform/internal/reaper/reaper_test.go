@@ -373,7 +373,7 @@ func TestFailStuckPendingRuns_TimesOutOldPending(t *testing.T) {
 	}
 	runs.runs = []domain.Run{pending}
 
-	r := New(settings, runs, nil, nil, nil, nil, nil)
+	r := New(settings, runs, nil, nil, nil, nil, nil, nil)
 	status := r.tick(context.Background())
 
 	assert.Equal(t, 1, status.RunsFailed, "25h-old PENDING run should be failed")
@@ -393,7 +393,7 @@ func TestFailStuckPendingRuns_LeavesYoungPendingAlone(t *testing.T) {
 	}
 	runs.runs = []domain.Run{pending}
 
-	r := New(settings, runs, nil, nil, nil, nil, nil)
+	r := New(settings, runs, nil, nil, nil, nil, nil, nil)
 	status := r.tick(context.Background())
 
 	assert.Equal(t, 0, status.RunsFailed, "1h-old PENDING run should be left alone")
@@ -421,7 +421,7 @@ func TestCleanupOrphanBranches_NowReapsFormerPendingBranches(t *testing.T) {
 		},
 	}
 
-	r := New(settings, runs, nil, nil, nil, nil, nessie)
+	r := New(settings, runs, nil, nil, nil, nil, nil, nessie)
 	status := r.tick(context.Background())
 
 	// The 25h-old PENDING run is marked failed in this tick (Task 2b runs
@@ -455,7 +455,7 @@ func TestCleanOrphanBranches_PreservesYoungPendingBranch(t *testing.T) {
 		},
 	}
 
-	r := New(settings, runs, nil, nil, nil, nil, nessie)
+	r := New(settings, runs, nil, nil, nil, nil, nil, nessie)
 	status := r.tick(context.Background())
 
 	assert.Equal(t, 0, status.RunsFailed)
