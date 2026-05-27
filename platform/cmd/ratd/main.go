@@ -689,6 +689,13 @@ func main() {
 	stopHealthLoop = func() { healthLoop.Stop() }
 	slog.Info("plugin health loop started")
 
+	// Start plugin reconciler. Periodically WARNs (but does not auto-fix) on
+	// any divergence between the in-memory registry and the catalog. The
+	// goroutine self-terminates when ctx is cancelled, so no explicit stop is
+	// needed — graceful shutdown takes care of it.
+	mgr.StartReconciler(ctx, plugins.DefaultReconcilerInterval)
+	slog.Info("plugin reconciler started", "interval", plugins.DefaultReconcilerInterval)
+
 	// Start event dispatcher if event bus is available.
 	if eventBus != nil {
 		adapter := &eventBusAdapter{bus: eventBus}

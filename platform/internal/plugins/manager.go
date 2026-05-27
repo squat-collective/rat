@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	connect "connectrpc.com/connect"
@@ -20,6 +21,12 @@ import (
 const (
 	healthCheckTimeout = 5 * time.Second
 	describeTimeout    = 10 * time.Second
+
+	// DefaultReconcilerInterval is how often the reconciler compares the
+	// in-memory registry to the catalog. Picked to be short enough that drift
+	// is visible within a couple of minutes but long enough that the constant
+	// listing of the catalog doesn't dominate Postgres traffic.
+	DefaultReconcilerInterval = 60 * time.Second
 )
 
 // PluginCatalog is the persistence interface the Manager uses for plugin state.
@@ -48,6 +55,21 @@ type PluginSourceLister interface {
 // enable/disable, and removal. It owns both the in-memory Registry and the
 // persistent catalog (Postgres).
 type Manager struct {
+	// mu serialises the ENTIRE flow of Register, Enable, Disable, and Remove
+	// — every method that mutates the catalog/registry pair. The registry has
+	// its own mutex (it's separately thread-safe), but that mutex only covers
+	// the in-memory bookkeeping; without an outer lock here two concurrent
+	// registrations could each pass the in-memory step and then race in the
+	// catalog UpsertPlugin, leaving the registry and catalog disagreeing about
+	// which plugin "won".
+	//
+	// Trade-off: this serialises plugin startup. Cold-start cost is bounded
+	// (N plugins × ~1s health check), which is fine. If startup latency
+	// becomes a problem, a per-name lock would let DIFFERENT plugins register
+	// in parallel — but the threat model (two registrations of the SAME name)
+	// makes the coarse lock the right tool for v1.
+	mu sync.Mutex
+
 	registry   *Registry
 	catalog    PluginCatalog
 	policies   PluginPolicyLister
@@ -156,16 +178,26 @@ func (m *Manager) LoadFromCatalog(ctx context.Context) error {
 
 // Register handles the phone-home flow: health-check → describe → persist → register in memory.
 // This is called when a plugin POSTs to /internal/plugins/register.
+//
+// The whole flow runs under the manager mutex — see the comment on Manager.mu
+// for the threat model. We hold the lock across the outbound HTTP calls
+// (health-check, describe) too: that's slightly wasteful when two DIFFERENT
+// plugins register at the same time, but it keeps the contract simple and
+// the cold-start cost is bounded.
 func (m *Manager) Register(ctx context.Context, name, addr string) error {
 	// 0. SSRF guard — reject loopback / link-local / multicast / unspecified
 	// BEFORE we make any outbound calls. A hostile registrant must not be able
 	// to point ratd at AWS IMDS (169.254.169.254) or localhost services and
-	// learn anything from the response or the error.
+	// learn anything from the response or the error. This validation is pure
+	// and doesn't touch any shared state, so do it before taking the lock.
 	if err := ValidateRegistrationAddress(addr, m.allowLoopback); err != nil {
 		return fmt.Errorf("plugin %s address rejected: %w", name, err)
 	}
 
 	addr = EnsureScheme(addr)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	// 1. Health check
 	pluginClient := pluginv1connect.NewPluginServiceClient(m.httpClient, addr)
@@ -206,7 +238,11 @@ func (m *Manager) Register(ctx context.Context, name, addr string) error {
 		return fmt.Errorf("register plugin %s: %w", name, err)
 	}
 
-	// 5. Persist to catalog
+	// 5. Persist to catalog. If this fails we ROLL BACK the in-memory
+	// registration so the next ratd restart and the live registry agree about
+	// the plugin's existence. Previously the failure was logged + swallowed,
+	// leaving the plugin live in memory but absent from the catalog — it would
+	// silently vanish on the next restart.
 	if m.catalog != nil {
 		var descriptorJSON json.RawMessage
 		if descriptor != nil {
@@ -225,8 +261,8 @@ func (m *Manager) Register(ctx context.Context, name, addr string) error {
 			Descriptor: descriptorJSON,
 		}
 		if _, err := m.catalog.UpsertPlugin(ctx, entry); err != nil {
-			// Non-fatal — the plugin is already registered in memory.
-			slog.Error("failed to persist plugin to catalog", "name", name, "error", err)
+			m.registry.Remove(name)
+			return fmt.Errorf("persist plugin %s to catalog: %w", name, err)
 		}
 	}
 
@@ -240,7 +276,12 @@ func (m *Manager) Register(ctx context.Context, name, addr string) error {
 }
 
 // Enable re-enables a disabled plugin by reconnecting to it.
+// Holds the manager mutex to keep registry/catalog mutations in lock-step
+// with concurrent Register / Disable / Remove calls.
 func (m *Manager) Enable(ctx context.Context, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.catalog == nil {
 		return fmt.Errorf("no catalog available")
 	}
@@ -266,7 +307,11 @@ func (m *Manager) Enable(ctx context.Context, name string) error {
 }
 
 // Disable disconnects a plugin and marks it as disabled.
+// Holds the manager mutex — same reason as Register.
 func (m *Manager) Disable(ctx context.Context, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.registry.Remove(name)
 
 	if m.catalog != nil {
@@ -280,7 +325,11 @@ func (m *Manager) Disable(ctx context.Context, name string) error {
 }
 
 // Remove deletes a plugin from both catalog and registry.
+// Holds the manager mutex — same reason as Register.
 func (m *Manager) Remove(ctx context.Context, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	// Capture capabilities before removal for callbacks.
 	p := m.registry.Get(name)
 	var caps []string
@@ -460,6 +509,103 @@ func (m *Manager) evaluatePolicies(ctx context.Context, name string, kind domain
 
 	// No matching policy — default allow.
 	return nil
+}
+
+// StartReconciler launches a goroutine that periodically compares the
+// in-memory registry to the catalog and WARNs on any divergence. It does NOT
+// auto-mutate either side — drift suggests a real bug (manual DB edit, lost
+// rollback, etc.) and silent reconciliation would just mask it.
+//
+// The goroutine stops when ctx is cancelled. interval ≤ 0 means use
+// DefaultReconcilerInterval.
+//
+// First tick fires immediately on startup so operators see drift right away
+// instead of waiting one full interval.
+func (m *Manager) StartReconciler(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = DefaultReconcilerInterval
+	}
+
+	go func() {
+		// Eager first tick — easier debugging than waiting one full interval.
+		m.reconcileOnce(ctx)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.reconcileOnce(ctx)
+			}
+		}
+	}()
+}
+
+// reconcileOnce runs a single comparison pass between the catalog and the
+// in-memory registry. Exported indirectly through StartReconciler; broken out
+// so tests can drive one tick deterministically.
+func (m *Manager) reconcileOnce(ctx context.Context) {
+	if m.catalog == nil {
+		// Nothing to reconcile against — skip silently.
+		return
+	}
+
+	entries, err := m.catalog.ListPlugins(ctx, domain.PluginFilter{})
+	if err != nil {
+		slog.Warn("reconciler: failed to list plugins from catalog", "error", err)
+		return
+	}
+
+	catalogNames := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		catalogNames[e.Name] = struct{}{}
+	}
+
+	registryNames := make(map[string]struct{})
+	for _, p := range m.registry.All() {
+		registryNames[p.Name] = struct{}{}
+	}
+
+	var divergences int
+
+	// Catalog-only: persisted but not live (might be disabled, which is fine).
+	for _, e := range entries {
+		if _, ok := registryNames[e.Name]; ok {
+			continue
+		}
+		if e.Status == domain.PluginStatusDisabled {
+			// Disabled plugins legitimately don't appear in the registry.
+			continue
+		}
+		divergences++
+		slog.Warn("reconciler: plugin in catalog but not in registry",
+			"plugin", e.Name,
+			"status", e.Status,
+			"missing_from", "registry",
+		)
+	}
+
+	// Registry-only: live but not persisted — the case the rollback fix tries
+	// to prevent. If it ever appears here, a Register flow likely lost its
+	// catalog write somehow (eg. partial restart, manual `DELETE FROM plugins`).
+	for name := range registryNames {
+		if _, ok := catalogNames[name]; ok {
+			continue
+		}
+		divergences++
+		slog.Warn("reconciler: plugin in registry but not in catalog",
+			"plugin", name,
+			"missing_from", "catalog",
+		)
+	}
+
+	if divergences == 0 {
+		slog.Debug("reconciler: registry and catalog agree",
+			"plugins", len(registryNames))
+	}
 }
 
 // fireCallbacks triggers the appropriate runtime re-wiring callbacks

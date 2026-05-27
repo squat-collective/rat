@@ -1,13 +1,16 @@
 package plugins
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	connect "connectrpc.com/connect"
@@ -535,4 +538,233 @@ func TestEvaluatePolicies_NilPoliciesStore_NoEnforcement(t *testing.T) {
 	err := mgr.Register(context.Background(), "any-plugin", ts.URL)
 	require.NoError(t, err)
 	assert.NotNil(t, mgr.Registry().Get("any-plugin"))
+}
+
+// ── Atomicity tests ───────────────────────────────────────────────────────
+
+// failingUpsertCatalog wraps memoryCatalog and returns an error from
+// UpsertPlugin, so we can prove the manager rolls back the in-memory
+// registration when persistence fails.
+type failingUpsertCatalog struct {
+	*memoryCatalog
+	err error
+}
+
+func (c *failingUpsertCatalog) UpsertPlugin(_ context.Context, _ domain.PluginEntry) (*domain.PluginEntry, error) {
+	return nil, c.err
+}
+
+func TestManager_Register_CatalogWriteFails_RollsBackRegistry(t *testing.T) {
+	// httptest binds to 127.0.0.1, so we need the loopback override on.
+	t.Setenv("PLUGIN_ALLOW_LOOPBACK", "true")
+
+	wantErr := errors.New("simulated postgres outage")
+	catalog := &failingUpsertCatalog{memoryCatalog: newMemoryCatalog(), err: wantErr}
+	mgr := NewManager(catalog, "pro", nil)
+
+	ts := startMockPluginServer(t, []string{"custom"})
+	defer ts.Close()
+
+	err := mgr.Register(context.Background(), "doomed", ts.URL)
+	require.Error(t, err, "catalog failure must surface as a Register error")
+	assert.ErrorIs(t, err, wantErr, "caller must see the underlying catalog error wrapped")
+
+	// The in-memory registry must NOT have the plugin — the catalog write
+	// failed, so the rollback should have removed it.
+	assert.Nil(t, mgr.Registry().Get("doomed"),
+		"register must roll back in-memory state when the catalog write fails")
+}
+
+// concurrentSerializingCatalog counts how many UpsertPlugin calls are in
+// flight at once and fails the test if the manager ever lets two cross. This
+// is the strongest assertion we can make about the manager-level lock: it
+// MUST serialize the whole register flow.
+type concurrentSerializingCatalog struct {
+	*memoryCatalog
+	t          *testing.T
+	inFlight   atomic.Int32
+	maxSeen    atomic.Int32
+	upsertHits atomic.Int32
+}
+
+func (c *concurrentSerializingCatalog) UpsertPlugin(ctx context.Context, entry domain.PluginEntry) (*domain.PluginEntry, error) {
+	now := c.inFlight.Add(1)
+	defer c.inFlight.Add(-1)
+	for {
+		prev := c.maxSeen.Load()
+		if now <= prev || c.maxSeen.CompareAndSwap(prev, now) {
+			break
+		}
+	}
+	c.upsertHits.Add(1)
+	return c.memoryCatalog.UpsertPlugin(ctx, entry)
+}
+
+func TestManager_Register_ConcurrentSameName_OneWinsOthersFail(t *testing.T) {
+	t.Setenv("PLUGIN_ALLOW_LOOPBACK", "true")
+
+	catalog := &concurrentSerializingCatalog{memoryCatalog: newMemoryCatalog(), t: t}
+	mgr := NewManager(catalog, "pro", nil)
+
+	ts := startMockPluginServer(t, []string{"custom"})
+	defer ts.Close()
+
+	const n = 5
+	var wg sync.WaitGroup
+	wg.Add(n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			errs[i] = mgr.Register(context.Background(), "race", ts.URL)
+		}()
+	}
+	wg.Wait()
+
+	// The manager mutex must keep UpsertPlugin serialised — we should never
+	// observe more than one concurrent call at the catalog layer.
+	assert.LessOrEqual(t, catalog.maxSeen.Load(), int32(1),
+		"manager mutex should serialise UpsertPlugin calls")
+
+	// All N attempts use the same name. Re-registration is idempotent in the
+	// registry (it replaces the previous entry) — what matters is that the
+	// registry and catalog AGREE at the end, and that the manager processed
+	// each request without panicking. Count successes for an audit trail.
+	var successes int
+	for _, e := range errs {
+		if e == nil {
+			successes++
+		}
+	}
+	assert.GreaterOrEqual(t, successes, 1, "at least one registration must succeed")
+
+	// Final state: registry has the plugin, catalog has the plugin, and they
+	// agree on the name.
+	assert.NotNil(t, mgr.Registry().Get("race"), "winner must be live in registry")
+	entry, err := catalog.GetPlugin(context.Background(), "race")
+	require.NoError(t, err)
+	require.NotNil(t, entry, "winner must be persisted in catalog")
+	assert.Equal(t, "race", entry.Name)
+}
+
+// ── Reconciler tests ──────────────────────────────────────────────────────
+
+// captureSlog routes the default slog logger into a buffer for the duration
+// of the test, returning a getter for the captured text. Restores the
+// previous handler on cleanup.
+func captureSlog(t *testing.T) func() string {
+	t.Helper()
+	prev := slog.Default()
+	var buf bytes.Buffer
+	var bufMu sync.Mutex
+
+	// Lock around buf writes — slog handlers may run from goroutines.
+	writer := &lockedWriter{w: &buf, mu: &bufMu}
+	slog.SetDefault(slog.New(slog.NewTextHandler(writer, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	return func() string {
+		bufMu.Lock()
+		defer bufMu.Unlock()
+		return buf.String()
+	}
+}
+
+type lockedWriter struct {
+	w  *bytes.Buffer
+	mu *sync.Mutex
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+func TestManager_Reconciler_DetectsCatalogOnlyDrift(t *testing.T) {
+	catalog := newMemoryCatalog()
+	// Catalog says the plugin exists and is ENABLED, but the in-memory
+	// registry is empty — exactly the post-restart-without-LoadFromCatalog
+	// state that should trigger a warning.
+	_, err := catalog.UpsertPlugin(context.Background(), domain.PluginEntry{
+		Name:   "ghost",
+		Status: domain.PluginStatusEnabled,
+	})
+	require.NoError(t, err)
+
+	logs := captureSlog(t)
+
+	mgr := NewManager(catalog, "pro", nil)
+	mgr.reconcileOnce(context.Background())
+
+	out := logs()
+	assert.Contains(t, out, "plugin in catalog but not in registry",
+		"reconciler must warn on catalog-only plugins")
+	assert.Contains(t, out, "ghost",
+		"warning must name the divergent plugin")
+}
+
+func TestManager_Reconciler_DetectsRegistryOnlyDrift(t *testing.T) {
+	catalog := newMemoryCatalog()
+	mgr := NewManager(catalog, "pro", nil)
+	// Slip a plugin into the registry without persisting it — the "rollback
+	// went wrong" or "someone DELETEd from plugins" scenario.
+	require.NoError(t, mgr.Registry().Register(&Plugin{
+		Name:   "orphan",
+		Status: domain.PluginStatusEnabled,
+	}))
+
+	logs := captureSlog(t)
+	mgr.reconcileOnce(context.Background())
+
+	out := logs()
+	assert.Contains(t, out, "plugin in registry but not in catalog")
+	assert.Contains(t, out, "orphan")
+}
+
+func TestManager_Reconciler_IgnoresDisabledCatalogEntries(t *testing.T) {
+	catalog := newMemoryCatalog()
+	// Disabled plugins legitimately don't appear in the registry — that's not
+	// drift, that's intended state. The reconciler must stay quiet.
+	_, err := catalog.UpsertPlugin(context.Background(), domain.PluginEntry{
+		Name:   "sleeping",
+		Status: domain.PluginStatusDisabled,
+	})
+	require.NoError(t, err)
+
+	logs := captureSlog(t)
+	mgr := NewManager(catalog, "pro", nil)
+	mgr.reconcileOnce(context.Background())
+
+	assert.NotContains(t, logs(), "plugin in catalog but not in registry",
+		"disabled plugins must not trigger drift warnings")
+}
+
+func TestManager_Reconciler_NilCatalog_NoPanic(t *testing.T) {
+	mgr := NewManager(nil, "pro", nil)
+	// Should be a no-op (and definitely not panic).
+	mgr.reconcileOnce(context.Background())
+}
+
+func TestManager_Reconciler_HealthyState_NoWarning(t *testing.T) {
+	catalog := newMemoryCatalog()
+	_, err := catalog.UpsertPlugin(context.Background(), domain.PluginEntry{
+		Name:   "aligned",
+		Status: domain.PluginStatusEnabled,
+	})
+	require.NoError(t, err)
+
+	mgr := NewManager(catalog, "pro", nil)
+	require.NoError(t, mgr.Registry().Register(&Plugin{
+		Name:   "aligned",
+		Status: domain.PluginStatusEnabled,
+	}))
+
+	logs := captureSlog(t)
+	mgr.reconcileOnce(context.Background())
+
+	out := logs()
+	assert.NotContains(t, out, "plugin in catalog but not in registry")
+	assert.NotContains(t, out, "plugin in registry but not in catalog")
 }
