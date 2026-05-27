@@ -59,6 +59,23 @@ type PluginPolicyStore interface {
 // per-request handler invocations.
 var pluginConfigWarnLimiter = newWarnLimiter(time.Second)
 
+// pluginRegisterLimiter rate-limits phone-home (POST /internal/plugins/register)
+// per plugin name. The /internal listener has no auth (it's bind-localhost),
+// so a runaway plugin process — or a compromised one in a crashloop — could
+// otherwise spam ratd with register attempts at full HTTP throughput. The
+// limiter caps each name to a token bucket that refills at 10/min steady-state
+// with a burst of 10, returning 429 + Retry-After above that.
+//
+// Module-scope so the bucket state survives across HandlePluginRegister calls.
+// Bucket entries idle for >10 minutes are swept lazily during register calls
+// to bound memory under churn (no separate goroutine — keeps the test path
+// deterministic and avoids a process-lifetime daemon for an infrequent path).
+var pluginRegisterLimiter = newRegisterLimiter(registerLimiterConfig{
+	RatePerMinute: 10,
+	Burst:         10,
+	IdleTTL:       10 * time.Minute,
+})
+
 type warnLimiter struct {
 	window time.Duration
 	mu     sync.Mutex
@@ -149,6 +166,16 @@ func (srv *Server) HandlePluginRegister(w http.ResponseWriter, r *http.Request) 
 	}
 	if !validName(body.Name) {
 		errorJSON(w, "name must be a lowercase slug", "INVALID_ARGUMENT", http.StatusBadRequest)
+		return
+	}
+
+	// Cap per-name register frequency BEFORE doing the (potentially slow,
+	// SSRF-validating) Register call. If a plugin is in a crashloop or has a
+	// runaway retry, we want to absorb the storm here, not push it down into
+	// the plugin manager / health checker.
+	if res := pluginRegisterLimiter.allow(body.Name, time.Now()); !res.Allowed {
+		w.Header().Set("Retry-After", strconv.FormatInt(res.RetryAfterSecs, 10))
+		errorJSON(w, "too many register attempts for this plugin name", "RESOURCE_EXHAUSTED", http.StatusTooManyRequests)
 		return
 	}
 

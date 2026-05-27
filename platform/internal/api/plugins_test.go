@@ -166,6 +166,79 @@ func TestHandlePluginRegister_ManagerError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
+// ── Phone-home rate limiting ──────────────────────────────────────────────
+//
+// The /internal/plugins/register endpoint is unauthenticated (it's the
+// phone-home address), so a runaway or compromised plugin could hammer it
+// at full HTTP throughput. The per-name token bucket caps that to a burst
+// of 10 followed by 10/min steady-state; the 11th rapid attempt returns 429
+// with Retry-After so the client backs off.
+
+func TestHandlePluginRegister_RateLimited(t *testing.T) {
+	mgr := &mockPluginManager{}
+	srv := &api.Server{PluginManager: mgr}
+
+	// Unique name so other tests in the same run can't consume our budget.
+	name := "rl-" + uuid.NewString()[:8]
+	body := fmt.Sprintf(`{"name":%q,"addr":"%s:50099"}`, name, name)
+
+	// 10 rapid register attempts should all succeed (burst capacity).
+	for i := 0; i < 10; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/internal/plugins/register", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.HandlePluginRegister(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, "attempt %d should succeed within burst", i+1)
+	}
+
+	// The 11th attempt within the same window must be throttled with 429.
+	req := httptest.NewRequest(http.MethodPost, "/internal/plugins/register", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.HandlePluginRegister(rec, req)
+
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "11th attempt should be rate-limited")
+	assert.NotEmpty(t, rec.Header().Get("Retry-After"),
+		"429 response must carry Retry-After so the client can back off")
+	assert.Contains(t, rec.Body.String(), "RESOURCE_EXHAUSTED",
+		"error body should signal RESOURCE_EXHAUSTED for parity with the per-IP limiter")
+}
+
+func TestHandlePluginRegister_RateLimit_PerName(t *testing.T) {
+	mgr := &mockPluginManager{}
+	srv := &api.Server{PluginManager: mgr}
+
+	// Two distinct plugin names: blowing one's budget must NOT affect the other.
+	nameA := "rla-" + uuid.NewString()[:8]
+	nameB := "rlb-" + uuid.NewString()[:8]
+	bodyA := fmt.Sprintf(`{"name":%q,"addr":"%s:50099"}`, nameA, nameA)
+	bodyB := fmt.Sprintf(`{"name":%q,"addr":"%s:50099"}`, nameB, nameB)
+
+	// Exhaust nameA's burst.
+	for i := 0; i < 10; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/internal/plugins/register", bytes.NewBufferString(bodyA))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.HandlePluginRegister(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+	}
+
+	// Confirm nameA is now throttled.
+	reqA := httptest.NewRequest(http.MethodPost, "/internal/plugins/register", bytes.NewBufferString(bodyA))
+	reqA.Header.Set("Content-Type", "application/json")
+	recA := httptest.NewRecorder()
+	srv.HandlePluginRegister(recA, reqA)
+	require.Equal(t, http.StatusTooManyRequests, recA.Code, "nameA should be throttled at attempt 11")
+
+	// nameB has its own bucket and should still be wide open.
+	reqB := httptest.NewRequest(http.MethodPost, "/internal/plugins/register", bytes.NewBufferString(bodyB))
+	reqB.Header.Set("Content-Type", "application/json")
+	recB := httptest.NewRecorder()
+	srv.HandlePluginRegister(recB, reqB)
+	assert.Equal(t, http.StatusOK, recB.Code,
+		"throttling nameA must not bleed into nameB — buckets are per-name")
+}
+
 // ── List (GET /api/v1/plugins) ────────────────────────────────────────────
 
 func TestHandleListPlugins_Empty(t *testing.T) {
