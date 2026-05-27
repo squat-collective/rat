@@ -219,9 +219,11 @@ func (m *mockRunStore) getRuns() []domain.Run {
 }
 
 type mockExecutor struct {
-	mu       sync.Mutex
-	submits  []submitCall
-	submitFn func(ctx context.Context, run *domain.Run, pipeline *domain.Pipeline) error
+	mu          sync.Mutex
+	submits     []submitCall
+	submitFn    func(ctx context.Context, run *domain.Run, pipeline *domain.Pipeline) error
+	inFlight    int
+	maxInFlight int
 }
 
 type submitCall struct {
@@ -234,13 +236,27 @@ func newMockExecutor() *mockExecutor {
 }
 
 func (m *mockExecutor) Submit(ctx context.Context, run *domain.Run, pipeline *domain.Pipeline) error {
+	// Track concurrency: enter / leave around the (possibly user-supplied)
+	// submit function so TestScheduler_DispatchDue_ParallelLimit can read
+	// the real in-flight peak instead of just the recorded call count.
 	m.mu.Lock()
 	m.submits = append(m.submits, submitCall{runID: run.ID, pipelineID: pipeline.ID})
-	m.mu.Unlock()
-	if m.submitFn != nil {
-		return m.submitFn(ctx, run, pipeline)
+	m.inFlight++
+	if m.inFlight > m.maxInFlight {
+		m.maxInFlight = m.inFlight
 	}
-	return nil
+	fn := m.submitFn
+	m.mu.Unlock()
+
+	var err error
+	if fn != nil {
+		err = fn(ctx, run, pipeline)
+	}
+
+	m.mu.Lock()
+	m.inFlight--
+	m.mu.Unlock()
+	return err
 }
 
 func (m *mockExecutor) Cancel(_ context.Context, _ string) error {
@@ -265,6 +281,12 @@ func (m *mockExecutor) getSubmits() []submitCall {
 	result := make([]submitCall, len(m.submits))
 	copy(result, m.submits)
 	return result
+}
+
+func (m *mockExecutor) getMaxInFlight() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.maxInFlight
 }
 
 // --- Tests ---
@@ -695,4 +717,122 @@ func TestTick_RunnerBusy_DoesNotAdvanceSchedule(t *testing.T) {
 	// Schedule should NOT be updated (no advance) — will retry next tick
 	_, ok := schedStore.getUpdate(schedID.String())
 	assert.False(t, ok, "schedule should NOT advance when runner is busy")
+}
+
+// --- dispatchDue concurrency / latency tests ---
+
+// makeDueSchedules wires N schedules + their pipelines + an empty run
+// store into the mocks, all due in the past. Returns the populated
+// mocks so the tests can introspect them after sched.tick.
+func makeDueSchedules(t *testing.T, n int) (*mockScheduleStore, *mockPipelineStore, *mockRunStore) {
+	t.Helper()
+	schedStore := newMockScheduleStore()
+	pipelineStore := newMockPipelineStore()
+	runStore := newMockRunStore()
+	past := time.Now().Add(-5 * time.Minute)
+
+	for i := 0; i < n; i++ {
+		pid := uuid.New()
+		sid := uuid.New()
+		pipelineStore.pipelines[pid.String()] = &domain.Pipeline{
+			ID:        pid,
+			Namespace: "default",
+			Layer:     domain.LayerSilver,
+			Name:      fmt.Sprintf("p%d", i),
+		}
+		schedStore.schedules = append(schedStore.schedules, domain.Schedule{
+			ID:         sid,
+			PipelineID: pid,
+			CronExpr:   "* * * * *", // every minute
+			Enabled:    true,
+			NextRunAt:  &past,
+		})
+	}
+	return schedStore, pipelineStore, runStore
+}
+
+// TestScheduler_DispatchDue_ParallelLimit asserts that when many
+// schedules fire on the same tick we do dispatch concurrently but never
+// exceed maxConcurrentScheduleDispatches in flight.
+func TestScheduler_DispatchDue_ParallelLimit(t *testing.T) {
+	const totalSchedules = 30
+	schedStore, pipelineStore, runStore := makeDueSchedules(t, totalSchedules)
+
+	exec := newMockExecutor()
+	// Hold each submit long enough for the dispatcher to actually
+	// saturate the limiter; without a wait the calls finish faster
+	// than the goroutines start.
+	exec.submitFn = func(_ context.Context, _ *domain.Run, _ *domain.Pipeline) error {
+		time.Sleep(50 * time.Millisecond)
+		return nil
+	}
+
+	sched := New(schedStore, pipelineStore, runStore, exec, 30*time.Second)
+	sched.tick(context.Background())
+
+	assert.Len(t, exec.getSubmits(), totalSchedules,
+		"every due schedule should have been submitted")
+	peak := exec.getMaxInFlight()
+	assert.LessOrEqual(t, peak, maxConcurrentScheduleDispatches,
+		"peak in-flight submissions must not exceed the limit")
+	assert.Greater(t, peak, 1,
+		"with 30 schedules and 50ms holds the limiter should pack at least a few in flight")
+}
+
+// TestScheduler_DispatchDue_AllSchedulesAttempted asserts that even
+// when some submits fail, every other schedule is still dispatched —
+// the errgroup must not short-circuit on the first error.
+func TestScheduler_DispatchDue_AllSchedulesAttempted(t *testing.T) {
+	const totalSchedules = 20
+	schedStore, pipelineStore, runStore := makeDueSchedules(t, totalSchedules)
+
+	exec := newMockExecutor()
+	var callIdx int32
+	var failMu sync.Mutex
+	exec.submitFn = func(_ context.Context, _ *domain.Run, _ *domain.Pipeline) error {
+		failMu.Lock()
+		callIdx++
+		fail := callIdx == 1 || callIdx == 7 // arbitrary failing indices
+		failMu.Unlock()
+		if fail {
+			return fmt.Errorf("synthetic submit failure")
+		}
+		return nil
+	}
+
+	sched := New(schedStore, pipelineStore, runStore, exec, 30*time.Second)
+	sched.tick(context.Background())
+
+	assert.Len(t, exec.getSubmits(), totalSchedules,
+		"every due schedule should have reached the executor regardless of peer failures")
+	assert.Len(t, runStore.getRuns(), totalSchedules,
+		"every due schedule should have produced a run row in the planning phase")
+}
+
+// TestScheduler_DispatchDue_TickLatency is the regression test for the
+// original bug: 100 schedules each taking 100ms to submit must finish
+// in well under the old serial-with-3s-stagger time (which would have
+// been ~5 minutes). With the errgroup limit at 10 the math says
+// 100 * 100ms / 10 = 1 s of pure dispatch work, plus overhead.
+func TestScheduler_DispatchDue_TickLatency(t *testing.T) {
+	const totalSchedules = 100
+	schedStore, pipelineStore, runStore := makeDueSchedules(t, totalSchedules)
+
+	exec := newMockExecutor()
+	exec.submitFn = func(_ context.Context, _ *domain.Run, _ *domain.Pipeline) error {
+		time.Sleep(100 * time.Millisecond)
+		return nil
+	}
+
+	sched := New(schedStore, pipelineStore, runStore, exec, 30*time.Second)
+
+	start := time.Now()
+	sched.tick(context.Background())
+	elapsed := time.Since(start)
+
+	assert.Len(t, exec.getSubmits(), totalSchedules)
+	// Generous ceiling — leaves headroom for slow CI hardware.
+	// Old behaviour (3s stagger × 99 gaps + 100×100ms work) ≈ 307s.
+	assert.Less(t, elapsed, 5*time.Second,
+		"100 same-tick dispatches should fan out in <5s, got %s", elapsed)
 }
