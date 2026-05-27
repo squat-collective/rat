@@ -119,3 +119,76 @@ class TestDuckDBEngine:
         calls = mock_conn.execute.call_args_list
         session_calls = [c for c in calls if "s3_session_token" in str(c)]
         assert len(session_calls) == 0
+
+    def test_s3_overrides_merged_into_config(self, s3_config: S3Config):
+        """Per-run overrides win over env-level S3Config (ADR-018 precedence).
+
+        ratd vends per-run credentials from the cloud plugin and ships them in
+        the SubmitPipeline proto. The runner merges them via
+        ``S3Config.with_overrides`` and passes the merged config to the
+        DuckDBEngine — this test proves that DuckDB sees the override values,
+        not the env-level defaults.
+        """
+        # The base config (from env / container) has long-lived MinIO creds.
+        # The per-run overrides (from STS) carry session creds for a target bucket.
+        overrides = {
+            "access_key": "AKIA-OVR",
+            "secret_key": "secret-ovr",
+            "session_token": "sts-session-xyz",
+            "region": "eu-west-3",
+            "endpoint": "s3.eu-west-3.amazonaws.com",
+            "bucket": "tenant-bucket",
+            "use_ssl": "true",
+        }
+        merged = s3_config.with_overrides(overrides)
+
+        # Sanity: the merge produced a new config with override values winning.
+        assert merged.access_key == "AKIA-OVR"
+        assert merged.secret_key == "secret-ovr"
+        assert merged.session_token == "sts-session-xyz"
+        assert merged.region == "eu-west-3"
+        assert merged.endpoint == "s3.eu-west-3.amazonaws.com"
+        assert merged.bucket == "tenant-bucket"
+        assert merged.use_ssl is True
+        # The base config is untouched (frozen dataclass — defensive check).
+        assert s3_config.access_key == "test-access-key"
+
+        with patch("rat_runner.engine.duckdb.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_connect.return_value = mock_conn
+            engine = DuckDBEngine(merged)
+            _ = engine.conn
+
+        # The DuckDB connection must be configured with the OVERRIDE values,
+        # not the base config — proves the precedence is wired end-to-end.
+        calls_str = "".join(str(c) for c in mock_conn.execute.call_args_list)
+        assert "AKIA-OVR" in calls_str
+        assert "secret-ovr" in calls_str
+        assert "sts-session-xyz" in calls_str
+        assert "eu-west-3" in calls_str
+        assert "s3.eu-west-3.amazonaws.com" in calls_str
+        # The env-level access key MUST NOT appear — overrides won.
+        assert "test-access-key" not in calls_str
+
+    def test_partial_overrides_keep_base_for_unset_fields(self, s3_config: S3Config):
+        """Empty/unset override fields fall back to the env-level S3Config.
+
+        The per-run cloud creds only set the bits the plugin owns (access key,
+        secret, session token, region). Endpoint and bucket usually stay with
+        the runner's env defaults so non-AWS deployments still resolve MinIO.
+        """
+        overrides = {
+            "access_key": "AKIA-PARTIAL",
+            "secret_key": "secret-partial",
+            "session_token": "sts-token",
+            "region": "us-east-2",
+            # endpoint / bucket / use_ssl intentionally absent.
+        }
+        merged = s3_config.with_overrides(overrides)
+
+        assert merged.access_key == "AKIA-PARTIAL"
+        assert merged.session_token == "sts-token"
+        # Fields not in the override map keep the base values.
+        assert merged.endpoint == s3_config.endpoint
+        assert merged.bucket == s3_config.bucket
+        assert merged.use_ssl == s3_config.use_ssl

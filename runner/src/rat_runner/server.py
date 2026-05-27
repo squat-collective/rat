@@ -120,7 +120,17 @@ _STATUS_TO_PROTO: dict[RunStatus, int] = {
 
 
 def _s3_credentials_to_dict(creds: common_pb2.S3Credentials) -> dict[str, str]:
-    """Convert a proto S3Credentials message to a dict for S3Config.with_overrides()."""
+    """Convert a proto S3Credentials message to a dict for S3Config.with_overrides().
+
+    Precedence rule (per ADR-018): per-run overrides supplied here win over the
+    env-level S3 config baked into the runner container. Only fields that are
+    explicitly set on the wire are forwarded — empty fields fall back to the
+    runner's S3Config defaults via with_overrides().
+
+    SECURITY: credential values must NEVER be logged. Only the *presence* of
+    overrides may be logged — see the SubmitPipeline handler for the redacted
+    "applied S3 overrides" line.
+    """
     d: dict[str, str] = {}
     if creds.endpoint:
         d["endpoint"] = creds.endpoint
@@ -134,6 +144,8 @@ def _s3_credentials_to_dict(creds: common_pb2.S3Credentials) -> dict[str, str]:
         d["bucket"] = creds.bucket
     if creds.use_ssl:
         d["use_ssl"] = "true"
+    if creds.session_token:
+        d["session_token"] = creds.session_token
     return d
 
 
@@ -353,12 +365,18 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
         # Use platform-assigned run_id if provided (keeps archive folder names in sync)
         run_id = request.run_id if request.run_id else str(uuid.uuid4())
 
-        # Per-run S3 config overrides (STS credentials)
+        # Per-run S3 config overrides (typically STS credentials vended by the
+        # cloud provider plugin, see ADR-018). Precedence: per-run overrides
+        # win over the env-level S3Config baked into the container. The merged
+        # config is passed to the DuckDB engine and PyIceberg catalog used by
+        # this run only — the runner-wide self._s3_config is never mutated.
         s3_config = self._s3_config
+        overrides_applied = False
         if request.HasField("s3_credentials"):
-            s3_config = self._s3_config.with_overrides(
-                _s3_credentials_to_dict(request.s3_credentials)
-            )
+            override_dict = _s3_credentials_to_dict(request.s3_credentials)
+            if override_dict:
+                s3_config = self._s3_config.with_overrides(override_dict)
+                overrides_applied = True
 
         # Per-run env vars
         env: dict[str, str] = {}
@@ -404,6 +422,30 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
                 "trigger": request.trigger,
             },
         )
+
+        # Log only the *presence* of per-run S3 overrides — credential values
+        # must NEVER hit the logs. The boolean flags allow operators to
+        # diagnose "is the cloud plugin actually vending?" without exposing
+        # secrets.
+        if overrides_applied:
+            creds_msg = request.s3_credentials
+            logger.info(
+                "Applied per-run S3 overrides",
+                extra={
+                    **run_log_extras(run),
+                    "has_access_key": bool(creds_msg.access_key_id),
+                    "has_secret_key": bool(creds_msg.secret_access_key),
+                    "has_session_token": bool(creds_msg.session_token),
+                    "has_region": bool(creds_msg.region),
+                    "has_endpoint": bool(creds_msg.endpoint),
+                    "has_bucket": bool(creds_msg.bucket),
+                },
+            )
+        else:
+            logger.debug(
+                "No S3 overrides — using env-level S3Config",
+                extra=run_log_extras(run),
+            )
 
         # Write marker file before dispatching — if the process crashes during
         # execution, the marker will survive and be picked up on next startup.

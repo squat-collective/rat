@@ -93,6 +93,77 @@ class TestSubmitPipeline:
             )
         assert exc_info.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
+    @patch("rat_runner.server.execute_pipeline")
+    def test_s3_credentials_applied_without_logging_values(
+        self,
+        _mock_exec: None,
+        stub: runner_pb2_grpc.RunnerServiceStub,
+        service: RunnerServiceImpl,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """When SubmitPipeline carries S3Credentials, they merge into the per-run
+        config but their values must NEVER appear in logs (ADR-018 security).
+        """
+        creds = common_pb2.S3Credentials(
+            endpoint="s3.eu-west-3.amazonaws.com",
+            access_key_id="AKIA-LOGTEST",
+            secret_access_key="super-secret-value",
+            region="eu-west-3",
+            bucket="tenant-bucket",
+            session_token="sts-do-not-log",
+        )
+
+        with caplog.at_level("DEBUG", logger="rat_runner.server"):
+            resp = stub.SubmitPipeline(
+                runner_pb2.SubmitPipelineRequest(
+                    namespace="myns",
+                    layer=common_pb2.LAYER_SILVER,
+                    pipeline_name="orders",
+                    trigger="manual",
+                    s3_credentials=creds,
+                )
+            )
+
+        assert resp.run_id != ""
+
+        # The "applied" message should fire with presence flags only.
+        applied_records = [
+            r for r in caplog.records if "Applied per-run S3 overrides" in r.getMessage()
+        ]
+        assert applied_records, "Expected 'Applied per-run S3 overrides' info log"
+
+        # CRITICAL: no credential value may appear anywhere in the captured logs.
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        assert "AKIA-LOGTEST" not in joined
+        assert "super-secret-value" not in joined
+        assert "sts-do-not-log" not in joined
+
+    @patch("rat_runner.server.execute_pipeline")
+    def test_no_s3_credentials_uses_env_level_config(
+        self,
+        _mock_exec: None,
+        stub: runner_pb2_grpc.RunnerServiceStub,
+        service: RunnerServiceImpl,
+        s3_config: S3Config,
+    ):
+        """Without S3Credentials the runner falls back to its env-level S3Config.
+
+        Proves the no-cloud-plugin path keeps working (pipelines that don't
+        need per-run creds are not blocked by the integration).
+        """
+        resp = stub.SubmitPipeline(
+            runner_pb2.SubmitPipelineRequest(
+                namespace="myns",
+                layer=common_pb2.LAYER_SILVER,
+                pipeline_name="orders",
+                trigger="manual",
+            )
+        )
+        assert resp.run_id != ""
+        # The runner-wide config is preserved — it is the source of truth when
+        # no overrides are supplied.
+        assert service._s3_config is s3_config
+
 
 class TestGetRunStatus:
     @patch("rat_runner.server.execute_pipeline")
