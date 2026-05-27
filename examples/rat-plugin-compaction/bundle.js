@@ -247,8 +247,9 @@
     );
   }
 
-  window.__RAT_REGISTER_PLUGIN({
-    name: "compaction",
-    components: { CompactionApp: CompactionApp },
+  window.__RAT_REGISTER_PLUGIN("compaction", {
+    navItems: [{ label: "Compaction", icon: "boxes", href: "/x/compaction", priority: 14 }],
+    routes: [{ path: "/x/compaction", component: CompactionApp }],
   });
+  console.info("[compaction] registered with the portal");
 })();
