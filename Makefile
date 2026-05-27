@@ -187,8 +187,9 @@ sdk-build: ## Build TypeScript SDK
 	@echo "📦 Building SDK..."
 	@docker run --rm \
 		-v $$(pwd)/sdk-typescript:/app -w /app \
+		-e NODE_ENV=production \
 		$(NODE_IMAGE) \
-		sh -c "npm install && npm run build"
+		sh -c "npm install --include=dev && npm run build"
 	@echo "✅ SDK built"
 
 sdk-test: ## Test TypeScript SDK
