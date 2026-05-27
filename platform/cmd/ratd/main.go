@@ -347,14 +347,38 @@ func main() {
 		// Dedicated single-connection pool for the leader heartbeat ping.
 		// If RAT_HEARTBEAT_POOL_ENABLED=false, fall back to the shared pool
 		// (saves one Postgres connection in tiny single-instance setups).
+		//
+		// Resilience: retry with exponential backoff (1s, 2s, 4s, 8s) before
+		// giving up. On terminal failure, log a WARN and leave heartbeatPool
+		// nil — the downstream leader wiring (see pingPool fallback below)
+		// already handles nil by reusing the shared pool. We trade the
+		// pool-starvation guard for boot survivability so a transient
+		// Postgres slowness (Kubernetes parallel start, slow host) doesn't
+		// crash-loop ratd.
 		if os.Getenv("RAT_HEARTBEAT_POOL_ENABLED") != "false" {
-			hbPool, hbErr := postgres.NewHeartbeatPool(ctx, dbURL)
-			if hbErr != nil {
-				slog.Error("failed to connect heartbeat pool", "error", hbErr)
-				os.Exit(1)
+			var hbPool *pgxpool.Pool
+			var hbErr error
+			backoff := time.Second
+			for attempt := 1; attempt <= 5; attempt++ {
+				hbPool, hbErr = postgres.NewHeartbeatPool(ctx, dbURL)
+				if hbErr == nil {
+					break
+				}
+				slog.Warn("heartbeat pool connect attempt failed",
+					"attempt", attempt, "error", hbErr, "next_retry_in", backoff)
+				if attempt < 5 {
+					time.Sleep(backoff)
+					backoff *= 2
+				}
 			}
-			heartbeatPool = hbPool
-			closeHeartbeatPool = func() { heartbeatPool.Close() }
+			if hbErr != nil {
+				slog.Warn("heartbeat pool unavailable after retries — falling back to shared pool; "+
+					"pool-starvation guard disabled", "error", hbErr)
+				// heartbeatPool stays nil; downstream code already handles this.
+			} else {
+				heartbeatPool = hbPool
+				closeHeartbeatPool = func() { heartbeatPool.Close() }
+			}
 		} else {
 			slog.Info("heartbeat pool disabled — falling back to shared pool",
 				"env", "RAT_HEARTBEAT_POOL_ENABLED=false")
