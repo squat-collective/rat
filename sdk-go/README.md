@@ -57,6 +57,38 @@ go sdk.PhoneHomeLoop(env.RatdInternalURL, env.Name, env.Addr)
 - `TokenAuth(expected string, next http.Handler) http.Handler` — middleware
   with `/health` and `/bundle.js` allowlisted.
 - `PhoneHome(ctx, internalURL, name, addr, maxAttempts) error` / `PhoneHomeLoop(...)`.
+- `PhoneHomeWithOptions(ctx, internalURL, name, addr, opts) error` / `PhoneHomeLoopWithOptions(...)`.
+
+### Phone-home retry schedule
+
+`PhoneHomeLoop` calls `PhoneHomeWithOptions` with `DefaultPhoneHomeOptions()`:
+
+| Option           | Default | Meaning                                  |
+|------------------|---------|------------------------------------------|
+| `MaxAttempts`    | `10`    | total register attempts including the first |
+| `InitialBackoff` | `1s`    | pause before attempt #2 (attempt #1 fires immediately) |
+| `MaxBackoff`     | `30s`   | cap for the exponential growth           |
+
+That produces this curve (wait before each attempt):
+
+```
+attempt 1 → 0s     (immediate)
+attempt 2 → 1s
+attempt 3 → 2s
+attempt 4 → 4s
+attempt 5 → 8s
+attempt 6 → 16s
+attempt 7..10 → 30s each (capped)
+total wall-clock ≈ 3 minutes for 10 attempts
+```
+
+The slow ramp + cap is deliberate: a crashlooping or compromised plugin
+cannot hammer ratd's internal listener as fast as the old fixed-2s
+schedule allowed. Previously: 30 attempts × 2s = constant 60s of pressure.
+Now: at most one register every ~30s once the curve flattens.
+
+Use `PhoneHomeLoopWithOptions(url, name, addr, opts)` if you need a
+tighter or looser schedule (CI smoke tests, slow-boot plugins, etc).
 - `LoadPluginEnv(defaultName, defaultPort, defaultAddr) PluginEnv`.
 - `MountStandardPluginRoutes(mux, pluginHandler, bundleJS, token, restMux) http.Handler`.
 - `H2CHandler(h http.Handler) http.Handler` — h2c wrapper.
