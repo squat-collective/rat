@@ -60,6 +60,7 @@ services:
       postgres: { condition: service_healthy }
       minio: { condition: service_healthy }
       nessie: { condition: service_healthy }
+      nessie-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "/ratd", "healthcheck"]
       interval: 5s
@@ -108,6 +109,7 @@ services:
     depends_on:
       minio: { condition: service_healthy }
       nessie: { condition: service_healthy }
+      nessie-init: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "python", "-c", "import grpc; ch=grpc.insecure_channel('localhost:50051'); grpc.channel_ready_future(ch).result(timeout=2)"]
@@ -160,6 +162,7 @@ services:
     depends_on:
       minio: { condition: service_healthy }
       nessie: { condition: service_healthy }
+      nessie-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "python", "-c", "import grpc; ch=grpc.insecure_channel('localhost:50052'); grpc.channel_ready_future(ch).result(timeout=2)"]
       interval: 10s
@@ -371,6 +374,51 @@ services:
           memory: 512M
           cpus: '1.0'
           pids: 100
+    logging: *default-logging
+    networks:
+      - backend
+
+  # ── Nessie Init (give main a real ancestor commit) ───────────
+  # Fresh Nessie 0.99 starts main at genesis (zero commits). The runner
+  # creates a branch from main, writes a commit, and tries to merge —
+  # but Nessie's merge endpoint returns 404 "no common ancestor" when
+  # both branches descend from an empty genesis. One bootstrap commit
+  # on main fixes it for all future runs.
+  #
+  # Idempotent: skips the commit if main already has history (existing
+  # installs that bootstrapped some other way are unaffected).
+  nessie-init:
+    image: alpine:3.20
+    depends_on:
+      nessie: { condition: service_healthy }
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache curl jq >/dev/null 2>&1
+        MAIN_HASH=$$(curl -fs http://nessie:19120/api/v2/trees/main | jq -r .reference.hash)
+        COMMITS=$$(curl -fs 'http://nessie:19120/api/v2/trees/main/history?max-records=1' | jq '.logEntries | length')
+        if [ "$$COMMITS" = "0" ]; then
+          echo "main has no commits — seeding bootstrap commit"
+          curl -fsS -X POST "http://nessie:19120/api/v2/trees/main@$$MAIN_HASH/history/commit" \
+            -H 'Content-Type: application/json' \
+            -d '{"commitMeta":{"message":"bootstrap: give main an ancestor commit"},"operations":[{"type":"PUT","key":{"elements":["__bootstrap"]},"content":{"type":"NAMESPACE","elements":["__bootstrap"],"properties":{}}}]}'
+          echo " bootstrap commit created"
+        else
+          echo "main already has $$COMMITS+ commits — no bootstrap needed"
+        fi
+    restart: on-failure
+    # Security hardening
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+          pids: 50
     logging: *default-logging
     networks:
       - backend
