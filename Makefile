@@ -122,7 +122,13 @@ test-ts: sdk-test ## Run all TypeScript tests (SDK + portal)
 
 test-integration: ## Run Go integration tests against real Postgres + MinIO
 	@echo "🐘 Starting test services (Postgres + MinIO)..."
-	@$(COMPOSE_TEST) --profile test up -d --wait
+	# Only --wait the long-running services. minio-test-init is a one-shot
+	# bucket-setup container that exits 0 — modern `compose up --wait` treats
+	# any container exiting (even cleanly) as a failure, so we wait on the
+	# stateful services first, then run the init to completion separately.
+	@$(COMPOSE_TEST) --profile test up -d --wait postgres-test minio-test
+	@echo "🪣 Initialising test bucket..."
+	@$(COMPOSE_TEST) --profile test run --rm minio-test-init
 	@echo "🧪 Running integration tests..."
 	@docker run --rm \
 		-v $$(pwd)/platform:/app -w /app \
