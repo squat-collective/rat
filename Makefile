@@ -10,6 +10,7 @@ GO_IMAGE := golang:1.24-alpine
 GO_TEST_IMAGE := golang:1.24
 GO_LINT_IMAGE := golangci/golangci-lint:v1.64.8
 RUFF_VERSION := 0.6.9
+GITLEAKS_IMAGE := zricethezav/gitleaks:v8.18.4
 PY_IMAGE := python:3.12-slim
 PY_TEST_RUNNER_IMAGE := rat-runner-test
 PY_TEST_QUERY_IMAGE := rat-query-test
@@ -72,19 +73,44 @@ status: ## Show service status
 	$(COMPOSE) ps
 
 # ── Testing ─────────────────────────────────────────────────────
-ci: ## Full local CI mirror — lint + golangci + all unit tests. Run before merging.
+ci: ## Full local CI mirror — lint + golangci + security + all unit tests. Run before merging.
 	@echo "🔁 make ci — mirroring CI gates locally (pinned tools)"
 	@$(MAKE) lint
 	@$(MAKE) lint-go-strict
+	@$(MAKE) security
 	@$(MAKE) test-go test-py test-ts
 	@echo "✅ make ci passed — safe to push/merge"
 
-ci-quick: ## Fast pre-push gate — all linters + Go unit tests (no Python/TS test suites).
-	@echo "⚡ make ci-quick — lint + Go tests (the cheap, high-frequency failures)"
+ci-quick: ## Fast pre-push gate — linters + secret scan + Go unit tests (no Py/TS suites or vuln scan).
+	@echo "⚡ make ci-quick — lint + secret scan + Go tests (the cheap, high-frequency failures)"
 	@$(MAKE) lint
 	@$(MAKE) lint-go-strict
+	@$(MAKE) security-secrets
 	@$(MAKE) test-go
 	@echo "✅ make ci-quick passed"
+
+security-secrets: ## Secret scan only (gitleaks, fast, BLOCKING). Part of ci-quick + the push gate.
+	@echo "🔐 gitleaks — secret scan (blocking)…"
+	@docker run --rm -v $$(pwd):/repo $(GITLEAKS_IMAGE) \
+		detect --source /repo --config /repo/.gitleaks.toml --no-git --no-banner --redact
+
+security: security-secrets ## Full security scan — secrets (blocking) + dependency vulns (report-only).
+	@echo "🔎 dependency vuln scan (report-only — triage, then promote to blocking)…"
+	@echo "  · govulncheck (Go)"
+	@docker run --rm -v $$(pwd)/platform:/app -w /app $(GO_TEST_IMAGE) \
+		sh -c "go install golang.org/x/vuln/cmd/govulncheck@latest >/dev/null 2>&1 && govulncheck ./..." \
+		|| echo "  ⚠️  govulncheck reported advisories (above) — triage in an issue"
+	@echo "  · npm audit (portal)"
+	@docker run --rm -v $$(pwd)/portal:/app -w /app $(NODE_IMAGE) \
+		sh -c "npm audit --audit-level=high" \
+		|| echo "  ⚠️  npm audit reported high+ advisories (above) — triage in an issue"
+	@echo "  · pip-audit (runner + query)"
+	@for svc in runner query; do \
+		docker run --rm -v $$(pwd)/$$svc:/app -w /app $(PY_IMAGE) \
+			sh -c "pip install -q uv pip-audit 2>/dev/null && uv export --no-dev --format requirements-txt > /tmp/r.txt 2>/dev/null && pip-audit -r /tmp/r.txt" \
+			|| echo "  ⚠️  pip-audit ($$svc) reported advisories (above) — triage in an issue"; \
+	done
+	@echo "✅ security: secret scan clean (dependency advisories above are informational for now)"
 
 test: test-go test-py test-ts ## Run ALL tests (Go + Python + TS — use `make -j3 test` for parallel)
 
