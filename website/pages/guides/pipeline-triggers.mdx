@@ -141,7 +141,7 @@ After creation, the API returns the webhook URL and the one-time token:
 {
   "id": "trigger-uuid",
   "webhook_url": "http://localhost:8080/api/v1/webhooks",
-  "webhook_token": "9f2c1ab7d4e8..."
+  "webhook_token": "rat_wh_a1b2c3d4e5f6..."
 }
 ```
 
@@ -149,7 +149,7 @@ Call the shared webhook endpoint, passing the token in the `X-Webhook-Token` hea
 
 ```bash filename="Terminal"
 curl -X POST http://localhost:8080/api/v1/webhooks \
-  -H "X-Webhook-Token: 9f2c1ab7d4e8..."
+  -H "X-Webhook-Token: rat_wh_a1b2c3d4e5f6..."
 ```
 
 <Callout type="warning">
