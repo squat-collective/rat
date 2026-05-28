@@ -169,6 +169,11 @@ func (rr *RoundRobinExecutor) SetOnRunComplete(fn func(ctx context.Context, run 
 	}
 }
 
+// ListRunnerPlugins delegates to the first runner (plugins are identical across replicas).
+func (rr *RoundRobinExecutor) ListRunnerPlugins(ctx context.Context) ([]domain.RunnerPlugin, error) {
+	return rr.executors[0].ListRunnerPlugins(ctx)
+}
+
 // ParseRunnerAddrs splits a comma-separated runner address string into
 // individual addresses, trimming whitespace. Returns nil if the input is empty.
 func ParseRunnerAddrs(raw string) []string {

@@ -22,6 +22,6 @@ export interface FeaturesResponse {
   namespaces: boolean;
   multi_user: boolean;
   landing_zones: boolean;
-  plugins: Record<string, PluginFeature>;
+  plugins?: Record<string, PluginFeature>;
   license?: LicenseInfo;
 }

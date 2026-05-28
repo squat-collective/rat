@@ -1,0 +1,44 @@
+# gitleaks config for RAT. Extends the default rules, then allowlists the
+# well-known DEV/TEST defaults that legitimately appear in the repo (compose
+# files, docs, examples). These are never real secrets — they're the public
+# defaults every contributor uses locally. Keep this list TIGHT: allowlist the
+# specific known-public strings, not broad paths, so a genuinely leaked secret
+# in the same file still trips the scanner.
+
+title = "RAT gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "RAT dev/test defaults — public by design, not secrets"
+regexTarget = "line"
+regexes = [
+  # MinIO dev root creds (the documented local default)
+  '''minioadmin''',
+  # Test-stack S3 creds (docker-compose.test.yml)
+  '''test-access-key''',
+  '''test-secret-key''',
+  # Postgres dev cred: postgres://rat:rat@…
+  '''rat:rat@''',
+  # The example/illustrative JWT in docs/config.md (RS256 header prefix)
+  '''eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9''',
+  # Doc placeholder tokens (obvious dummy sequential hex) in website API docs
+  '''a1b2c3d4e5f6''',
+  '''rat_wh_a1b2c3''',
+]
+paths = [
+  # Historical/audit docs quote example findings verbatim — not live secrets.
+  '''docs/archive/.*''',
+  '''docs/reviews/.*''',
+  # Local-only / generated / vendored — gitignored, absent in a clean CI
+  # checkout. Allowlisted so a local `--no-git` scan matches CI.
+  '''\.claude/worktrees/.*''',
+  '''.*/\.venv/.*''',
+  '''.*/\.next/.*''',
+  '''.*/node_modules/.*''',
+  '''.*/gen/.*''',
+  '''.*\.lock$''',
+  '''.*/uv\.lock$''',
+  '''website/out/.*''',
+]

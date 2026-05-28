@@ -46,6 +46,22 @@ SET last_triggered_at = now(),
     updated_at = now()
 WHERE id = $1;
 
+-- name: UpdateTriggerFiredCAS :one
+-- Compare-and-swap fire of a trigger. Only updates when the current
+-- last_triggered_at matches the expected value (or both are NULL).
+-- Returns the updated row on success; pgx.ErrNoRows when another
+-- evaluation path already fired the trigger (the race-loser silently
+-- skips submission). IS NOT DISTINCT FROM handles the NULL == NULL case
+-- correctly so the very first fire (expected=NULL) succeeds.
+UPDATE pipeline_triggers
+SET last_triggered_at = sqlc.arg('new_triggered_at')::timestamptz,
+    last_run_id = $2,
+    updated_at = now()
+WHERE id = $1
+  AND last_triggered_at IS NOT DISTINCT FROM sqlc.narg('expected_last_triggered_at')::timestamptz
+RETURNING id, pipeline_id, type, config, enabled, cooldown_seconds,
+          last_triggered_at, last_run_id, created_at, updated_at;
+
 -- name: FindTriggersByType :many
 SELECT id, pipeline_id, type, config, enabled, cooldown_seconds,
        last_triggered_at, last_run_id, created_at, updated_at

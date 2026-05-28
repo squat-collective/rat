@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -155,6 +156,14 @@ func namespaceFromPath(path string) string {
 
 // validateFilePath rejects paths that could escape their namespace scope.
 // Returns an error message if the path is invalid, or "" if it's safe.
+//
+// chi auto-decodes URL params once, so a single-encoded "%2e%2e" arrives as
+// literal ".." and is caught below. A double-encoded "%252e%252e" decodes to
+// "%2e%2e", which is NOT a literal "..", so the check below would miss it.
+// To close that, we additionally decode the path one more time and re-check.
+// We also reject any path that still contains percent-encoded segments, since
+// chi has already decoded the wire-format once; legitimate paths should be
+// plain UTF-8 at this point.
 func validateFilePath(path string) string {
 	if path == "" {
 		return "path is required"
@@ -167,6 +176,13 @@ func validateFilePath(path string) string {
 	}
 	if strings.ContainsAny(path, "\x00\\") {
 		return "path contains invalid characters"
+	}
+	// Defense in depth: re-decode and check for traversal segments that were
+	// double-encoded (e.g. "%252e%252e/" -> "%2e%2e/" -> "../").
+	if decoded, err := url.PathUnescape(path); err == nil && decoded != path {
+		if strings.Contains(decoded, "..") {
+			return "path must not contain encoded '..'"
+		}
 	}
 	return ""
 }
@@ -205,6 +221,15 @@ func (s *Server) HandleWriteFile(w http.ResponseWriter, r *http.Request) {
 		if s.PipelineCache != nil {
 			s.PipelineCache.Delete(pipelineCacheKey(pipelineRef.Namespace, pipelineRef.Layer, pipelineRef.Name))
 		}
+	}
+
+	// Publish file_uploaded event (best-effort).
+	if s.EventBus != nil {
+		_ = s.EventBus.Publish(r.Context(), "file_uploaded", map[string]interface{}{
+			"path":      path,
+			"namespace": namespaceFromPath(path),
+			"size":      int64(len(req.Content)),
+		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -311,6 +336,15 @@ func (s *Server) HandleUploadFile(w http.ResponseWriter, r *http.Request) {
 		if s.PipelineCache != nil {
 			s.PipelineCache.Delete(pipelineCacheKey(pipelineRef.Namespace, pipelineRef.Layer, pipelineRef.Name))
 		}
+	}
+
+	// Publish file_uploaded event (best-effort).
+	if s.EventBus != nil {
+		_ = s.EventBus.Publish(r.Context(), "file_uploaded", map[string]interface{}{
+			"path":      destPath,
+			"namespace": namespaceFromPath(destPath),
+			"size":      header.Size,
+		})
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{

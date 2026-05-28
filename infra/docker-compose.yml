@@ -32,11 +32,18 @@ services:
       dockerfile: Dockerfile
     init: true
     ports:
-      - "8080:8080"          # REST API (public)
+      - "${RATD_PORT:-8080}:8080"          # REST API (public)
       # gRPC port 8081 is internal-only (container network)
     environment:
       # Listen on all interfaces inside the container (required for Docker port mapping)
       RAT_LISTEN_ADDR: "0.0.0.0:8080"
+      # Private listener for service-to-service callbacks (run-status from the
+      # runner, plugin phone-home). Bind to 0.0.0.0 inside the container so
+      # other containers on the bridge can reach it, but DO NOT publish this
+      # port to the host — that would defeat the trust boundary. The internal
+      # listener has NO authentication; its security model is "the network is
+      # the perimeter".
+      INTERNAL_LISTEN_ADDR: "0.0.0.0:8090"
       # Postgres
       DATABASE_URL: postgres://${POSTGRES_USER:-rat}:${POSTGRES_PASSWORD:-rat}@postgres:5432/rat?sslmode=disable
       # S3 (MinIO) — required for file storage (editor, upload, pipeline code)
@@ -53,6 +60,7 @@ services:
       postgres: { condition: service_healthy }
       minio: { condition: service_healthy }
       nessie: { condition: service_healthy }
+      nessie-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "/ratd", "healthcheck"]
       interval: 5s
@@ -89,9 +97,20 @@ services:
       # S3 — same creds as ratd, for DuckDB table reads
       <<: *s3-credentials
       NESSIE_URL: http://nessie:19120/api/v1
+      # Per-query timeout in seconds. A watchdog calls conn.interrupt()
+      # once the deadline passes; callers get DEADLINE_EXCEEDED. Override
+      # via QUERY_TIMEOUT_SECS in your .env (default: 60).
+      QUERY_TIMEOUT_SECS: "${QUERY_TIMEOUT_SECS:-60}"
+      # Federated user-data Postgres. ratq's DuckDB ATTACHes this on
+      # startup so queries can JOIN across Iceberg + Postgres (e.g.
+      # SELECT … FROM userdata.public.country_codes c JOIN
+      # shop.silver.orders_enriched o ON o.country = c.iso2).
+      POSTGRES_USERDATA_URL: "postgresql://${POSTGRES_USER:-rat}:${POSTGRES_PASSWORD:-rat}@postgres:5432/userdata"
     depends_on:
       minio: { condition: service_healthy }
       nessie: { condition: service_healthy }
+      nessie-init: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "python", "-c", "import grpc; ch=grpc.insecure_channel('localhost:50051'); grpc.channel_ready_future(ch).result(timeout=2)"]
       interval: 10s
@@ -126,15 +145,24 @@ services:
     # gRPC port 50052 is internal-only (container network)
     environment:
       GRPC_PORT: "50052"
-      # Push-based status callbacks — runner POSTs terminal status to ratd
-      # instead of waiting for ratd to poll. Eliminates N gRPC calls/interval.
-      RATD_CALLBACK_URL: http://ratd:8080
+      # Push-based status callbacks — runner POSTs terminal status to ratd's
+      # PRIVATE listener (8090, not the public 8080). Eliminates N gRPC
+      # calls/interval. The private listener has no auth and must never be
+      # exposed beyond the container network.
+      RATD_CALLBACK_URL: http://ratd:8090
       # S3 — same creds as ratd, for pipeline writes to Iceberg/Parquet
       <<: *s3-credentials
       NESSIE_URL: http://nessie:19120/api/v1
+      # Per-quality-test timeout. A runaway test (infinite loop, catastrophic
+      # cartesian join) would otherwise hang the runner thread; the watchdog
+      # calls conn.interrupt() once the deadline passes and the test is
+      # recorded as failed so the rest of the suite continues. Override via
+      # QUALITY_TEST_TIMEOUT_SECS in your .env (default: 60).
+      QUALITY_TEST_TIMEOUT_SECS: "${QUALITY_TEST_TIMEOUT_SECS:-60}"
     depends_on:
       minio: { condition: service_healthy }
       nessie: { condition: service_healthy }
+      nessie-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "python", "-c", "import grpc; ch=grpc.insecure_channel('localhost:50052'); grpc.channel_ready_future(ch).result(timeout=2)"]
       interval: 10s
@@ -143,13 +171,16 @@ services:
       start_period: 15s
     restart: unless-stopped
     stop_grace_period: 30s
+    volumes:
+      - ../examples:/plugins:ro           # Example runner plugins (read-only mount)
     # Security hardening
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs:
       - /tmp
-      - /home/runner/.duckdb:uid=1000,gid=1000,exec    # DuckDB extension install dir
+      - /home/runner/.duckdb:exec,uid=1000,gid=1000  # DuckDB extension install dir
+      - /home/runner/.local:exec,uid=1000,gid=1000   # pip user installs (for plugins)
     # Resource limits
     deploy:
       resources:
@@ -202,13 +233,18 @@ services:
   postgres:
     image: postgres:16.4-alpine
     ports:
-      - "127.0.0.1:5432:5432"   # localhost-only for dev access
+      - "127.0.0.1:5433:5432"   # localhost-only for dev access (5433 to avoid host pg conflict)
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-rat}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rat}
       POSTGRES_DB: rat
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # /docker-entrypoint-initdb.d/ runs SQL files in lexical order on
+      # FIRST startup only (when the data dir is empty). 01-create-
+      # userdata.sql creates the 'userdata' database the federated
+      # query layer attaches to.
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rat}"]
       interval: 5s
@@ -238,8 +274,8 @@ services:
     image: minio/minio:RELEASE.2024-06-13T22-53-53Z
     command: server /data --console-address ":9001"
     ports:
-      - "127.0.0.1:9000:9000"   # S3 API (localhost-only, presigned URLs use localhost)
-      - "127.0.0.1:9001:9001"   # Console (localhost-only)
+      - "127.0.0.1:9002:9000"   # S3 API (9002 to avoid host conflict on 9000)
+      - "127.0.0.1:9003:9001"   # Console (9003 to avoid host conflict)
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
@@ -338,6 +374,51 @@ services:
           memory: 512M
           cpus: '1.0'
           pids: 100
+    logging: *default-logging
+    networks:
+      - backend
+
+  # ── Nessie Init (give main a real ancestor commit) ───────────
+  # Fresh Nessie 0.99 starts main at genesis (zero commits). The runner
+  # creates a branch from main, writes a commit, and tries to merge —
+  # but Nessie's merge endpoint returns 404 "no common ancestor" when
+  # both branches descend from an empty genesis. One bootstrap commit
+  # on main fixes it for all future runs.
+  #
+  # Idempotent: skips the commit if main already has history (existing
+  # installs that bootstrapped some other way are unaffected).
+  nessie-init:
+    image: alpine:3.20
+    depends_on:
+      nessie: { condition: service_healthy }
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache curl jq >/dev/null 2>&1
+        MAIN_HASH=$$(curl -fs http://nessie:19120/api/v2/trees/main | jq -r .reference.hash)
+        COMMITS=$$(curl -fs 'http://nessie:19120/api/v2/trees/main/history?max-records=1' | jq '.logEntries | length')
+        if [ "$$COMMITS" = "0" ]; then
+          echo "main has no commits — seeding bootstrap commit"
+          curl -fsS -X POST "http://nessie:19120/api/v2/trees/main@$$MAIN_HASH/history/commit" \
+            -H 'Content-Type: application/json' \
+            -d '{"commitMeta":{"message":"bootstrap: give main an ancestor commit"},"operations":[{"type":"PUT","key":{"elements":["__bootstrap"]},"content":{"type":"NAMESPACE","elements":["__bootstrap"],"properties":{}}}]}'
+          echo " bootstrap commit created"
+        else
+          echo "main already has $$COMMITS+ commits — no bootstrap needed"
+        fi
+    restart: on-failure
+    # Security hardening
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+          pids: 50
     logging: *default-logging
     networks:
       - backend

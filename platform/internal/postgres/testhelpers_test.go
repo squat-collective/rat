@@ -46,8 +46,10 @@ func cleanTables(t *testing.T, pool *pgxpool.Pool) {
 	tables := []string{
 		"landing_files", "landing_zones",
 		"quality_results", "quality_tests",
-		"schedules", "runs", "pipelines", "namespaces",
-		"plugins",
+		"pipeline_triggers", "schedules", "runs", "pipelines", "namespaces",
+		// Renamed from "plugins" in migration 016. The old slot-based table
+		// no longer exists.
+		"plugin_catalog",
 	}
 	for _, table := range tables {
 		if _, err := pool.Exec(ctx, "TRUNCATE "+table+" CASCADE"); err != nil {

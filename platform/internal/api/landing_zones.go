@@ -127,7 +127,7 @@ func (s *Server) HandleCreateLandingZone(w http.ResponseWriter, r *http.Request)
 	}
 
 	if user := plugins.UserFromContext(r.Context()); user != nil {
-		zone.Owner = &user.UserId
+		zone.Owner = &user.UserID
 	}
 
 	if err := s.LandingZones.CreateZone(r.Context(), zone); err != nil {
@@ -318,7 +318,7 @@ func (s *Server) HandleUploadLandingFile(w http.ResponseWriter, r *http.Request)
 	}
 
 	if user := plugins.UserFromContext(r.Context()); user != nil {
-		lf.UploadedBy = &user.UserId
+		lf.UploadedBy = &user.UserID
 	}
 
 	if err := s.LandingZones.CreateFile(r.Context(), lf); err != nil {

@@ -45,3 +45,24 @@ func (a *PluginAuthorizer) CanAccess(ctx context.Context, userID, resourceType, 
 	// No enforcement plugin = deny non-owners.
 	return false, nil
 }
+
+// Filter returns the subset of resourceIDs the user can access. Default
+// implementation loops CanAccess per ID — fine for the typical Pro page
+// size (≤100 items). When the enforcement plugin grows a batch RPC we
+// can swap this for one round-trip.
+func (a *PluginAuthorizer) Filter(ctx context.Context, userID, resourceType, action string, resourceIDs []string) ([]string, error) {
+	if len(resourceIDs) == 0 {
+		return resourceIDs, nil
+	}
+	allowed := make([]string, 0, len(resourceIDs))
+	for _, id := range resourceIDs {
+		ok, err := a.CanAccess(ctx, userID, resourceType, id, action)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			allowed = append(allowed, id)
+		}
+	}
+	return allowed, nil
+}

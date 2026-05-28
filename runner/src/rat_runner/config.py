@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Iterable  # noqa: TCH003 — used at runtime by validate_pipeline_config
 from dataclasses import dataclass
 
 import boto3
@@ -122,10 +123,24 @@ class DuckDBConfig:
     """DuckDB resource limits.
 
     Canonical version — query/src/rat_query/config.py must stay aligned.
+
+    `query_timeout_seconds` is consumed by ratq's engine (watchdog-driven
+    conn.interrupt()) to bound user-submitted SQL. The runner currently
+    ignores it — pipeline SQL is plugin-author-controlled rather than
+    user-facing — but the field is mirrored here so the two configs do
+    not drift.
+
+    `quality_test_timeout_seconds` is runner-only. Quality test SQL is
+    author-written but can still hang the run thread (infinite recursion,
+    catastrophic cartesian join, etc.). The runner's engine.query_arrow()
+    consumes this field as the per-test deadline via the same watchdog
+    pattern. Tunable via QUALITY_TEST_TIMEOUT_SECS (default 60s).
     """
 
     memory_limit: str = "2GB"
     threads: int = 4
+    query_timeout_seconds: int = 60
+    quality_test_timeout_seconds: int = 60
 
     @classmethod
     def from_env(cls) -> DuckDBConfig:
@@ -138,9 +153,37 @@ class DuckDBConfig:
             ) from None
         if threads < 1:
             raise ValueError(f"DUCKDB_THREADS must be a positive integer, got {threads}")
+
+        raw_timeout = os.environ.get("QUERY_TIMEOUT_SECS", "60")
+        try:
+            query_timeout_seconds = int(raw_timeout)
+        except ValueError:
+            raise ValueError(
+                f"QUERY_TIMEOUT_SECS must be a valid integer, got {raw_timeout!r}"
+            ) from None
+        if query_timeout_seconds < 1:
+            raise ValueError(
+                f"QUERY_TIMEOUT_SECS must be a positive integer, got {query_timeout_seconds}"
+            )
+
+        raw_qt_timeout = os.environ.get("QUALITY_TEST_TIMEOUT_SECS", "60")
+        try:
+            quality_test_timeout_seconds = int(raw_qt_timeout)
+        except ValueError:
+            raise ValueError(
+                f"QUALITY_TEST_TIMEOUT_SECS must be a valid integer, got {raw_qt_timeout!r}"
+            ) from None
+        if quality_test_timeout_seconds < 1:
+            raise ValueError(
+                "QUALITY_TEST_TIMEOUT_SECS must be a positive integer, "
+                f"got {quality_test_timeout_seconds}"
+            )
+
         return cls(
             memory_limit=os.environ.get("DUCKDB_MEMORY_LIMIT", "2GB"),
             threads=threads,
+            query_timeout_seconds=query_timeout_seconds,
+            quality_test_timeout_seconds=quality_test_timeout_seconds,
         )
 
 
@@ -178,12 +221,19 @@ class NessieConfig:
         return self._host_url + "/api/v2"
 
 
-def validate_pipeline_config(data: dict[str, object]) -> None:
+def validate_pipeline_config(
+    data: dict[str, object],
+    known_strategies: Iterable[str] | None = None,
+) -> None:
     """Validate pipeline config keys and values.
 
     Warns on unknown keys (backward-compatible — does not reject them) and
     raises ValueError for invalid values in fields that have a known set of
     valid options (merge_strategy, materialized).
+
+    ``known_strategies`` extends the accepted merge strategies beyond the six
+    built-ins — pass the names discovered by the runner plugin registry so
+    custom strategy plugins are not rejected. When None, only built-ins pass.
     """
     # Warn on unknown keys so users catch typos early.
     unknown_keys = set(data.keys()) - _KNOWN_CONFIG_KEYS
@@ -195,10 +245,11 @@ def validate_pipeline_config(data: dict[str, object]) -> None:
     merge_strategy = data.get("merge_strategy")
     if merge_strategy is not None:
         strategy_str = str(merge_strategy)
-        if not MergeStrategy.validate(strategy_str):
+        plugin_strategies = set(known_strategies or ())
+        if not MergeStrategy.validate(strategy_str) and strategy_str not in plugin_strategies:
+            valid = sorted({m.value for m in MergeStrategy} | plugin_strategies)
             raise ValueError(
-                f"Invalid merge_strategy '{strategy_str}'. "
-                f"Must be one of: {', '.join(sorted(m.value for m in MergeStrategy))}"
+                f"Invalid merge_strategy '{strategy_str}'. " f"Must be one of: {', '.join(valid)}"
             )
 
     # Validate materialized — only "table" and "view" are supported.
@@ -258,17 +309,23 @@ def _parse_partition_by(raw: object) -> tuple[PartitionByEntry, ...]:
     return tuple(entries)
 
 
-def parse_pipeline_config(yaml_str: str) -> PipelineConfig:
+def parse_pipeline_config(
+    yaml_str: str,
+    known_strategies: Iterable[str] | None = None,
+) -> PipelineConfig:
     """Parse a pipeline config.yaml string into PipelineConfig.
 
     Validates the config after parsing: warns on unknown keys and raises
     ValueError for invalid merge_strategy or materialized values.
+
+    ``known_strategies`` is forwarded to :func:`validate_pipeline_config` so
+    plugin-provided merge strategies are accepted.
     """
     data = yaml.safe_load(yaml_str)
     if not isinstance(data, dict):
         return PipelineConfig()
 
-    validate_pipeline_config(data)
+    validate_pipeline_config(data, known_strategies)
 
     unique_key_raw = data.get("unique_key", [])
     if isinstance(unique_key_raw, str):
@@ -303,7 +360,7 @@ def parse_pipeline_config(yaml_str: str) -> PipelineConfig:
         description=str(data.get("description", "")),
         materialized=str(data.get("materialized", "table")),
         unique_key=unique_key,
-        merge_strategy=MergeStrategy(str(data.get("merge_strategy", "full_refresh"))),
+        merge_strategy=str(data.get("merge_strategy", "full_refresh")),
         watermark_column=str(data.get("watermark_column", "")),
         archive_landing_zones=str(data.get("archive_landing_zones", "false")).lower() == "true",
         partition_column=str(data.get("partition_column", "")),
@@ -344,9 +401,7 @@ def merge_configs(
         description=annotations.get("description", b.description),
         materialized=annotations.get("materialized", b.materialized),
         unique_key=unique_key,
-        merge_strategy=MergeStrategy(annotations["merge_strategy"])
-        if "merge_strategy" in annotations
-        else b.merge_strategy,
+        merge_strategy=annotations.get("merge_strategy", b.merge_strategy),
         watermark_column=annotations.get("watermark_column", b.watermark_column),
         archive_landing_zones=(
             annotations["archive_landing_zones"].lower() == "true"

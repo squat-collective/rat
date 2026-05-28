@@ -20,6 +20,16 @@ logger = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
+# Public so callers (e.g. executor.py) can describe retry behaviour in
+# their own error messages without hard-coding a magic number.
+BRANCH_CREATE_MAX_RETRIES = 3
+
+# Number of attempts merge_branch will make when the merge POST returns 409
+# CONFLICT — meaning the target ref (main) moved between our GET and our
+# POST, typically because a concurrent run merged first. Each attempt
+# re-fetches the target hash and re-posts.
+MERGE_CONFLICT_MAX_RETRIES = 3
+
 
 def _is_transient_error(exc: Exception) -> bool:
     """Return True if the exception is a transient HTTP or connection error.
@@ -112,7 +122,7 @@ def _encode_branch(name: str) -> str:
     return urllib.parse.quote(name, safe="")
 
 
-@retry_on_transient()
+@retry_on_transient(max_retries=BRANCH_CREATE_MAX_RETRIES)
 def create_branch(
     nessie_config: NessieConfig,
     branch_name: str,
@@ -121,6 +131,9 @@ def create_branch(
     """Create a new Nessie branch from an existing branch.
 
     Returns the hash of the new branch head.
+    Retries transient errors (5xx / network / timeout) up to
+    BRANCH_CREATE_MAX_RETRIES times with exponential backoff; permanent
+    errors (4xx, invalid name) raise immediately.
     Idempotent: if the branch already exists (409 Conflict), returns its current hash.
     """
     _validate_branch_name(branch_name)
@@ -130,25 +143,28 @@ def create_branch(
     source_ref = _get_reference(nessie_config, from_branch)
     source_hash = source_ref["hash"]
 
-    url = f"{nessie_config.api_v2_url}/trees"
-    payload = {
+    # Nessie v2 POST /trees uses query parameters for the new branch's
+    # name/type, and the request body is the source Reference (NOT a
+    # wrapped {name,type,reference:{...}} object as some older clients
+    # documented). The response wraps the created branch under a
+    # "reference" key. Both shapes verified against Nessie 0.99.x.
+    url = (
+        f"{nessie_config.api_v2_url}/trees"
+        f"?name={urllib.parse.quote(branch_name, safe='')}&type=BRANCH"
+    )
+    source_payload = {
         "type": "BRANCH",
-        "name": branch_name,
-        "reference": {
-            "type": "BRANCH",
-            "name": from_branch,
-            "hash": source_hash,
-        },
+        "name": from_branch,
+        "hash": source_hash,
     }
-
-    data = json.dumps(payload).encode("utf-8")
+    data = json.dumps(source_payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
 
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             result = json.loads(resp.read().decode("utf-8"))
-            return result["hash"]
+            return result["reference"]["hash"]
     except urllib.error.HTTPError as e:
         if e.code == 409:
             # Branch already exists — return its current hash
@@ -163,22 +179,65 @@ def merge_branch(
     source: str,
     target: str = "main",
 ) -> None:
-    """Merge a source branch into a target branch."""
+    """Merge a source branch into a target branch.
+
+    Nessie v2 requires the target ref's current hash in the path using
+    the `{ref}@{hash}` syntax (the `expected-hash` query-string form is
+    not accepted on /history/merge — confirmed against Nessie 0.99.x).
+    Without it the merge returns 400 "Expected hash must be provided".
+
+    Failure classification:
+      * 5xx / URLError / TimeoutError — transient, retried by the outer
+        @retry_on_transient decorator with exponential backoff.
+      * 409 CONFLICT on the merge POST — the target ref moved between
+        our GET and our POST (another concurrent run merged first).
+        We refetch the target hash and retry up to MERGE_CONFLICT_MAX_RETRIES
+        times. This loop is local because the outer decorator treats all
+        4xx as permanent; only 409 on the merge endpoint is recoverable.
+      * Other 4xx — permanent, raised immediately.
+    """
     source_ref = _get_reference(nessie_config, source)
     source_hash = source_ref["hash"]
 
-    url = f"{nessie_config.api_v2_url}/trees/{_encode_branch(target)}/history/merge"
-    payload = {
-        "fromRefName": source,
-        "fromHash": source_hash,
-    }
+    # Refetch target hash on every attempt — that's the whole point of the
+    # 409 retry: another run moved `target` and we need the current head.
+    last_409: urllib.error.HTTPError | None = None
+    for attempt in range(MERGE_CONFLICT_MAX_RETRIES):
+        target_ref = _get_reference(nessie_config, target)
+        target_hash = target_ref["hash"]
 
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method="POST")
-    req.add_header("Content-Type", "application/json")
+        # Path-embed the expected target hash with @-syntax (URL-encoded).
+        target_path = _encode_branch(target) + urllib.parse.quote("@" + target_hash, safe="")
+        url = f"{nessie_config.api_v2_url}/trees/{target_path}/history/merge"
+        payload = {
+            "fromRefName": source,
+            "fromHash": source_hash,
+        }
 
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        resp.read()  # consume response
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp.read()  # consume response
+            return
+        except urllib.error.HTTPError as e:
+            if e.code != 409:
+                raise
+            last_409 = e
+            logger.warning(
+                "Nessie merge 409 CONFLICT on attempt %d/%d "
+                "(target %s moved during merge window) — refetching target hash",
+                attempt + 1,
+                MERGE_CONFLICT_MAX_RETRIES,
+                target,
+            )
+            # Loop: next iteration re-GETs target and re-POSTs.
+
+    # Exhausted 409 retries — surface the last 409 to the caller.
+    assert last_409 is not None
+    raise last_409
 
 
 def delete_branch(
@@ -209,8 +268,16 @@ def delete_branch(
 
 @retry_on_transient()
 def _get_reference(nessie_config: NessieConfig, branch_name: str) -> dict[str, str]:
-    """Get a Nessie branch reference (name + hash)."""
+    """Get a Nessie branch reference (returns the inner {type,name,hash}).
+
+    Nessie v2 GET /trees/{ref} wraps the reference in a top-level
+    `reference` key. We unwrap so callers can do `ref["hash"]` directly.
+    """
     url = f"{nessie_config.api_v2_url}/trees/{_encode_branch(branch_name)}"
     req = urllib.request.Request(url)
     with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        body = json.loads(resp.read().decode("utf-8"))
+    # Tolerate both shapes: the wrapped {"reference": {...}} returned by
+    # Nessie 0.99.x, and a raw {type,name,hash} if a future Nessie
+    # version flattens it.
+    return body.get("reference", body)

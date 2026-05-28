@@ -190,7 +190,12 @@ export function CreatePipelineDialog() {
 
       setOpen(false);
       resetForm();
-      mutate(KEYS.match.lineage);
+      // Refresh the pipelines list (and detail) so the new pipeline shows
+      // up without a manual reload. router.refresh() covers the Server
+      // Component list page (/pipelines), which serverApi populates and
+      // which SWR's mutate() can't touch.
+      await mutate(KEYS.match.pipelines);
+      router.refresh();
       router.push(`/pipelines/${effectiveNamespace}/${layer}/${name}?tab=code`);
     } catch (e) {
       console.error("Failed to create pipeline:", e);

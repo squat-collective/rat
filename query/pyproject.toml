@@ -1,6 +1,6 @@
 [project]
 name = "rat-query"
-version = "0.1.0a1"
+version = "0.2.0b1"
 description = "Interactive DuckDB query service for RAT data platform"
 requires-python = ">=3.12"
 dependencies = [
@@ -14,7 +14,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
-    "ruff>=0.5",
+    "ruff==0.6.9",
     "pyright>=1.1",
     "grpcio-tools>=1.65",
 ]
@@ -29,13 +29,15 @@ packages = ["src/rat_query"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-exclude = ["src/rat_query/gen"]
+# extend-exclude (not exclude) so ruff's built-in excludes (.venv, .git,
+# __pycache__, .ruff_cache, …) still apply on top of ours.
+extend-exclude = ["src/rat_query/gen"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "TCH"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["SIM117", "TC001", "TC002", "TC003", "B017", "N806", "E501"]
+"tests/**" = ["SIM117", "TCH001", "TCH002", "TCH003", "B017", "N806", "E501"]
 
 [tool.pyright]
 typeCheckingMode = "strict"

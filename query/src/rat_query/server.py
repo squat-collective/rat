@@ -20,8 +20,8 @@ from query.v1 import (
 
 from rat_query.arrow_ipc import columns_from_schema, table_to_ipc
 from rat_query.catalog import NessieCatalog
-from rat_query.config import DuckDBConfig, NessieConfig, S3Config
-from rat_query.engine import QueryEngine, _validate_identifier
+from rat_query.config import DuckDBConfig, NessieConfig, S3Config, UserDataPostgresConfig
+from rat_query.engine import QueryEngine, QueryTimeoutError, _validate_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -70,20 +70,29 @@ class QueryServiceImpl(query_pb2_grpc.QueryServiceServicer):
         nessie_config: NessieConfig,
         namespace: str = "default",
     ) -> None:
-        self._engine = QueryEngine(s3_config, DuckDBConfig.from_env())
+        self._engine = QueryEngine(
+            s3_config,
+            DuckDBConfig.from_env(),
+            UserDataPostgresConfig.from_env(),
+        )
         self._catalog = NessieCatalog(nessie_config, s3_config, self._engine)
         self._namespace = namespace
         self._refresh_stop = threading.Event()
 
-        # Initial discovery + registration
+        # Initial discovery + registration. register_all_tables enumerates
+        # every namespace Nessie knows about; passing the constructor's
+        # `namespace` as an extra ensures the default tenant is still
+        # registered even on a fresh database where it hasn't shown up in
+        # Nessie yet.
         try:
-            self._catalog.register_tables(namespace)
+            self._catalog.register_all_tables(extra_namespaces=[namespace])
         except Exception:
             logger.exception("Initial catalog registration failed (will retry in background)")
 
         self._refresh_thread = threading.Thread(
             target=self._catalog.refresh_loop,
-            args=(namespace, self._refresh_stop),
+            args=(self._refresh_stop,),
+            kwargs={"extra_namespaces": [namespace]},
             daemon=True,
             name="catalog-refresh",
         )
@@ -106,6 +115,15 @@ class QueryServiceImpl(query_pb2_grpc.QueryServiceServicer):
             start = time.monotonic()
             table = self._engine.query_arrow(sql, limit)
             duration_ms = int((time.monotonic() - start) * 1000)
+        except QueryTimeoutError as e:
+            # Surface as DEADLINE_EXCEEDED so callers can distinguish a
+            # timeout from a generic INTERNAL failure. The detail message
+            # already includes the configured timeout — safe to surface
+            # verbatim (no path/internal leakage).
+            logger.warning("Query timed out: %s", e)
+            context.set_code(grpc.StatusCode.DEADLINE_EXCEEDED)
+            context.set_details(f"Query timed out: {e}")
+            return query_pb2.ExecuteQueryResponse()
         except Exception as e:
             logger.error("Query execution failed: %s", e)
             context.set_code(grpc.StatusCode.INTERNAL)
@@ -201,6 +219,11 @@ class QueryServiceImpl(query_pb2_grpc.QueryServiceServicer):
         try:
             sql = f'SELECT * FROM "{layer}"."{name}"'
             table = self._engine.query_arrow(sql, limit)
+        except QueryTimeoutError as e:
+            logger.warning("PreviewTable timed out for %s.%s: %s", layer, name, e)
+            context.set_code(grpc.StatusCode.DEADLINE_EXCEEDED)
+            context.set_details(f"Preview timed out: {e}")
+            return query_pb2.PreviewTableResponse()
         except Exception as e:
             logger.error("PreviewTable failed for %s.%s: %s", layer, name, e)
             context.set_code(grpc.StatusCode.NOT_FOUND)
@@ -222,7 +245,10 @@ class QueryServiceImpl(query_pb2_grpc.QueryServiceServicer):
         request: query_pb2.ListTablesRequest,
         context: grpc.ServicerContext,
     ) -> query_pb2.ListTablesResponse:
-        namespace = request.namespace or self._namespace
+        # Empty namespace means "no filter — list every namespace". The old
+        # code defaulted to self._namespace ("default"), which silently
+        # hid every other namespace's tables from /api/v1/tables.
+        namespace = request.namespace
         layer_filter = _LAYER_MAP.get(request.layer, "")
 
         tables = self._catalog.get_tables(namespace, layer_filter)

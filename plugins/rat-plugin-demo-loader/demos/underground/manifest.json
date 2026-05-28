@@ -1,0 +1,114 @@
+{
+  "id": "underground",
+  "name": "🎤 Underground",
+  "description": "DIY venues, gigs and attendees from the underground scene. Three bronze sources joined into a silver fact, aggregated to gold, with append-only history, rich documentation and a scheduled refresh.",
+  "namespace": "underground",
+  "pipelines": [
+    {
+      "layer": "bronze",
+      "name": "venues",
+      "type": "sql",
+      "description": "50 DIY venues — capacity, type, opening year. full_refresh strategy.",
+      "file": "bronze/venues.sql",
+      "table_metadata": {
+        "description": "Underground venues catalogue. Stable reference data, refreshed in full each run.",
+        "column_descriptions": {
+          "venue_id": "Synthetic primary key.",
+          "venue_name": "Human name of the venue, e.g. 'Squat de la Lune #3'.",
+          "city": "European city where the venue lives.",
+          "venue_type": "squat / warehouse / basement / collective.",
+          "capacity": "Maximum attendance the space can hold.",
+          "opened_year": "Year the venue first hosted gigs."
+        }
+      }
+    },
+    {
+      "layer": "bronze",
+      "name": "gigs",
+      "type": "sql",
+      "description": "500 gigs across the venues — APPEND_ONLY (each gig is an immutable event).",
+      "file": "bronze/gigs.sql",
+      "table_metadata": {
+        "description": "Gig history. Append-only: every run extends the schedule with new events; nothing is rewritten.",
+        "column_descriptions": {
+          "gig_id": "Synthetic primary key.",
+          "venue_id": "Foreign key into bronze.venues.",
+          "gig_date": "Date the gig happened.",
+          "artist": "Performing artist.",
+          "genre": "Musical genre.",
+          "sold_out": "Whether the gig sold out (~28% of the demo's gigs do)."
+        }
+      }
+    },
+    {
+      "layer": "bronze",
+      "name": "attendees",
+      "type": "sql",
+      "description": "5000 attendance records — who came to which gig and whether they paid.",
+      "file": "bronze/attendees.sql",
+      "table_metadata": {
+        "description": "Individual attendance records.",
+        "column_descriptions": {
+          "attendance_id": "Synthetic key.",
+          "gig_id": "Which gig the person attended.",
+          "person_id": "Anonymised attendee id.",
+          "paid": "Whether they paid at the door (75% paid in the demo data).",
+          "price_eur": "What they paid (0 for free entries / guest list)."
+        }
+      }
+    },
+    {
+      "layer": "silver",
+      "name": "gigs_with_venues",
+      "type": "sql",
+      "description": "Bronze gigs left-joined to bronze venues — uses ref() to read both upstreams.",
+      "file": "silver/gigs_with_venues.sql"
+    },
+    {
+      "layer": "silver",
+      "name": "attendance_per_gig",
+      "type": "sql",
+      "description": "Per-gig aggregate of attendance + paid count + revenue.",
+      "file": "silver/attendance_per_gig.sql"
+    },
+    {
+      "layer": "gold",
+      "name": "attendance_by_venue",
+      "type": "sql",
+      "description": "Per-venue lifetime attendance and revenue — the scene heatmap. Scheduled every 6 hours.",
+      "file": "gold/attendance_by_venue.sql"
+    },
+    {
+      "layer": "gold",
+      "name": "most_active_artists",
+      "type": "sql",
+      "description": "Artists ranked by total gigs and attendance pulled.",
+      "file": "gold/most_active_artists.sql"
+    }
+  ],
+  "quality_tests": [
+    {
+      "layer": "bronze",
+      "pipeline": "gigs",
+      "name": "gigs_have_venue",
+      "severity": "error",
+      "description": "Every gig must reference a venue_id.",
+      "file": "tests/gigs_have_venue.sql"
+    },
+    {
+      "layer": "silver",
+      "pipeline": "attendance_per_gig",
+      "name": "attendance_non_negative",
+      "severity": "error",
+      "description": "Attendance counts can never be negative.",
+      "file": "tests/attendance_non_negative.sql"
+    }
+  ],
+  "schedules": [
+    {
+      "layer": "gold",
+      "pipeline": "attendance_by_venue",
+      "cron": "0 */6 * * *"
+    }
+  ]
+}

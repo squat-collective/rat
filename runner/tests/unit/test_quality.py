@@ -6,7 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 
-from rat_runner.config import NessieConfig, S3Config
+from rat_runner.config import DuckDBConfig, NessieConfig, S3Config
+from rat_runner.engine import QueryTimeoutError
 from rat_runner.log import RunLogger
 from rat_runner.models import RunState
 from rat_runner.quality import (
@@ -36,8 +37,12 @@ def _make_run(**kwargs) -> RunState:
     return RunState(**defaults)
 
 
-def _make_engine() -> MagicMock:
+def _make_engine(quality_test_timeout_seconds: int = 60) -> MagicMock:
     engine = MagicMock()
+    # quality.py reads engine._duckdb_config.quality_test_timeout_seconds
+    # to compute the per-test deadline — populate a realistic config so the
+    # watchdog wiring receives the value we expect under test.
+    engine._duckdb_config = DuckDBConfig(quality_test_timeout_seconds=quality_test_timeout_seconds)
     return engine
 
 
@@ -632,3 +637,96 @@ class TestRunQualityTestEnhanced:
 
         assert result.status == "error"
         assert result.compiled_sql != ""
+
+
+class TestQualityTestTimeout:
+    """Tests for the per-quality-test watchdog timeout.
+
+    A runaway quality test (infinite loop, catastrophic cartesian join)
+    must not hang the runner. The engine's watchdog fires conn.interrupt()
+    once the QUALITY_TEST_TIMEOUT_SECS deadline passes; the resulting
+    QueryTimeoutError is caught in quality.py and recorded as a failed
+    test rather than propagating and crashing the whole quality suite.
+    """
+
+    def test_normal_test_passes_and_passes_timeout_through(
+        self, s3_config: S3Config, nessie_config: NessieConfig
+    ):
+        """A quality test that completes inside its deadline should pass
+        AND the engine must have received the configured timeout — proving
+        the watchdog is wired (not silently bypassed)."""
+        engine = _make_engine(quality_test_timeout_seconds=45)
+        engine.query_arrow.return_value = pa.table({"x": pa.array([], type=pa.int64())})
+        run = _make_run()
+        log = RunLogger(run)
+
+        result = run_quality_test(
+            "SELECT 1 WHERE false",
+            "myns/pipelines/silver/orders/tests/quality/not_null.sql",
+            engine,
+            "myns",
+            "silver",
+            "orders",
+            s3_config,
+            nessie_config,
+            log,
+        )
+
+        assert result.status == "pass"
+        assert result.row_count == 0
+        # The engine must have been called with the configured timeout —
+        # otherwise the watchdog would never fire on a runaway test.
+        _, kwargs = engine.query_arrow.call_args
+        assert kwargs.get("timeout_seconds") == 45
+
+    @patch("rat_runner.quality.read_s3_text_version")
+    def test_timeout_records_failure_and_suite_continues(
+        self,
+        mock_read_version: MagicMock,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+    ):
+        """When one test times out the runner must NOT crash — it must
+        record the timeout as a failed result and keep executing the next
+        quality test in the suite."""
+        # discover_quality_tests_versioned() returns keys sorted
+        # alphabetically, so prefix the runaway test with 'a_' to guarantee
+        # it runs first regardless of dict iteration order.
+        published_versions = {
+            "myns/pipelines/silver/orders/tests/quality/a_runaway.sql": "vid1",
+            "myns/pipelines/silver/orders/tests/quality/b_quick.sql": "vid2",
+        }
+        mock_read_version.return_value = "SELECT 1 WHERE false"
+
+        engine = _make_engine(quality_test_timeout_seconds=30)
+        # First call hits the watchdog timeout; second call completes
+        # normally — proves the loop continues past a timed-out test.
+        engine.query_arrow.side_effect = [
+            QueryTimeoutError("query exceeded 30s timeout"),
+            pa.table({"x": pa.array([], type=pa.int64())}),
+        ]
+
+        run = _make_run()
+        log = RunLogger(run)
+
+        results = run_quality_tests(
+            run,
+            engine,
+            s3_config,
+            nessie_config,
+            log,
+            published_versions=published_versions,
+        )
+
+        assert len(results) == 2
+
+        timed_out = results[0]
+        assert timed_out.test_name == "a_runaway"
+        assert timed_out.status == "fail"
+        assert "30s" in timed_out.message
+        assert "timeout" in timed_out.message.lower()
+
+        # The second test ran to completion despite the first timing out.
+        survived = results[1]
+        assert survived.test_name == "b_quick"
+        assert survived.status == "pass"

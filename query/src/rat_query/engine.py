@@ -9,7 +9,7 @@ import threading
 import duckdb
 import pyarrow as pa
 
-from rat_query.config import DuckDBConfig, S3Config
+from rat_query.config import DuckDBConfig, S3Config, UserDataPostgresConfig
 
 
 def _to_arrow_table(arrow_result: pa.Table | pa.RecordBatchReader) -> pa.Table:
@@ -61,8 +61,15 @@ _BLOCKED_FUNCTIONS = re.compile(
 # Maximum query length in characters (100KB) — prevents abuse via enormous queries.
 _MAX_QUERY_LENGTH = 100_000
 
-# Default query timeout in seconds — prevents runaway queries from consuming resources.
-_DEFAULT_QUERY_TIMEOUT_SECONDS = 30
+
+class QueryTimeoutError(RuntimeError):
+    """Raised when a query exceeds its per-query timeout.
+
+    The watchdog thread fires conn.interrupt() once the deadline passes; DuckDB
+    surfaces that as a duckdb.InterruptException which the engine re-raises as
+    this exception so callers can distinguish a timeout from a generic failure
+    (the server maps it to a DEADLINE_EXCEEDED gRPC status).
+    """
 
 
 def _strip_sql_comments(sql: str) -> str:
@@ -113,11 +120,21 @@ class QueryEngine:
     Unlike the runner engine (one connection per run), the query engine maintains
     a single persistent connection — DuckDB handles internal query parallelism.
     A threading.Lock protects DDL operations (view registration) only.
+
+    When userdata_pg is provided AND has a non-empty url, the connection
+    also ATTACHes that postgres database — making its tables queryable
+    alongside Iceberg ones (federated SELECT across both stores).
     """
 
-    def __init__(self, s3_config: S3Config, duckdb_config: DuckDBConfig | None = None) -> None:
+    def __init__(
+        self,
+        s3_config: S3Config,
+        duckdb_config: DuckDBConfig | None = None,
+        userdata_pg: UserDataPostgresConfig | None = None,
+    ) -> None:
         self._s3_config = s3_config
         self._duckdb_config = duckdb_config or DuckDBConfig()
+        self._userdata_pg = userdata_pg or UserDataPostgresConfig()
         self._conn = self._create_connection()
         self._ddl_lock = threading.Lock()
 
@@ -140,16 +157,43 @@ class QueryEngine:
         conn.execute("SET memory_limit = ?", [self._duckdb_config.memory_limit])
         conn.execute("SET threads = ?", [self._duckdb_config.threads])
 
+        # Optional: federated user-data Postgres. ATTACH makes the
+        # postgres tables queryable as `{alias}.{schema}.{table}` in any
+        # SELECT — DuckDB pushes filters down to postgres where it can.
+        if self._userdata_pg and self._userdata_pg.url:
+            try:
+                conn.execute("INSTALL postgres; LOAD postgres;")
+                # Single-quote escape — the URL is from env, not user input,
+                # but we still avoid string-format injection.
+                safe_url = self._userdata_pg.url.replace("'", "''")
+                safe_alias = _validate_identifier(self._userdata_pg.alias, "postgres alias")
+                conn.execute(
+                    f"ATTACH IF NOT EXISTS '{safe_url}' "
+                    f'AS "{safe_alias}" (TYPE postgres, READ_ONLY false)'
+                )
+                logger.info("attached userdata postgres as '%s'", safe_alias)
+            except Exception:
+                logger.exception(
+                    "failed to attach userdata postgres at %s — federation "
+                    "disabled, queries against userdata.* will fail",
+                    self._userdata_pg.url,
+                )
+
         return conn
 
     def register_view(
         self,
         schema: str,
         name: str,
-        s3_path: str,
+        metadata_location: str,
         namespace: str | None = None,
     ) -> None:
-        """Register a DuckDB view backed by parquet files at s3_path.
+        """Register a DuckDB view backed by an Iceberg table.
+
+        Reads the table via iceberg_scan() pointed at its current metadata.json.
+        This is snapshot-aware: data files superseded by overwrites/deletes are
+        correctly excluded, unlike a blind read_parquet() glob over the table
+        directory (which would also read stale, physically-retained files).
 
         Creates the view in two locations for query flexibility:
         1. "layer"."table" — allows `SELECT * FROM bronze.orders`
@@ -161,10 +205,9 @@ class QueryEngine:
         _validate_schema(schema)
         _validate_identifier(name, "table name")
         # DuckDB does not support prepared parameters in DDL (CREATE VIEW).
-        # The s3_path is built from validated schema/name components, so
-        # we safely inline it with single-quote escaping.
-        glob = f"{s3_path}/**/*.parquet".replace("'", "''")
-        view_sql = f"SELECT * FROM read_parquet('{glob}', hive_partitioning=true)"
+        # metadata_location is an S3 URI from Nessie — single-quote escape it.
+        safe_loc = metadata_location.replace("'", "''")
+        view_sql = f"SELECT * FROM iceberg_scan('{safe_loc}')"
         with self._ddl_lock:
             # 1. Register under layer.table (default catalog)
             self._conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
@@ -211,7 +254,7 @@ class QueryEngine:
         self,
         sql: str,
         limit: int = 1000,
-        timeout_seconds: int = _DEFAULT_QUERY_TIMEOUT_SECONDS,
+        timeout_seconds: int | None = None,
     ) -> pa.Table:
         """Execute SQL and return result as a PyArrow Table.
 
@@ -224,6 +267,16 @@ class QueryEngine:
         1. Query length limit (_MAX_QUERY_LENGTH)
         2. Blocked statement keywords (INSERT, DROP, etc.)
         3. Blocked functions (read_parquet, http_get, etc.)
+
+        Per-query timeout:
+            A watchdog threading.Timer calls self._conn.interrupt() after
+            ``timeout_seconds`` (defaults to DuckDBConfig.query_timeout_seconds).
+            DuckDB surfaces the interrupt as duckdb.InterruptException, which
+            we re-raise as QueryTimeoutError so the caller can map it to a
+            DEADLINE_EXCEEDED gRPC status. PRAGMA-based statement_timeout was
+            tried first but only bounds IO waits in DuckDB; pure-CPU runaways
+            (e.g. SELECT count(*) FROM range(huge)) ignore it. The watchdog
+            approach actually interrupts a busy execution loop.
         """
         if len(sql) > _MAX_QUERY_LENGTH:
             raise ValueError(f"Query too long ({len(sql)} chars, max {_MAX_QUERY_LENGTH})")
@@ -241,19 +294,36 @@ class QueryEngine:
         if limit > 0:
             wrapped = f"SELECT * FROM ({wrapped}) AS _q LIMIT {limit}"
 
-        # Set per-query timeout to prevent runaway queries (DuckDB 1.1+).
-        has_timeout = False
-        try:
-            self._conn.execute(f"SET statement_timeout='{timeout_seconds}s'")
-            has_timeout = True
-        except duckdb.CatalogException:
-            pass  # DuckDB version doesn't support statement_timeout
+        effective_timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else self._duckdb_config.query_timeout_seconds
+        )
+
+        timed_out = threading.Event()
+
+        def _on_deadline() -> None:
+            # Mark the timeout BEFORE calling interrupt so the except branch
+            # can reliably distinguish "user pressed cancel later" from
+            # "watchdog fired".
+            timed_out.set()
+            try:
+                self._conn.interrupt()
+            except Exception:
+                logger.exception("conn.interrupt() failed inside watchdog")
+
+        timer = threading.Timer(effective_timeout, _on_deadline)
+        timer.daemon = True
+        timer.start()
         try:
             result = self._conn.execute(wrapped)
             return _to_arrow_table(result.arrow())
+        except duckdb.InterruptException as e:
+            if timed_out.is_set():
+                raise QueryTimeoutError(f"query exceeded {effective_timeout}s timeout") from e
+            raise
         finally:
-            if has_timeout:
-                self._conn.execute("RESET statement_timeout")
+            timer.cancel()
 
     def describe_table(self, schema: str, name: str) -> list[tuple[str, str]]:
         """Return (column_name, column_type) pairs for a table/view."""

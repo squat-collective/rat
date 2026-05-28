@@ -182,3 +182,74 @@ class TestNotifyRunComplete:
         # Should NOT have double slash
         assert "//" not in captured_paths[0].replace("//", "", 1)
         assert captured_paths[0] == "/api/v1/internal/runs/test-run-123/status"
+
+    def test_echoes_x_request_id_when_run_has_one(self) -> None:
+        """When the run carries a request_id (propagated from ratd via
+        SubmitPipeline gRPC metadata), the callback POST must echo it in the
+        X-Request-ID header so ratd's chi RequestID middleware reuses the
+        same ID and the run is grep'able across both services' JSON logs."""
+
+        run = _make_terminal_run()
+        run.request_id = "trace-abcd-1234"
+
+        captured: dict[str, object] = {}
+
+        class FakeResp:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+        def fake_urlopen(req, timeout=None):  # noqa: ARG001
+            # Capture the headers as urllib stores them — case-preserving map.
+            captured["headers"] = dict(req.header_items())
+            captured["method"] = req.get_method()
+            captured["url"] = req.full_url
+            return FakeResp()
+
+        with (
+            patch("rat_runner.callback.RATD_CALLBACK_URL", "http://ratd:8090"),
+            patch("rat_runner.callback.urllib.request.urlopen", side_effect=fake_urlopen),
+        ):
+            notify_run_complete(run)
+
+        # urllib.request.Request canonicalises header names to title case so
+        # we compare via a case-insensitive lookup.
+        headers = {str(k).lower(): v for k, v in captured["headers"].items()}
+        assert headers.get("x-request-id") == "trace-abcd-1234"
+        assert headers.get("content-type") == "application/json"
+
+    def test_omits_x_request_id_when_run_has_none(self) -> None:
+        """No X-Request-ID header should be set when the run was submitted
+        without one (e.g. a legacy/test caller). Letting urllib auto-set
+        nothing is preferable to sending an empty string that would override
+        chi's auto-generated UUID on ratd's side."""
+        run = _make_terminal_run()
+        run.request_id = ""
+
+        captured: dict[str, object] = {}
+
+        class FakeResp:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+        def fake_urlopen(req, timeout=None):  # noqa: ARG001
+            captured["headers"] = dict(req.header_items())
+            return FakeResp()
+
+        with (
+            patch("rat_runner.callback.RATD_CALLBACK_URL", "http://ratd:8090"),
+            patch("rat_runner.callback.urllib.request.urlopen", side_effect=fake_urlopen),
+        ):
+            notify_run_complete(run)
+
+        headers = {str(k).lower(): v for k, v in captured["headers"].items()}
+        assert "x-request-id" not in headers

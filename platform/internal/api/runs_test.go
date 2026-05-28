@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rat-data/rat/platform/internal/api"
 	"github.com/rat-data/rat/platform/internal/domain"
+	"github.com/rat-data/rat/platform/internal/plugins"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -117,6 +119,10 @@ func (m *memoryRunStore) DeleteRunsOlderThan(_ context.Context, _ time.Time) (in
 }
 
 func (m *memoryRunStore) ListStuckRuns(_ context.Context, _ time.Time) ([]domain.Run, error) {
+	return nil, nil
+}
+
+func (m *memoryRunStore) ListStuckPendingRuns(_ context.Context, _ time.Time) ([]domain.Run, error) {
 	return nil, nil
 }
 
@@ -522,4 +528,179 @@ func TestGetRunLogs_NotFound_Returns404(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// --- Cloud-credential plumbing into the executor ---
+
+// captureExecutor records the *domain.Run passed to Submit so tests can inspect
+// the per-run S3Overrides populated by the cloud-plugin integration.
+type captureExecutor struct {
+	mu        sync.Mutex
+	submitted *domain.Run
+	pipeline  *domain.Pipeline
+	calls     int
+}
+
+func (c *captureExecutor) Submit(_ context.Context, run *domain.Run, p *domain.Pipeline) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	// Shallow copy is enough — we only read scalar fields and the map reference.
+	runCopy := *run
+	c.submitted = &runCopy
+	c.pipeline = p
+	return nil
+}
+func (c *captureExecutor) Cancel(_ context.Context, _ string) error { return nil }
+func (c *captureExecutor) GetLogs(_ context.Context, _ string) ([]api.LogEntry, error) {
+	return nil, nil
+}
+func (c *captureExecutor) Preview(_ context.Context, _ *domain.Pipeline, _ int, _ []string, _ string) (*api.PreviewResult, error) {
+	return nil, nil
+}
+func (c *captureExecutor) ValidatePipeline(_ context.Context, _ *domain.Pipeline) (*api.ValidationResult, error) {
+	return nil, nil
+}
+
+// fakeCloudProvider implements api.CloudProvider with configurable behaviour
+// and records the call args so tests can assert plumbing.
+type fakeCloudProvider struct {
+	enabled bool
+	creds   *domain.CloudCredentials
+	err     error
+
+	mu            sync.Mutex
+	lastUserID    string
+	lastNamespace string
+	calls         int
+}
+
+func (f *fakeCloudProvider) CloudEnabled() bool { return f.enabled }
+func (f *fakeCloudProvider) GetCredentials(_ context.Context, userID, namespace string) (*domain.CloudCredentials, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	f.lastUserID = userID
+	f.lastNamespace = namespace
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.creds, nil
+}
+
+// authMiddleware injects a fixed user into the request context so the
+// cloud-credentials code path in HandleCreateRun fires.
+func authMiddleware(userID string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := plugins.ContextWithUser(r.Context(), &domain.UserIdentity{
+				UserID: userID,
+				Email:  userID + "@rat.dev",
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+func TestHandleCreateRun_CloudCredentialsAttached(t *testing.T) {
+	srv, pipelineStore, _ := newRunTestServer()
+	pipelineStore.pipelines = []domain.Pipeline{
+		{ID: uuid.New(), Namespace: "default", Layer: domain.LayerSilver, Name: "orders"},
+	}
+
+	cloud := &fakeCloudProvider{
+		enabled: true,
+		creds: &domain.CloudCredentials{
+			AccessKey:    "AKIA-TEST",
+			SecretKey:    "shh-secret",
+			SessionToken: "sts-session-xyz",
+			Region:       "eu-west-3",
+			Expiry:       time.Now().Add(1 * time.Hour),
+		},
+	}
+	exec := &captureExecutor{}
+	srv.Cloud = cloud
+	srv.Executor = exec
+	srv.Auth = authMiddleware("alice")
+
+	router := api.NewRouter(srv)
+
+	body := `{"namespace":"default","layer":"silver","pipeline":"orders","trigger":"manual"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/runs", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	require.Equal(t, 1, cloud.calls, "cloud provider should be called exactly once")
+	assert.Equal(t, "alice", cloud.lastUserID)
+	assert.Equal(t, "default", cloud.lastNamespace)
+
+	require.Equal(t, 1, exec.calls, "executor should be dispatched exactly once")
+	require.NotNil(t, exec.submitted)
+	overrides := exec.submitted.S3Overrides
+	require.NotEmpty(t, overrides, "S3Overrides must be populated when cloud creds vended")
+	assert.Equal(t, "AKIA-TEST", overrides["access_key_id"])
+	assert.Equal(t, "shh-secret", overrides["secret_access_key"])
+	assert.Equal(t, "sts-session-xyz", overrides["session_token"])
+	assert.Equal(t, "eu-west-3", overrides["region"])
+}
+
+func TestHandleCreateRun_NoCloudProvider_NoOverrides(t *testing.T) {
+	srv, pipelineStore, _ := newRunTestServer()
+	pipelineStore.pipelines = []domain.Pipeline{
+		{ID: uuid.New(), Namespace: "default", Layer: domain.LayerSilver, Name: "orders"},
+	}
+
+	exec := &captureExecutor{}
+	// Server.Cloud is nil — non-cloud-aware deployment.
+	srv.Executor = exec
+	srv.Auth = authMiddleware("alice")
+
+	router := api.NewRouter(srv)
+
+	body := `{"namespace":"default","layer":"silver","pipeline":"orders","trigger":"manual"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/runs", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	require.Equal(t, 1, exec.calls, "executor should still be dispatched without a cloud plugin")
+	require.NotNil(t, exec.submitted)
+	assert.Empty(t, exec.submitted.S3Overrides, "S3Overrides must remain empty without a cloud provider")
+}
+
+func TestHandleCreateRun_CloudProviderError_RunProceedsWithoutOverrides(t *testing.T) {
+	srv, pipelineStore, _ := newRunTestServer()
+	pipelineStore.pipelines = []domain.Pipeline{
+		{ID: uuid.New(), Namespace: "default", Layer: domain.LayerSilver, Name: "orders"},
+	}
+
+	cloud := &fakeCloudProvider{
+		enabled: true,
+		err:     errors.New("STS AssumeRole denied"),
+	}
+	exec := &captureExecutor{}
+	srv.Cloud = cloud
+	srv.Executor = exec
+	srv.Auth = authMiddleware("alice")
+
+	router := api.NewRouter(srv)
+
+	body := `{"namespace":"default","layer":"silver","pipeline":"orders","trigger":"manual"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/runs", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	// The run is still accepted — non-cloud-aware pipelines must keep working
+	// even when the cloud plugin is broken.
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	require.Equal(t, 1, cloud.calls, "cloud provider should be consulted once")
+	require.Equal(t, 1, exec.calls, "run must still dispatch on cloud-plugin error")
+	require.NotNil(t, exec.submitted)
+	assert.Empty(t, exec.submitted.S3Overrides, "S3Overrides must remain empty on cloud-plugin error")
 }

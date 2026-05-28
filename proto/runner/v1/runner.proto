@@ -32,6 +32,10 @@ service RunnerService {
   // Validate pipeline templates (Jinja syntax, anti-patterns) without executing.
   // Called by the platform before publishing to catch errors early.
   rpc ValidatePipeline(ValidatePipelineRequest) returns (ValidatePipelineResponse);
+
+  // List all discovered runner plugins (entry points installed in the runner container).
+  // Called by the platform to expose runner plugin metadata to the portal UI.
+  rpc ListPlugins(ListPluginsRequest) returns (ListPluginsResponse);
 }
 
 message SubmitPipelineRequest {
@@ -136,4 +140,20 @@ message FileValidation {
   bool valid = 2;                      // true if no errors
   repeated string errors = 3;          // fatal template errors
   repeated string warnings = 4;        // non-fatal warnings
+}
+
+// --- ListPlugins messages ---
+
+message ListPluginsRequest {}
+
+message ListPluginsResponse {
+  repeated RunnerPlugin plugins = 1;
+}
+
+// RunnerPlugin describes a single Python entry point discovered by the runner.
+message RunnerPlugin {
+  string name = 1;           // entry point name ("soft_delete", "env_var")
+  string group = 2;          // "rat.strategies", "rat.hooks", etc.
+  string version = 3;        // package version
+  string package_name = 4;   // Python package name ("rat-plugin-soft-delete")
 }

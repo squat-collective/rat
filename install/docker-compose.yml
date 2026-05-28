@@ -8,6 +8,16 @@
 ## To pin a specific version, replace :latest with a version tag:
 ##   image: ghcr.io/squat-collective/ratd:2.1.0
 ##
+## Plugins are an optional overlay. After the core stack is up, add any
+## plugin (compaction, secrets, pg-sync, …) by running its image alongside:
+##   docker run -d --name secrets --network infra_default \
+##     -e RATD_URL=http://ratd:8080 -e RATD_INTERNAL_URL=http://ratd:8090 \
+##     -v rat-secrets-key:/data \
+##     ghcr.io/squat-collective/rat-plugin-secrets:latest
+##
+## Or pull the plugin overlay from the repo for declarative install:
+##   https://github.com/squat-collective/rat/blob/main/infra/docker-compose.plugins.yml
+##
 
 x-s3-credentials: &s3-credentials
   S3_ENDPOINT: minio:9000
@@ -35,6 +45,13 @@ services:
     environment:
       # Listen on all interfaces inside the container (required for Docker port mapping)
       RAT_LISTEN_ADDR: "0.0.0.0:8080"
+      # Internal listener for service-to-service callbacks (runner status,
+      # plugin phone-home, failed-merge reports). NOT exposed to the host —
+      # only other containers on the rat backend network reach it.
+      # Required for runner callbacks to land — without this, runs appear
+      # stuck because ratd never hears the "I'm done" POST.
+      # See docs/migrations/2026-04-internal-listener-split.md.
+      INTERNAL_LISTEN_ADDR: "0.0.0.0:8090"
       # Postgres
       DATABASE_URL: postgres://${POSTGRES_USER:-rat}:${POSTGRES_PASSWORD:-rat}@postgres:5432/rat?sslmode=disable
       # S3 (MinIO) — required for file storage (editor, upload, pipeline code)
@@ -51,6 +68,7 @@ services:
       postgres: { condition: service_healthy }
       minio: { condition: service_healthy }
       nessie: { condition: service_healthy }
+      nessie-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "/ratd", "healthcheck"]
       interval: 5s
@@ -122,13 +140,16 @@ services:
       GRPC_PORT: "50052"
       # Push-based status callbacks — runner POSTs terminal status to ratd
       # instead of waiting for ratd to poll. Eliminates N gRPC calls/interval.
-      RATD_CALLBACK_URL: http://ratd:8080
+      # Targets ratd's INTERNAL listener (:8090, not the public :8080) so the
+      # callback never crosses the auth-required public surface.
+      RATD_CALLBACK_URL: http://ratd:8090
       # S3 — same creds as ratd, for pipeline writes to Iceberg/Parquet
       <<: *s3-credentials
       NESSIE_URL: http://nessie:19120/api/v1
     depends_on:
       minio: { condition: service_healthy }
       nessie: { condition: service_healthy }
+      nessie-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "python", "-c", "import grpc; ch=grpc.insecure_channel('localhost:50052'); grpc.channel_ready_future(ch).result(timeout=2)"]
       interval: 10s
@@ -330,6 +351,51 @@ services:
           memory: 512M
           cpus: '1.0'
           pids: 100
+    logging: *default-logging
+    networks:
+      - backend
+
+  # ── Nessie Init (give main a real ancestor commit) ───────────
+  # Fresh Nessie 0.99 starts main at genesis (zero commits). The runner
+  # creates a branch from main, writes a commit, and tries to merge —
+  # but Nessie's merge endpoint returns 404 "no common ancestor" when
+  # both branches descend from an empty genesis. One bootstrap commit
+  # on main fixes it for all future runs.
+  #
+  # Idempotent: skips the commit if main already has history (existing
+  # installs that bootstrapped some other way are unaffected).
+  nessie-init:
+    image: alpine:3.20
+    depends_on:
+      nessie: { condition: service_healthy }
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache curl jq >/dev/null 2>&1
+        MAIN_HASH=$$(curl -fs http://nessie:19120/api/v2/trees/main | jq -r .reference.hash)
+        COMMITS=$$(curl -fs 'http://nessie:19120/api/v2/trees/main/history?max-records=1' | jq '.logEntries | length')
+        if [ "$$COMMITS" = "0" ]; then
+          echo "main has no commits — seeding bootstrap commit"
+          curl -fsS -X POST "http://nessie:19120/api/v2/trees/main@$$MAIN_HASH/history/commit" \
+            -H 'Content-Type: application/json' \
+            -d '{"commitMeta":{"message":"bootstrap: give main an ancestor commit"},"operations":[{"type":"PUT","key":{"elements":["__bootstrap"]},"content":{"type":"NAMESPACE","elements":["__bootstrap"],"properties":{}}}]}'
+          echo " bootstrap commit created"
+        else
+          echo "main already has $$COMMITS+ commits — no bootstrap needed"
+        fi
+    restart: on-failure
+    # Security hardening
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.25'
+          pids: 50
     logging: *default-logging
     networks:
       - backend

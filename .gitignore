@@ -60,3 +60,7 @@ licenses/
 
 # Backups
 backups/
+
+# Claude Code — local/personal only
+.claude/settings.local.json
+.claude/worktrees/

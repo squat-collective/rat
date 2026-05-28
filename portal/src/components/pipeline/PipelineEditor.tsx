@@ -42,6 +42,7 @@ import { cn } from "@/lib/utils";
 import { PreviewPanel } from "@/components/preview-panel";
 import { QualityTestDialog } from "@/components/quality-test-dialog";
 import { Play, Save, Upload, X } from "lucide-react";
+import { PluginSlot } from "@/components/plugins";
 
 const CodeEditor = dynamic(
   () => import("@/components/code-editor").then((m) => m.CodeEditor),
@@ -90,6 +91,10 @@ export function PipelineEditor({
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const handleSaveRef = useRef<() => void>(() => {});
   const handlePreviewRef = useRef<() => void>(() => {});
+  // Imperative bridge to the editor for the dev-assistant panel: read the live
+  // content, and apply AI-generated code straight into CodeMirror.
+  const applyContentRef = useRef<(content: string) => void>(() => {});
+  const liveContentRef = useRef<string>("");
   const [previewHeight, setPreviewHeight] = useState(250);
   const [showPreview, setShowPreview] = useState(false);
   const [qualityDialogOpen, setQualityDialogOpen] = useState(false);
@@ -193,6 +198,18 @@ export function PipelineEditor({
     [activeFile],
   );
 
+  // Keep the live-content ref in sync so the dev-assistant panel can read the
+  // current editor text on demand, without re-rendering on every keystroke.
+  useEffect(() => {
+    liveContentRef.current = currentTab?.content ?? "";
+  }, [currentTab]);
+
+  // Stable callbacks handed to the pipeline-editor-sidebar plugin slot.
+  const getEditorContent = useCallback(() => liveContentRef.current, []);
+  const applyEditorContent = useCallback((code: string) => {
+    applyContentRef.current(code);
+  }, []);
+
   const handleSaveFile = useCallback(async () => {
     if (!currentTab || !fileDirty) return;
     try {
@@ -218,7 +235,6 @@ export function PipelineEditor({
     try {
       await api.pipelines.publish(pipeline.namespace, pipeline.layer, pipeline.name, message);
       await mutate(KEYS.match.pipelines);
-      await mutate(KEYS.match.lineage);
       await onVersionsRefresh();
       setPublishDialogOpen(false);
       setPublishMessage("");
@@ -360,6 +376,7 @@ export function PipelineEditor({
                   onContentChange={handleContentChange}
                   onSaveRef={handleSaveRef}
                   onPreviewRef={handlePreviewRef}
+                  setContentRef={applyContentRef}
                   landingZones={allZoneNames}
                   schema={querySchema}
                 />
@@ -475,6 +492,7 @@ export function PipelineEditor({
                     <Save className="h-3 w-3" />
                     {saving ? "Saving..." : "Save"}
                   </Button>
+                  <PluginSlot name="pipeline-editor-toolbar" />
                 </div>
               </div>
             )}
@@ -500,6 +518,15 @@ export function PipelineEditor({
               </div>
             )}
           </div>
+
+          {/* Dev-assistant panel — a plugin can dock a right panel here */}
+          <PluginSlot
+            name="pipeline-editor-sidebar"
+            pipeline={pipeline}
+            language={currentTab?.language ?? null}
+            getContent={getEditorContent}
+            onApply={applyEditorContent}
+          />
         </div>
       </div>
 

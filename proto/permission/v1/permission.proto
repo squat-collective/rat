@@ -1,0 +1,199 @@
+syntax = "proto3";
+package ratatouille.permission.v1;
+
+option go_package = "github.com/rat-data/rat/platform/gen/permission/v1;permissionv1";
+
+import "google/protobuf/timestamp.proto";
+
+// PermissionService manages fine-grained access control.
+// Implemented by the permission plugin container.
+// Called by ratd for grant management, group management, and access checks.
+service PermissionService {
+  rpc ListVerbs(ListVerbsRequest) returns (ListVerbsResponse);
+  rpc RegisterVerb(RegisterVerbRequest) returns (RegisterVerbResponse);
+  rpc ListGrants(ListGrantsRequest) returns (ListGrantsResponse);
+  rpc CreateGrant(CreateGrantRequest) returns (CreateGrantResponse);
+  rpc RevokeGrant(RevokeGrantRequest) returns (RevokeGrantResponse);
+  rpc ListGroups(ListGroupsRequest) returns (ListGroupsResponse);
+  rpc CreateGroup(CreateGroupRequest) returns (CreateGroupResponse);
+  rpc DeleteGroup(DeleteGroupRequest) returns (DeleteGroupResponse);
+  rpc ListGroupMembers(ListGroupMembersRequest) returns (ListGroupMembersResponse);
+  rpc AddGroupMember(AddGroupMemberRequest) returns (AddGroupMemberResponse);
+  rpc RemoveGroupMember(RemoveGroupMemberRequest) returns (RemoveGroupMemberResponse);
+  rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);
+  rpc ListResourceAccess(ListResourceAccessRequest) returns (ListResourceAccessResponse);
+  rpc ListPrincipalAccess(ListPrincipalAccessRequest) returns (ListPrincipalAccessResponse);
+  rpc RemoveResource(RemoveResourceRequest) returns (RemoveResourceResponse);
+}
+
+// PrincipalType identifies the kind of entity receiving a grant.
+enum PrincipalType {
+  PRINCIPAL_TYPE_UNSPECIFIED = 0;
+  PRINCIPAL_TYPE_USER = 1;
+  PRINCIPAL_TYPE_GROUP = 2;
+  PRINCIPAL_TYPE_ROLE = 3;
+}
+
+// ── Verbs ──────────────────────────────────────────────────────────────────
+
+message VerbDefinition {
+  string name = 1;
+  repeated string implies = 2;     // verbs implied by this one (e.g. admin implies read+write)
+  string description = 3;
+}
+
+message ListVerbsRequest {}
+message ListVerbsResponse {
+  repeated VerbDefinition verbs = 1;
+}
+
+message RegisterVerbRequest {
+  string name = 1;
+  repeated string implies = 2;
+  string description = 3;
+}
+message RegisterVerbResponse {}
+
+// ── Grants ─────────────────────────────────────────────────────────────────
+
+message Grant {
+  string grant_id = 1;
+  PrincipalType principal_type = 2;
+  string principal_id = 3;
+  string resource = 4;
+  string verb = 5;
+  string granted_by = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message ListGrantsRequest {
+  string resource = 1;             // optional: filter by resource
+  PrincipalType principal_type = 2; // optional: filter by principal type
+  string principal_id = 3;         // optional: filter by principal ID
+}
+message ListGrantsResponse {
+  repeated Grant grants = 1;
+}
+
+message CreateGrantRequest {
+  PrincipalType principal_type = 1;
+  string principal_id = 2;
+  string resource = 3;
+  string verb = 4;
+  string granted_by = 5;
+}
+message CreateGrantResponse {
+  Grant grant = 1;
+}
+
+message RevokeGrantRequest {
+  string grant_id = 1;
+}
+message RevokeGrantResponse {
+  bool revoked = 1;
+}
+
+// ── Groups ─────────────────────────────────────────────────────────────────
+
+message GroupInfo {
+  string group_id = 1;
+  string name = 2;
+  string description = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message GroupMember {
+  PrincipalType member_type = 1;
+  string member_id = 2;
+  google.protobuf.Timestamp added_at = 3;
+}
+
+message ListGroupsRequest {}
+message ListGroupsResponse {
+  repeated GroupInfo groups = 1;
+}
+
+message CreateGroupRequest {
+  string name = 1;
+  string description = 2;
+}
+message CreateGroupResponse {
+  GroupInfo group = 1;
+}
+
+message DeleteGroupRequest {
+  string group_id = 1;
+}
+message DeleteGroupResponse {
+  bool deleted = 1;
+}
+
+message ListGroupMembersRequest {
+  string group_id = 1;
+}
+message ListGroupMembersResponse {
+  repeated GroupMember members = 1;
+}
+
+message AddGroupMemberRequest {
+  string group_id = 1;
+  PrincipalType member_type = 2;
+  string member_id = 3;
+}
+message AddGroupMemberResponse {}
+
+message RemoveGroupMemberRequest {
+  string group_id = 1;
+  PrincipalType member_type = 2;
+  string member_id = 3;
+}
+message RemoveGroupMemberResponse {
+  bool removed = 1;
+}
+
+// ── Access Checks ──────────────────────────────────────────────────────────
+
+message CheckAccessRequest {
+  string user_id = 1;
+  repeated string user_groups = 2;
+  string resource = 3;
+  string verb = 4;
+}
+message CheckAccessResponse {
+  bool allowed = 1;
+}
+
+message EffectiveAccess {
+  string principal_id = 1;
+  PrincipalType principal_type = 2;
+  string resource = 3;
+  string verb = 4;
+  string source = 5;              // "direct", "group:groupname", "implied:admin"
+}
+
+message ListResourceAccessRequest {
+  string resource = 1;
+}
+message ListResourceAccessResponse {
+  repeated EffectiveAccess access = 1;
+}
+
+message ListPrincipalAccessRequest {
+  string user_id = 1;
+  repeated string user_groups = 2;
+  string resource_prefix = 3;     // optional: filter by resource prefix
+}
+message ListPrincipalAccessResponse {
+  repeated EffectiveAccess access = 1;
+}
+
+// ── Resource Cleanup ───────────────────────────────────────────────────────
+
+message RemoveResourceRequest {
+  string resource = 1;
+  bool cascade = 2;               // if true, also remove sub-resources
+}
+message RemoveResourceResponse {
+  int32 resources_removed = 1;
+  int32 grants_removed = 2;
+}

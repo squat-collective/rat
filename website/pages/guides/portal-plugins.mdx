@@ -1,0 +1,209 @@
+import { Callout, Steps } from 'nextra/components'
+import { Mermaid } from '@/components/mermaid'
+
+# Portal Plugins
+
+Portal plugins extend RAT's **web IDE**. A portal plugin is a JavaScript bundle
+loaded into the portal at runtime — it can add dashboard widgets, sidebar
+entries, and whole pages.
+
+A portal plugin is **shipped by a [platform plugin](/guides/platform-plugins)**:
+the platform plugin serves the bundle over HTTP and declares it in its `Describe`
+response. There is no standalone "portal-only" plugin.
+
+The worked example is the `bundle.js` in
+[`rat-plugin-event-notifier`](https://github.com/squat-collective/rat/tree/main/examples/rat-plugin-event-notifier).
+
+---
+
+## How it works
+
+<Mermaid chart={`
+sequenceDiagram
+    participant B as Portal (browser)
+    participant D as ratd
+    participant P as Platform plugin
+    B->>D: GET /api/v1/plugins?status=enabled
+    D-->>B: plugins (with descriptor.ui.bundle_url)
+    B->>B: inject <script src=".../ui/bundle.js">
+    B->>D: GET /api/v1/plugins/{name}/ui/bundle.js
+    D->>P: reverse-proxy the bundle
+    P-->>B: bundle.js
+    B->>B: bundle calls window.__RAT_REGISTER_PLUGIN(...)
+`} />
+
+1. On load, the portal fetches the enabled plugins from `ratd`.
+2. For each plugin whose `Describe` set `ui.bundle_url`, the portal injects a
+   `<script>` tag pointing at `/api/v1/plugins/{name}/ui/bundle.js`.
+3. `ratd` reverse-proxies that request to the plugin container's bundle URL.
+4. The bundle runs and **self-registers** by calling a global hook.
+
+No module federation, no iframes — just a `<script>` tag and a window global.
+
+---
+
+## The registration contract
+
+Before any plugin bundle loads, the portal exposes three things on `window`:
+
+| Global | What it is |
+|---|---|
+| `window.React` | the portal's React instance — use it, don't bundle your own |
+| `window.ReactDOM` | the portal's ReactDOM |
+| `window.__RAT_REGISTER_PLUGIN` | the registration hook your bundle calls |
+
+Your bundle calls the hook exactly once:
+
+```js
+window.__RAT_REGISTER_PLUGIN("my-plugin", {
+  slots:    { "dashboard-widgets": [MyWidget] },
+  navItems: [{ label: "My Plugin", icon: "bell", href: "/x/my-plugin", priority: 50 }],
+  routes:   [{ path: "/x/my-plugin", component: MyPage }],
+});
+```
+
+All three keys are optional. The portal merges every plugin's registration into
+one registry.
+
+### Slots
+
+A **slot** is a named insertion point in the portal UI. Your component is
+rendered wherever that `<PluginSlot>` appears. Available slot IDs:
+
+| Area | Slot IDs |
+|---|---|
+| Layout | `main-header`, `global-banner`, `sidebar-nav-extra`, `sidebar-user`, `sidebar-footer` |
+| Dashboard | `dashboard-stats`, `dashboard-widgets`, `dashboard-actions` |
+| Pipeline | `pipeline-detail-header`, `pipeline-detail-tabs`, `pipeline-editor-toolbar`, `pipeline-actions` |
+| Run | `run-detail-header`, `run-detail-tabs`, `run-log-filters`, `run-actions` |
+| Query | `query-toolbar`, `query-results-tabs` |
+| Explorer | `table-detail-tabs`, `table-actions` |
+| Settings | `settings-nav`, `settings-sections` |
+
+`slots` maps a slot ID to an array of React components.
+
+### Nav items
+
+`navItems` adds entries to the portal sidebar. Each is
+`{ label, icon, href, priority }` — `icon` is a [lucide](https://lucide.dev)
+icon name, lower `priority` sorts higher.
+
+### Routes
+
+`routes` registers full pages under the portal's `/x/[...path]` catch-all. Each
+is `{ path, component }`; the component renders when the URL matches `path`.
+A nav item's `href` usually points at one of your routes.
+
+---
+
+## Building a bundle
+
+A portal bundle is just JavaScript that calls the registration hook. Because the
+portal provides React on `window`, **a small bundle needs no build step at all**
+— plain JS with `React.createElement` works. Larger bundles can use a bundler
+(tsup, esbuild) with React and ReactDOM marked as externals.
+
+<Steps>
+
+### Write the bundle
+
+```js filename="bundle.js"
+(function () {
+  "use strict";
+  var React = window.React;
+  if (!React || typeof window.__RAT_REGISTER_PLUGIN !== "function") return;
+  var h = React.createElement;
+
+  function MyWidget() {
+    return h("div", { className: "brutal-card", style: { padding: "1rem" } },
+      "Hello from my plugin");
+  }
+
+  function MyPage() {
+    return h("div", { className: "brutal-card", style: { padding: "1.5rem" } },
+      h("h1", null, "My Plugin"));
+  }
+
+  window.__RAT_REGISTER_PLUGIN("my-plugin", {
+    slots:    { "dashboard-widgets": [MyWidget] },
+    navItems: [{ label: "My Plugin", icon: "bell", href: "/x/my-plugin", priority: 50 }],
+    routes:   [{ path: "/x/my-plugin", component: MyPage }],
+  });
+})();
+```
+
+### Serve it from your platform plugin
+
+Embed the bundle in your [platform plugin](/guides/platform-plugins) and serve
+it over plain HTTP:
+
+```go
+//go:embed bundle.js
+var bundleJS []byte
+
+mux.HandleFunc("/bundle.js", func(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript")
+	w.Write(bundleJS)
+})
+```
+
+### Declare the UI in Describe
+
+Point `ratd` at the bundle and declare your slots / nav items in the plugin's
+`Describe` response:
+
+```go
+Ui: &pluginv1.PluginUIDescriptor{
+	BundleUrl: "http://my-plugin:50090/bundle.js",
+	Slots: []*pluginv1.UISlotDeclaration{
+		{SlotId: "dashboard-widgets", ComponentName: "MyWidget"},
+	},
+	NavItems: []*pluginv1.UINavItem{
+		{Label: "My Plugin", Icon: "bell", Path: "/x/my-plugin"},
+	},
+},
+```
+
+`ratd` reverse-proxies `BundleUrl`, so the portal loads it same-origin (no CORS).
+
+### Reload the portal
+
+Hard-refresh the portal (`Ctrl/Cmd + Shift + R`). The widget appears on the
+dashboard and the nav item in the sidebar.
+
+</Steps>
+
+<Callout type="warning">
+Bundles are served with `Cache-Control: max-age=300`. After changing a bundle,
+hard-refresh — a normal reload may serve the cached copy for up to 5 minutes.
+</Callout>
+
+---
+
+## Styling
+
+Plugin components render inside the portal, so use its design system rather than
+shipping CSS:
+
+- `brutal-card` for panels, `neon-text` for accents
+- CSS variables — `text-primary`, `text-muted-foreground`, `border-border/50`
+- `--radius: 0` — the portal has square corners; don't round them
+- the font (JetBrains Mono) is inherited
+
+---
+
+## Calling your plugin's API
+
+To fetch data from your platform plugin's routes, derive the API base from your
+bundle's own `<script>` URL (the portal set it to `{api}/api/v1/plugins/...`):
+
+```js
+function apiBase() {
+  var s = document.querySelector('script[src*="/plugins/my-plugin/ui/bundle.js"]');
+  return s ? s.src.slice(0, s.src.indexOf("/api/v1/")) : window.location.origin;
+}
+// then: fetch(apiBase() + "/api/v1/x/my-plugin/events")
+```
+
+This way the bundle needs no build-time configuration — it discovers the API
+URL the portal already used to load it.

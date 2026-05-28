@@ -66,6 +66,10 @@ func (m *mockRunnerClient) ValidatePipeline(ctx context.Context, req *connect.Re
 	return connect.NewResponse(&runnerv1.ValidatePipelineResponse{Valid: true}), nil
 }
 
+func (m *mockRunnerClient) ListPlugins(_ context.Context, _ *connect.Request[runnerv1.ListPluginsRequest]) (*connect.Response[runnerv1.ListPluginsResponse], error) {
+	return connect.NewResponse(&runnerv1.ListPluginsResponse{}), nil
+}
+
 // --- Mock run store ---
 
 type mockRunStore struct {
@@ -133,6 +137,10 @@ func (m *mockRunStore) DeleteRunsOlderThan(_ context.Context, _ time.Time) (int,
 }
 
 func (m *mockRunStore) ListStuckRuns(_ context.Context, _ time.Time) ([]domain.Run, error) {
+	return nil, nil
+}
+
+func (m *mockRunStore) ListStuckPendingRuns(_ context.Context, _ time.Time) ([]domain.Run, error) {
 	return nil, nil
 }
 
@@ -237,6 +245,42 @@ func TestSubmit_BuildsCorrectRequest(t *testing.T) {
 	assert.Equal(t, commonv1.Layer_LAYER_GOLD, captured.Layer)
 	assert.Equal(t, "revenue", captured.PipelineName)
 	assert.Equal(t, "schedule:hourly", captured.Trigger)
+	// Without cloud-vended credentials the proto field must be nil so the
+	// runner falls back to its env-level S3Config rather than zero values.
+	assert.Nil(t, captured.S3Credentials)
+}
+
+func TestSubmit_ForwardsS3OverridesToRunner(t *testing.T) {
+	// The cloud-plugin integration in api/runs.go populates run.S3Overrides
+	// before dispatch. The WarmPoolExecutor must forward them to the runner
+	// as a S3Credentials proto so the per-run DuckDB / PyIceberg config can
+	// merge them over the env-level defaults.
+	var captured *runnerv1.SubmitPipelineRequest
+	mock := &mockRunnerClient{
+		submitFunc: func(_ context.Context, req *connect.Request[runnerv1.SubmitPipelineRequest]) (*connect.Response[runnerv1.SubmitPipelineResponse], error) {
+			captured = req.Msg
+			return connect.NewResponse(&runnerv1.SubmitPipelineResponse{}), nil
+		},
+	}
+	store := newMockRunStore()
+	exec := newWarmPoolExecutorWithClient(mock, store)
+
+	run := testRun()
+	run.S3Overrides = map[string]string{
+		"access_key_id":     "AKIA-OVR",
+		"secret_access_key": "shh-secret",
+		"session_token":     "sts-xyz",
+		"region":            "eu-west-3",
+	}
+
+	err := exec.Submit(context.Background(), run, testPipeline())
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+	require.NotNil(t, captured.S3Credentials)
+	assert.Equal(t, "AKIA-OVR", captured.S3Credentials.AccessKeyId)
+	assert.Equal(t, "shh-secret", captured.S3Credentials.SecretAccessKey)
+	assert.Equal(t, "sts-xyz", captured.S3Credentials.SessionToken)
+	assert.Equal(t, "eu-west-3", captured.S3Credentials.Region)
 }
 
 func TestPoll_RunCompletes_UpdatesDB(t *testing.T) {

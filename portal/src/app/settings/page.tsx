@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
-import { Shield, CheckCircle, XCircle, AlertTriangle, Trash2 } from "lucide-react";
+import { Shield, CheckCircle, XCircle, AlertTriangle, Trash2, KeyRound, User, Puzzle } from "lucide-react";
 import Link from "next/link";
 import { serverApi, type FeaturesResponse } from "@/lib/server-api";
+import { auth, authEnabled } from "@/lib/auth/server";
+import { PluginSlot } from "@/components/plugins";
 
 export const metadata: Metadata = {
   title: "Settings | RAT",
@@ -18,13 +20,17 @@ export default async function SettingsPage() {
 
   const edition = features?.edition ?? "community";
   const license = features?.license;
-  const plugins = features?.plugins ?? {};
+
+  // Get auth session when auth is enabled
+  const session = authEnabled ? await auth() : null;
 
   return (
     <div className="space-y-6 max-w-2xl">
       <h1 className="text-lg font-bold tracking-wider gradient-text">
         Settings
       </h1>
+
+      <PluginSlot name="settings-nav" />
 
       {/* Edition info */}
       <div className="brutal-card p-4 space-y-2">
@@ -124,38 +130,69 @@ export default async function SettingsPage() {
         </div>
       </Link>
 
-      {/* Plugin status grid */}
-      <div className="brutal-card p-4 space-y-3">
-        <h2 className="text-xs font-bold tracking-wider text-muted-foreground">
-          Plugins
-        </h2>
-        <div className="grid grid-cols-2 gap-2">
-          {Object.entries(plugins).map(([name, plugin]) => (
-            <div
-              key={name}
-              className="flex items-center gap-2 text-xs p-2 bg-muted/30"
-            >
-              {plugin.enabled ? (
-                <CheckCircle className="h-3 w-3 text-primary shrink-0" />
-              ) : (
-                <XCircle className="h-3 w-3 text-muted-foreground shrink-0" />
-              )}
-              <span
-                className={
-                  plugin.enabled ? "text-foreground" : "text-muted-foreground"
-                }
-              >
-                {name}
-              </span>
-              {plugin.type && (
-                <span className="ml-auto text-[10px] text-muted-foreground">
-                  {plugin.type}
-                </span>
-              )}
-            </div>
-          ))}
+      {/* Plugin Management */}
+      <Link href="/settings/plugins" className="block">
+        <div className="brutal-card p-4 space-y-2 hover:border-primary/50 transition-colors cursor-pointer">
+          <div className="flex items-center gap-2">
+            <Puzzle className="h-4 w-4 text-primary" />
+            <h2 className="text-xs font-bold tracking-wider text-muted-foreground">
+              Plugin Management
+            </h2>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            View runner plugins installed in the pipeline execution container.
+          </p>
         </div>
-      </div>
+      </Link>
+
+      {/* Authentication card — only when multi-user mode is active */}
+      {features?.multi_user && (
+        <div className="brutal-card p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <KeyRound className="h-4 w-4 text-primary" />
+            <h2 className="text-xs font-bold tracking-wider text-muted-foreground">
+              Authentication
+            </h2>
+          </div>
+          <div className="grid grid-cols-2 gap-y-2 gap-x-4 text-xs">
+            <span className="text-muted-foreground">Provider</span>
+            <span>Keycloak</span>
+
+            {process.env.KEYCLOAK_ISSUER && (
+              <>
+                <span className="text-muted-foreground">Issuer</span>
+                <span className="truncate font-mono text-[10px]">
+                  {process.env.KEYCLOAK_ISSUER}
+                </span>
+              </>
+            )}
+
+            <span className="text-muted-foreground">Status</span>
+            <span className="flex items-center gap-1.5">
+              {session?.user ? (
+                <>
+                  <User className="h-3 w-3 text-primary" />
+                  <span className="text-primary">Authenticated</span>
+                </>
+              ) : (
+                <>
+                  <XCircle className="h-3 w-3 text-muted-foreground" />
+                  <span className="text-muted-foreground">Not authenticated</span>
+                </>
+              )}
+            </span>
+
+            {session?.user?.email && (
+              <>
+                <span className="text-muted-foreground">User</span>
+                <span>{session.user.email}</span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      <PluginSlot name="settings-sections" />
     </div>
   );
 }

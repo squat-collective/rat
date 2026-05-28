@@ -77,12 +77,31 @@ export const KEYS = {
   qualityTests: (ns: string, layer: string, name: string) =>
     `quality-${ns}-${layer}-${name}` as const,
 
-  // --- Lineage ---
-  lineage: (namespace?: string) =>
-    namespace ? (`lineage-${namespace}` as const) : ("lineage-all" as const),
-
   // --- Health / Features ---
   features: () => "features" as const,
+
+  // --- Plugins ---
+  plugins: (status?: string, kind?: string) =>
+    status || kind
+      ? (`plugins-${status ?? "all"}-${kind ?? "all"}` as const)
+      : ("plugins" as const),
+  plugin: (name: string) => `plugin-${name}` as const,
+  pluginSources: () => "plugin-sources" as const,
+  pluginPolicies: () => "plugin-policies" as const,
+  runnerPlugins: () => "runner-plugins" as const,
+
+  // --- Permissions ---
+  grants: (filter?: string) =>
+    filter ? `grants-${filter}` : ("grants" as const),
+  verbs: () => "verbs" as const,
+  groups: () => "groups" as const,
+  groupMembers: (groupId: string) => `group-members-${groupId}`,
+  resourceAccess: (resource: string) => `resource-access-${resource}`,
+
+  // --- Identity ---
+  identityUsers: (params?: string) =>
+    params ? `identity-users-${params}` : ("identity-users" as const),
+  identityCapabilities: () => "identity-capabilities" as const,
 
   // --- Retention ---
   retentionConfig: () => "retention-config" as const,
@@ -100,9 +119,6 @@ export const KEYS = {
     /** Matches all table-related keys. */
     tables: (key: unknown): boolean =>
       typeof key === "string" && key.startsWith("tables"),
-    /** Matches all lineage keys. */
-    lineage: (key: unknown): boolean =>
-      typeof key === "string" && key.startsWith("lineage"),
     /** Matches all file tree keys (files-*). */
     files: (key: unknown): boolean =>
       typeof key === "string" && key.startsWith("files-"),
@@ -121,5 +137,8 @@ export const KEYS = {
     /** Matches landing-samples keys for a specific zone. */
     landingSamples: (ns: string, name: string) => (key: unknown): boolean =>
       typeof key === "string" && key.startsWith(`landing-samples-${ns}-${name}`),
+    /** Matches all plugin-related keys (plugins list, plugin detail, sources, policies). */
+    plugins: (key: unknown): boolean =>
+      typeof key === "string" && key.startsWith("plugin"),
   },
 } as const;

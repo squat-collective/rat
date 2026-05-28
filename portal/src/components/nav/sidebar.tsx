@@ -6,6 +6,8 @@ import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NAV_ITEMS } from "@/lib/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { PluginSlot, usePluginRegistry } from "@/components/plugins";
+import { getPluginIcon } from "@/components/plugins/plugin-icons";
 import {
   Tooltip,
   TooltipContent,
@@ -22,6 +24,10 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
+  const registry = usePluginRegistry();
+  const pluginNavItems = registry?.navItems
+    ?.slice()
+    .sort((a, b) => a.priority - b.priority) ?? [];
   return (
     <TooltipProvider delayDuration={0}>
       <aside
@@ -103,10 +109,74 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           })}
         </nav>
 
+        {/* Plugin nav items (from loaded plugin descriptors) */}
+        {pluginNavItems.length > 0 && (
+          <nav className="space-y-0.5 px-2">
+            {pluginNavItems.map((item) => {
+              const PluginIcon = getPluginIcon(item.icon);
+              const isActive = pathname.startsWith(item.href);
+
+              const pluginLink = (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    "group flex items-center gap-3 px-3 py-2 text-xs font-medium tracking-wider transition-all",
+                    collapsed && "justify-center px-0",
+                    isActive
+                      ? "bg-primary/10 text-primary border-l-2 border-primary neon-text"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/50 border-l-2 border-transparent",
+                  )}
+                >
+                  <PluginIcon
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0 transition-colors",
+                      isActive
+                        ? "text-primary"
+                        : "text-muted-foreground group-hover:text-foreground",
+                    )}
+                  />
+                  {!collapsed && (
+                    <>
+                      <span>{item.label}</span>
+                      {isActive && (
+                        <span className="ml-auto text-primary animate-pulse-neon">
+                          _
+                        </span>
+                      )}
+                    </>
+                  )}
+                </Link>
+              );
+
+              if (collapsed) {
+                return (
+                  <Tooltip key={item.href}>
+                    <TooltipTrigger asChild>{pluginLink}</TooltipTrigger>
+                    <TooltipContent side="right">
+                      {item.label}
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              }
+
+              return pluginLink;
+            })}
+          </nav>
+        )}
+
+        {/* Plugin nav extensions (slot-based, legacy) */}
+        <PluginSlot name="sidebar-nav-extra" collapsed={collapsed} />
+
+        {/* User menu (plugin slot) */}
+        <PluginSlot name="sidebar-user" collapsed={collapsed} />
+
         {/* Theme toggle */}
         <div className="border-t border-border/50 px-3 py-2">
           <ThemeToggle collapsed={collapsed} />
         </div>
+
+        <PluginSlot name="sidebar-footer" />
 
         {/* Collapse toggle */}
         <div className="border-t border-border/50 px-3 py-2 flex justify-center">

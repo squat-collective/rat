@@ -39,6 +39,13 @@ type PipelineTriggerStore interface {
 	FindTriggersByPipelineSuccess(ctx context.Context, namespace, layer, pipeline string) ([]domain.PipelineTrigger, error)
 	FindTriggersByFilePattern(ctx context.Context, namespace, zoneName string) ([]domain.PipelineTrigger, error)
 	UpdateTriggerFired(ctx context.Context, triggerID string, runID uuid.UUID) error
+	// UpdateTriggerFiredCAS is the race-safe variant of UpdateTriggerFired.
+	// The update only fires when the stored last_triggered_at matches
+	// expectedPrev (NULL == NULL counts as a match). Returns true on success,
+	// false when another concurrent evaluation path already fired the trigger.
+	// Used by the trigger evaluator to prevent duplicate runs when tick() and
+	// the run_completed LISTEN/NOTIFY handler race on the same trigger.
+	UpdateTriggerFiredCAS(ctx context.Context, triggerID string, newTriggeredAt time.Time, runID uuid.UUID, expectedPrev *time.Time) (bool, error)
 }
 
 // CreateTriggerRequest is the JSON body for POST /api/v1/pipelines/{namespace}/{layer}/{name}/triggers.
@@ -89,8 +96,11 @@ type cronDependencyConfig struct {
 	Dependencies []string `json:"dependencies"`
 }
 
-// cronParser is a standard 5-field cron parser (minute, hour, day-of-month, month, day-of-week).
-var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+// cronParser accepts both 5-field cron (minute granularity, e.g.
+// "0 * * * *") and 6-field cron with an optional leading seconds field
+// (e.g. "*/30 * * * * *" for every 30 seconds). Same flags as the
+// scheduler so validation and execution agree on what's valid.
+var cronParser = cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 
 // MountTriggerRoutes registers trigger endpoints nested under pipelines.
 func MountTriggerRoutes(r chi.Router, srv *Server) {
@@ -497,21 +507,29 @@ func (s *Server) fireTriggerIfReady(ctx context.Context, trigger domain.Pipeline
 		Trigger:    triggerLabel,
 	}
 
-	if err := s.Runs.CreateRun(ctx, run); err != nil {
-		slog.Error("failed to create triggered run", "trigger_id", trigger.ID, "error", err)
+	// Atomic: create the run AND mark the trigger as fired in one tx so a
+	// crash between the two cannot leave us with a pending run whose
+	// trigger looks unfired (the next evaluator pass would then fire a
+	// duplicate). Submit is HTTP IO and runs OUTSIDE the tx, per the
+	// TxRunner contract.
+	createAndRecord := func(t TxStores) error {
+		if err := t.Runs.CreateRun(ctx, run); err != nil {
+			return err
+		}
+		return t.Triggers.UpdateTriggerFired(ctx, trigger.ID.String(), run.ID)
+	}
+	if err := s.runFireTx(ctx, createAndRecord); err != nil {
+		slog.Error("failed to fire trigger atomically", "trigger_id", trigger.ID, "error", err)
 		return
 	}
 
-	// Submit to executor
+	// Submit to executor AFTER the tx commits. The run is already pending —
+	// if Submit fails the reaper will fail or retry it later, but we never
+	// leave the trigger state inconsistent with the run.
 	if s.Executor != nil {
 		if err := s.Executor.Submit(ctx, run, pipeline); err != nil {
 			slog.Error("executor submit failed for triggered run", "run_id", run.ID, "error", err)
 		}
-	}
-
-	// Update trigger fired state
-	if err := s.Triggers.UpdateTriggerFired(ctx, trigger.ID.String(), run.ID); err != nil {
-		slog.Error("failed to update trigger fired state", "trigger_id", trigger.ID, "error", err)
 	}
 
 	slog.Info("trigger fired", "trigger_id", trigger.ID, "trigger_type", trigger.Type, "run_id", run.ID)

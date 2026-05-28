@@ -575,8 +575,11 @@ type S3Credentials struct {
 	Region          string `protobuf:"bytes,4,opt,name=region,proto3" json:"region,omitempty"`                                            // S3 region (e.g., "us-east-1")
 	Bucket          string `protobuf:"bytes,5,opt,name=bucket,proto3" json:"bucket,omitempty"`                                            // target S3 bucket name
 	UseSsl          bool   `protobuf:"varint,6,opt,name=use_ssl,json=useSsl,proto3" json:"use_ssl,omitempty"`                             // whether to use HTTPS for S3 connections
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// SENSITIVE — STS / temporary credentials only (empty for long-lived IAM users).
+	// Must be redacted in logs and debug output.
+	SessionToken  string `protobuf:"bytes,7,opt,name=session_token,json=sessionToken,proto3" json:"session_token,omitempty"` // AWS STS session token for temporary credentials
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *S3Credentials) Reset() {
@@ -651,6 +654,13 @@ func (x *S3Credentials) GetUseSsl() bool {
 	return false
 }
 
+func (x *S3Credentials) GetSessionToken() string {
+	if x != nil {
+		return x.SessionToken
+	}
+	return ""
+}
+
 var File_common_v1_common_proto protoreflect.FileDescriptor
 
 const file_common_v1_common_proto_rawDesc = "" +
@@ -677,14 +687,15 @@ const file_common_v1_common_proto_rawDesc = "" +
 	"\x10CancelRunRequest\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\"1\n" +
 	"\x11CancelRunResponse\x12\x1c\n" +
-	"\tcancelled\x18\x01 \x01(\bR\tcancelled\"\xc4\x01\n" +
+	"\tcancelled\x18\x01 \x01(\bR\tcancelled\"\xe9\x01\n" +
 	"\rS3Credentials\x12\x1a\n" +
 	"\bendpoint\x18\x01 \x01(\tR\bendpoint\x12\"\n" +
 	"\raccess_key_id\x18\x02 \x01(\tR\vaccessKeyId\x12*\n" +
 	"\x11secret_access_key\x18\x03 \x01(\tR\x0fsecretAccessKey\x12\x16\n" +
 	"\x06region\x18\x04 \x01(\tR\x06region\x12\x16\n" +
 	"\x06bucket\x18\x05 \x01(\tR\x06bucket\x12\x17\n" +
-	"\ause_ssl\x18\x06 \x01(\bR\x06useSsl*R\n" +
+	"\ause_ssl\x18\x06 \x01(\bR\x06useSsl\x12#\n" +
+	"\rsession_token\x18\a \x01(\tR\fsessionToken*R\n" +
 	"\x05Layer\x12\x15\n" +
 	"\x11LAYER_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fLAYER_BRONZE\x10\x01\x12\x10\n" +

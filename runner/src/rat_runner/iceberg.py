@@ -56,7 +56,7 @@ import pyarrow as pa
 from pyiceberg.catalog import load_catalog
 from pyiceberg.catalog.rest import RestCatalog
 from pyiceberg.exceptions import NamespaceAlreadyExistsError, NoSuchTableError
-from pyiceberg.expressions import And, EqualTo, In
+from pyiceberg.expressions import And, EqualTo, In, IsNull, Or
 from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.transforms import (
     DayTransform,
@@ -78,6 +78,11 @@ logger = logging.getLogger(__name__)
 
 # Strict pattern for SQL identifiers — prevents SQL injection via column names.
 _SAFE_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+# Maximum number of composite key rows for the optimized delete+append path.
+# Beyond this threshold, the Or(And(...)) filter expression becomes too large
+# and we fall back to the full-rewrite approach.
+_MAX_COMPOSITE_DELETE_ROWS = 500
 
 
 def _escape_sql_string(value: str) -> str:
@@ -273,7 +278,7 @@ def _build_delete_filter_single_key(
     can push down to data file pruning.
     """
     # Convert PyArrow array to Python list for PyIceberg's In() expression.
-    if isinstance(values, (pa.Array, pa.ChunkedArray)):
+    if isinstance(values, pa.Array | pa.ChunkedArray):
         py_values = values.to_pylist()
     else:
         py_values = list(values)
@@ -282,31 +287,80 @@ def _build_delete_filter_single_key(
     return In(key_column, unique_values)
 
 
+def _extract_composite_key_rows(
+    new_data: pa.Table,
+    key_columns: list[str],
+) -> list[tuple[object, ...]]:
+    """Extract deduplicated key-value tuples from a PyArrow table.
+
+    Returns a list of (v1, v2, ...) tuples, one per unique composite key
+    combination, preserving first-seen order. NULL values are preserved
+    as None (hashable in Python tuples).
+    """
+    if len(new_data) == 0:
+        return []
+
+    columns = [new_data.column(col).to_pylist() for col in key_columns]
+    seen: set[tuple[object, ...]] = set()
+    result: list[tuple[object, ...]] = []
+    for i in range(len(new_data)):
+        row = tuple(columns[j][i] for j in range(len(key_columns)))
+        if row not in seen:
+            seen.add(row)
+            result.append(row)
+    return result
+
+
 def _build_delete_filter_composite_key(
     key_columns: list[str],
     key_value_rows: list[tuple[object, ...]],
-) -> And | EqualTo:
+) -> And | Or:
     """Build a PyIceberg OR-of-ANDs filter for composite unique keys.
 
     For N rows with M key columns, builds:
-        (k1=v1a AND k2=v2a) OR (k1=v1b AND k2=v2b) OR ...
+        Or(And(k1=v1a, k2=v2a), And(k1=v1b, k2=v2b), ...)
 
-    WARNING: This does NOT scale well for large numbers of rows (>1000).
+    NULL key values are handled with IsNull() instead of EqualTo().
+    Single-row input returns And(...) without an Or wrapper.
+
+    WARNING: This does NOT scale well for large numbers of rows (>500).
     Callers should fall back to the full-rewrite approach for large key sets.
-
-    Note: PyIceberg does not have an Or() expression that takes a list.
-    We use In() on the first key column as a coarse filter, which is the best
-    we can do without row-level OR support. The remaining non-matching rows
-    in other key columns will be false positives that get written back.
-    For truly precise composite key deletes, we fall back to the full rewrite.
     """
-    # For composite keys, we cannot build precise row-level deletes in PyIceberg.
-    # Return a filter on the first key column only (coarse delete). The caller
-    # must handle the imprecision — this is only used as an optimization hint.
-    raise NotImplementedError(
-        "Composite key delete filters are not precisely supported by PyIceberg. "
-        "Use full-rewrite approach instead."
-    )
+    if not key_value_rows:
+        raise ValueError("key_value_rows must not be empty")
+
+    def _row_predicate(row: tuple[object, ...]) -> And:
+        predicates = []
+        for col, val in zip(key_columns, row, strict=False):
+            if val is None:
+                predicates.append(IsNull(col))
+            else:
+                predicates.append(EqualTo(col, val))
+        return And(*predicates)
+
+    if len(key_value_rows) == 1:
+        return _row_predicate(key_value_rows[0])
+
+    return Or(*[_row_predicate(row) for row in key_value_rows])
+
+
+def _get_row_count(table: IcebergTable) -> int:
+    """Get the total row count from Iceberg snapshot metadata (O(1)).
+
+    Uses table.current_snapshot().summary["total-records"] for an instant count
+    without reading any data files. Falls back to a full scan if the snapshot
+    metadata is unavailable or doesn't contain the record count.
+    """
+    try:
+        snapshot = table.current_snapshot()
+        if snapshot is not None and snapshot.summary is not None:
+            total = snapshot.summary.get("total-records")
+            if total is not None:
+                return int(total)
+    except Exception:
+        pass
+    # Fallback: full table scan (expensive but always correct).
+    return len(table.scan().to_arrow())
 
 
 def _try_optimized_delete_append(
@@ -314,32 +368,42 @@ def _try_optimized_delete_append(
     new_data: pa.Table,
     unique_key: tuple[str, ...] | list[str],
 ) -> int | None:
-    """Try the optimized delete+append path for single-column unique keys.
+    """Try the optimized delete+append path instead of a full table rewrite.
 
     Returns the total row count (existing minus deleted plus appended) on success,
     or None if the optimization is not applicable or fails (caller should fall back).
 
-    The optimization is only applied when:
-    - There is exactly one unique key column (single-column key)
-    - The key values can be extracted from new_data
-    - PyIceberg's table.delete() + table.append() both succeed
+    Supports both single-column and composite unique keys:
+
+    Single-column key:
+        Uses In() filter for efficient predicate pushdown.
+
+    Composite key (2+ columns, <= _MAX_COMPOSITE_DELETE_ROWS unique rows):
+        Uses Or(And(EqualTo(...))) filter for precise row-level deletes.
+        Falls back to full rewrite if the number of unique key rows exceeds
+        the threshold (filter expression becomes too large).
     """
-    if len(unique_key) != 1:
-        # Composite keys: PyIceberg cannot do precise row-level deletes
-        # with multiple key columns. Fall back to full rewrite.
-        return None
+    # --- Build delete filter ---
+    if len(unique_key) == 1:
+        key_col = unique_key[0]
+        if key_col not in new_data.column_names:
+            return None
+        delete_filter = _build_delete_filter_single_key(key_col, new_data.column(key_col))
+    else:
+        # Composite key: check all columns exist
+        for col in unique_key:
+            if col not in new_data.column_names:
+                return None
+        key_rows = _extract_composite_key_rows(new_data, list(unique_key))
+        if not key_rows:
+            return None
+        if len(key_rows) > _MAX_COMPOSITE_DELETE_ROWS:
+            return None
+        delete_filter = _build_delete_filter_composite_key(list(unique_key), key_rows)
 
-    key_col = unique_key[0]
-    if key_col not in new_data.column_names:
-        return None
-
+    # --- Execute delete + append ---
     try:
-        key_values = new_data.column(key_col)
-        delete_filter = _build_delete_filter_single_key(key_col, key_values)
-
-        # Count existing rows before delete for return value calculation.
-        # Use a lightweight scan that only counts — no full data read.
-        existing_count = len(table.scan().to_arrow())
+        existing_count = _get_row_count(table)
 
         # Count rows that will be deleted (for accurate total calculation).
         deleted_data = table.scan(row_filter=delete_filter).to_arrow()

@@ -63,7 +63,7 @@ func (s *Server) HandleShareResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := reg.ShareResource(r.Context(), user.UserId, req.GranteeID, req.ResourceType, req.ResourceID, req.Permission)
+	resp, err := reg.ShareResource(r.Context(), user.UserID, req.GranteeID, req.ResourceType, req.ResourceID, req.Permission)
 	if err != nil {
 		errorJSON(w, "failed to share resource", "INTERNAL", http.StatusInternalServerError)
 		return
@@ -127,7 +127,7 @@ func (s *Server) HandleRevokeAccess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	grantID := chi.URLParam(r, "grantID")
-	if err := reg.RevokeAccess(r.Context(), grantID, user.UserId); err != nil {
+	if err := reg.RevokeAccess(r.Context(), grantID, user.UserID); err != nil {
 		errorJSON(w, "failed to revoke access", "INTERNAL", http.StatusInternalServerError)
 		return
 	}
@@ -165,7 +165,7 @@ func (s *Server) HandleTransferOwnership(w http.ResponseWriter, r *http.Request)
 		errorJSON(w, "pipeline not found", "NOT_FOUND", http.StatusNotFound)
 		return
 	}
-	if pipeline.Owner == nil || *pipeline.Owner != user.UserId {
+	if pipeline.Owner == nil || *pipeline.Owner != user.UserID {
 		errorJSON(w, "only the owner can transfer ownership", "FORBIDDEN", http.StatusForbidden)
 		return
 	}

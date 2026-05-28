@@ -5,6 +5,26 @@
 
 ---
 
+## Platform env vars vs plugin env vars
+
+Two distinct concerns are documented in this file:
+
+- **Platform env vars** — read by `ratd` (and its sidecars `ratq`, `runner`,
+  `portal`) at boot. Examples: `DATABASE_URL`, `LISTEN_ADDR`,
+  `INTERNAL_LISTEN_ADDR`, `RAT_HEARTBEAT_POOL_ENABLED`, `RUNNER_ADDR`,
+  `S3_*`, `NESSIE_URL`, `QUERY_TIMEOUT_SECS`, `QUALITY_TEST_TIMEOUT_SECS`.
+  These control the platform itself.
+- **Plugin env vars** — read by individual plugin containers
+  (`rat-plugin-*`). Examples: `PLUGIN_NAME`, `PLUGIN_ADDR`, `GRPC_PORT`,
+  `RATD_URL`, `RATD_INTERNAL_URL`, `PLUGIN_ALLOW_LOOPBACK`, plus
+  plugin-specific keys (`KEYCLOAK_URL`, `RAT_SECRETS_KEY`, …). The standard
+  ones are read via `sdk.LoadPluginEnv()`; see
+  [`docs/PLUGIN_AUTHOR_GUIDE.md`](PLUGIN_AUTHOR_GUIDE.md).
+
+Section headings below indicate which side reads which variable.
+
+---
+
 ## Postgres
 
 | Variable | Required | Default | Description |
@@ -31,6 +51,8 @@ Migrations run automatically on startup when `DATABASE_URL` is set.
 | `S3_SECRET_KEY` | When `S3_ENDPOINT` set | — | Secret key (MinIO root password or IAM secret). |
 | `S3_BUCKET` | No | `rat` | Bucket name. Auto-created on startup if missing. |
 | `S3_USE_SSL` | No | `false` | Set to `"true"` for HTTPS (production/AWS S3). |
+| `S3_METADATA_TIMEOUT` | No | (SDK default) | Per-request timeout for small metadata ops (stat/list). Accepts a Go duration, e.g. `15s`. Raise on slow/remote S3. |
+| `S3_DATA_TIMEOUT` | No | (SDK default) | Per-request timeout for data transfers (get/put object). Go duration, e.g. `120s`. Raise for large objects over slow links. |
 
 **Example**:
 ```
@@ -80,6 +102,8 @@ When `RUNNER_ADDR` is **not** set, runs stay in `pending` status.
 | `S3_USE_SSL` | No | `false` | Set to `"true"` for HTTPS (production/AWS S3). |
 | `NESSIE_URL` | No | `http://nessie:19120/api/v1` | Nessie REST API URL for Iceberg catalog operations. |
 | `RUN_TTL_SECONDS` | No | `3600` | Time-to-live for completed runs in the in-memory registry. A background cleanup thread evicts terminal runs (SUCCESS, FAILED, CANCELLED) older than this value every 60 seconds. |
+| `QUERY_TIMEOUT_SECS` | No | `60` | Per-query DuckDB timeout (seconds) for pipeline SQL execution. Raise for long analytical pipelines; lower if you want a tighter SLA on hung queries. |
+| `QUALITY_TEST_TIMEOUT_SECS` | No | `60` | Per-quality-test DuckDB timeout (seconds). Quality tests in `tests/quality/*.sql` are bounded by this. Raise if a heavy assertion legitimately needs more time. |
 
 **Example**:
 ```
@@ -320,11 +344,23 @@ NESSIE_URL=http://nessie:19120/api/v1
 
 ---
 
-## Server
+## Server (platform)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `PORT` | No | `8080` | HTTP port for the REST API. |
+| `RAT_LISTEN_ADDR` | No | `127.0.0.1:8080` | Public listener address (`host:port`) for end-user APIs. Bind to `0.0.0.0:8080` in compose / k8s. Default binds to localhost only — opening it to the network without `RAT_API_KEY` set logs a warning. |
+| `PORT` | No | `8080` | Legacy single-port form. Used as `:${PORT}` when `RAT_LISTEN_ADDR` is unset. Prefer `RAT_LISTEN_ADDR` for new deployments. |
+| `INTERNAL_LISTEN_ADDR` | No | `127.0.0.1:8090` | Private listener for service-to-service callbacks (`POST /api/v1/internal/runs/{id}/status`, `POST /api/v1/internal/plugins/register`). MUST NOT be exposed beyond the container network. Compose binds it to `0.0.0.0:8090` inside the network and `127.0.0.1:8090` on the host. Refuses to start if equal to `RAT_LISTEN_ADDR`. See [ADR-019](adr/019-internal-listener-split.md). |
+| `RAT_API_KEY` | No | — | When set, every request to the public listener must carry `Authorization: Bearer <key>` or `X-API-Key: <key>`. The internal listener is unaffected (its auth model is network isolation). Use for single-tenant CE deployments behind a reverse proxy where you want a simple shared secret. Pro deployments use the auth plugin instead. |
+| `CORS_ORIGINS` | No | — | Comma-separated list of allowed origins for CORS. Defaults to no CORS (same-origin only). Set to `http://localhost:3000` for portal-on-different-port dev setups, or your portal's public URL in production. |
+| `RATE_LIMIT` | No | `100` | Requests per minute per client IP on the public listener. Set to `0` to disable. Applied after auth so authenticated requests share the per-IP budget. |
+| `SCHEDULER_ENABLED` | No | `true` | When `false`, ratd starts without the cron scheduler — useful for multi-replica deployments where only one instance should fire schedules. Pair with leader election (the `internal/leader` advisory-lock + heartbeat — see [ADR-023](adr/023-leader-heartbeat-dedicated-pool.md)). |
+| `GRPC_TLS_CA` | No | — | CA cert file for verifying ratd's gRPC sidecars (ratq/runner/plugins). Set all three `GRPC_TLS_*` to enable mTLS on the gRPC transport; unset = plaintext h2c (fine inside a private network). |
+| `GRPC_TLS_CERT` | No | — | Client cert file for mTLS to the gRPC sidecars. |
+| `GRPC_TLS_KEY` | No | — | Client key file for mTLS to the gRPC sidecars. |
+| `TLS_CERT_FILE`, `TLS_KEY_FILE` | No | — | When both are set, the public listener serves HTTPS instead of HTTP. Mutually inclusive (only one set → startup error). For typical deployments, prefer terminating TLS at a reverse proxy and leaving ratd on plain HTTP. |
+| `RAT_HEARTBEAT_POOL_ENABLED` | No | `true` | When `true`, the leader heartbeat uses a dedicated 1-connection pgx pool so handler load can't starve it. Set to `false` for tiny deployments where one extra Postgres connection isn't worth it (falls back to the shared pool, loses the saturation guard). See [ADR-023](adr/023-leader-heartbeat-dedicated-pool.md). |
+| `RAT_PPROF_ADDR` | No | — | Enables Go pprof endpoints (goroutine, heap, allocs, CPU profile, trace) on a dedicated listener. Disabled by default. **SECURITY**: pprof exposes sensitive runtime state — NEVER bind to a public interface. Use `127.0.0.1:6060` in production and access via SSH tunnel. |
 | `EDITION` | No | `community` | Edition identifier. Returned in `GET /health` and `GET /api/v1/features`. |
 
 ---
@@ -365,6 +401,23 @@ RAT_LICENSE_KEY=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
 Must match exactly what plugins check: `auth-keycloak`, `executor-container`, `acl`, `cloud-aws`.
 
 See ADR-012 (license gating) for architecture details.
+
+---
+
+## Plugins (plugin-side env vars)
+
+> Standard env vars every example plugin reads via `sdk.LoadPluginEnv()`.
+> See [`docs/PLUGIN_AUTHOR_GUIDE.md`](PLUGIN_AUTHOR_GUIDE.md) for the full
+> plugin-author guide.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PLUGIN_NAME` | No | (plugin's canonical short name) | The name the plugin registers with ratd. Usually left at default; override only when running the same image twice. |
+| `PLUGIN_ADDR` | No | `<name>:<port>` | Address ratd dials back to reach the plugin. Override when the docker network name differs from the canonical short name. |
+| `GRPC_PORT` | No | per-plugin | The HTTP/2 port the plugin binds. Named `GRPC_PORT` for historical reasons — it serves both ConnectRPC and the REST mux on the same h2c listener. |
+| `RATD_URL` | No | `http://ratd:8080` | ratd's public API base URL. Plugins use this for `/api/v1/*` (sharing, capability registration, etc). |
+| `RATD_INTERNAL_URL` | No | `RATD_URL` | ratd's internal listener base URL — where plugins POST phone-home. Falls back to `RATD_URL` when unset (single-port dev setups). In compose, set to `http://ratd:8090` so phone-home never crosses the public API. See [ADR-019](adr/019-internal-listener-split.md). |
+| `PLUGIN_ALLOW_LOOPBACK` | No | `false` | Escape hatch for the Wave 2 SSRF guard on plugin registration: when `true`, ratd accepts a plugin address that resolves to loopback (127/8, ::1). Use ONLY for out-of-container local plugin development. Never enable in production — combined with the SSRF guard's other rejections (link-local, AWS metadata), this is the last line of defence against a hostile address ending up in the plugin registry. |
 
 ---
 

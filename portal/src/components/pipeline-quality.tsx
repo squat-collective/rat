@@ -1,18 +1,31 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
+import { useSWRConfig } from "swr";
 import type { QualityTestResult, PreviewColumn } from "@squat-collective/rat-client";
 import {
   useQualityTests,
   useRunQualityTests,
   usePreviewQualityTest,
+  useDeleteQualityTest,
 } from "@/hooks/use-api";
+import { KEYS } from "@/lib/cache-keys";
 import { useScreenGlitch } from "@/components/screen-glitch";
 import { ErrorAlert } from "@/components/error-alert";
 import { DataTable } from "@/components/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Play, Loader2 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Loader2, Pencil, Play, Plus, Trash2 } from "lucide-react";
+import { QualityTestDialog } from "@/components/quality-test-dialog";
+import { QualityTestEditDialog } from "@/components/quality-test-edit-dialog";
 
 interface PipelineQualityProps {
   ns: string;
@@ -84,7 +97,14 @@ export function PipelineQuality({ ns, layer, name }: PipelineQualityProps) {
   const { data, isLoading, error } = useQualityTests(ns, layer, name);
   const { runTests, running, results } = useRunQualityTests(ns, layer, name);
   const { preview: previewTest, loading: previewLoading, results: previewResults, errors: previewErrors } = usePreviewQualityTest(ns, layer, name);
+  const { deleteTest } = useDeleteQualityTest(ns, layer, name);
+  const { mutate } = useSWRConfig();
   const { triggerGlitch, GlitchOverlay } = useScreenGlitch();
+
+  const [addOpen, setAddOpen] = useState(false);
+  const [editTest, setEditTest] = useState<{ name: string; sql: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const tests = data?.tests ?? [];
   const publishedCount = tests.filter((t) => t.published).length;
@@ -102,6 +122,22 @@ export function PipelineQuality({ ns, layer, name }: PipelineQualityProps) {
     }
   }, [runTests, triggerGlitch]);
 
+  const handleDelete = useCallback(async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await deleteTest(deleteTarget);
+      await mutate(KEYS.qualityTests(ns, layer, name));
+      await mutate(KEYS.match.files);
+      setDeleteTarget(null);
+    } catch (e) {
+      console.error("Failed to delete quality test:", e);
+      triggerGlitch();
+    } finally {
+      setDeleting(false);
+    }
+  }, [deleteTest, deleteTarget, mutate, ns, layer, name, triggerGlitch]);
+
   return (
     <div className="space-y-4">
       <GlitchOverlay />
@@ -118,16 +154,27 @@ export function PipelineQuality({ ns, layer, name }: PipelineQualityProps) {
             </span>
           )}
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 text-[10px] gap-1"
-          onClick={handleRunAll}
-          disabled={running || tests.length === 0}
-        >
-          <Play className="h-3 w-3" />
-          {running ? "Running..." : "Run All"}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 text-[10px] gap-1"
+            onClick={() => setAddOpen(true)}
+          >
+            <Plus className="h-3 w-3" />
+            New test
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 text-[10px] gap-1"
+            onClick={handleRunAll}
+            disabled={running || tests.length === 0}
+          >
+            <Play className="h-3 w-3" />
+            {running ? "Running..." : "Run All"}
+          </Button>
+        </div>
       </div>
 
       {/* Loading */}
@@ -142,7 +189,7 @@ export function PipelineQuality({ ns, layer, name }: PipelineQualityProps) {
       {!isLoading && tests.length === 0 && (
         <div className="brutal-card bg-card p-4">
           <p className="text-[10px] text-muted-foreground">
-            No quality tests yet. Right-click in the Code editor to add one.
+            No quality tests yet. Click &ldquo;+ New test&rdquo; above to add one.
           </p>
         </div>
       )}
@@ -163,6 +210,24 @@ export function PipelineQuality({ ns, layer, name }: PipelineQualityProps) {
               {publishedBadge(test.published)}
               {result && statusBadge(result)}
               <div className="flex-1" />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 text-[10px] gap-1"
+                onClick={() => setEditTest({ name: test.name, sql: test.sql })}
+              >
+                <Pencil className="h-3 w-3" />
+                Edit
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 text-[10px] gap-1 text-destructive hover:text-destructive"
+                onClick={() => setDeleteTarget(test.name)}
+              >
+                <Trash2 className="h-3 w-3" />
+                Delete
+              </Button>
               <Button
                 variant="ghost"
                 size="sm"
@@ -261,6 +326,61 @@ export function PipelineQuality({ ns, layer, name }: PipelineQualityProps) {
           </div>
         </div>
       )}
+
+      {/* Create / edit / delete dialogs */}
+      <QualityTestDialog
+        ns={ns}
+        layer={layer}
+        name={name}
+        open={addOpen}
+        onOpenChange={setAddOpen}
+      />
+      <QualityTestEditDialog
+        ns={ns}
+        layer={layer}
+        name={name}
+        test={editTest}
+        open={editTest !== null}
+        onOpenChange={(o) => {
+          if (!o) setEditTest(null);
+        }}
+      />
+      <Dialog
+        open={deleteTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setDeleteTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete quality test</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete{" "}
+              <span className="font-mono font-bold text-foreground">{deleteTarget}</span>? This
+              removes the test SQL file and cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleDelete}
+              disabled={deleting}
+              className="gap-1"
+            >
+              {deleting ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Trash2 className="h-3 w-3" />
+              )}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

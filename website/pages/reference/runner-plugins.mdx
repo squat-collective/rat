@@ -1,0 +1,588 @@
+import { Callout, Steps, Tabs } from 'nextra/components'
+import { Card, Cards } from '@/components/cards'
+import { Mermaid } from '@/components/mermaid'
+
+# Runner Plugin Reference
+
+Complete protocol and API reference for RAT's runner plugin system. Runner plugins are Python packages that extend the data layer via entry points.
+
+For a tutorial-style guide, see [Writing Runner Plugins](/guides/runner-plugins).
+
+---
+
+## Extension Point Groups
+
+RAT discovers runner plugins through 5 entry point groups. Each group has a corresponding Python protocol that plugins must implement.
+
+| Entry Point Group | Protocol | Description |
+|---|---|---|
+| `rat.strategies` | `MergeStrategyProtocol` | Custom merge strategies for writing data to Iceberg |
+| `rat.hooks` | `HookProtocol` | Pre/post phase callbacks at pipeline boundaries |
+| `rat.jinja_helpers` | `JinjaHelperProtocol` | Custom functions available in SQL templates |
+| `rat.pipeline_types` | `PipelineTypeProtocol` | New pipeline languages (R, Scala, etc.) |
+| `rat.sources` | `SourceConnectorProtocol` | External data source connectors |
+
+---
+
+## MergeStrategyProtocol
+
+Defines a custom merge strategy for writing pipeline results to Iceberg tables.
+
+```python filename="Protocol definition"
+from typing import Protocol, runtime_checkable
+import pyarrow as pa
+import duckdb
+from rat_runner.config import NessieConfig, S3Config
+from rat_runner.models import PipelineConfig
+
+@runtime_checkable
+class MergeStrategyProtocol(Protocol):
+
+    @property
+    def name(self) -> str:
+        """Unique strategy name (e.g. 'full_refresh', 'soft_delete')."""
+        ...
+
+    def execute(
+        self,
+        data: pa.Table,
+        table_name: str,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+        location: str,
+        config: PipelineConfig | None,
+        branch: str = "main",
+        conn: duckdb.DuckDBPyConnection | None = None,
+    ) -> int:
+        """Execute the merge strategy and return the number of rows written."""
+        ...
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `data` | `pa.Table` | The pipeline result as a PyArrow table |
+| `table_name` | `str` | Fully qualified table name (`namespace.layer.name`) |
+| `s3_config` | `S3Config` | S3 connection configuration (endpoint, bucket, credentials) |
+| `nessie_config` | `NessieConfig` | Nessie catalog configuration (URI, auth) |
+| `location` | `str` | S3 location for the Iceberg table (`s3://bucket/ns/layer/name/`) |
+| `config` | `PipelineConfig \| None` | Pipeline configuration (unique_key, partition_by, etc.) |
+| `branch` | `str` | Nessie branch to write to (default: `"main"`) |
+| `conn` | `DuckDBPyConnection \| None` | Optional DuckDB connection for intermediate queries |
+
+### Return Value
+
+`int` — The number of rows written to the Iceberg table.
+
+### Entry Point Registration
+
+```toml filename="pyproject.toml"
+[project.entry-points."rat.strategies"]
+my_strategy = "my_plugin.module:MyStrategyClass"
+```
+
+### Resolution
+
+When a pipeline specifies `@merge_strategy: my_strategy`, the executor:
+
+1. Checks `PluginRegistry.get_strategy("my_strategy")`
+2. If found, calls `strategy.execute(...)` with the pipeline result
+3. If not found, falls back to built-in dispatch (development mode only)
+
+---
+
+## HookProtocol
+
+Defines a callback that fires at a specific phase boundary during pipeline execution.
+
+```python filename="Protocol definition"
+from typing import Literal, Protocol, runtime_checkable
+from rat_runner.plugin_protocols import HookContext
+
+HookPhase = Literal[
+    "pre_execute",
+    "post_execute",
+    "pre_write",
+    "post_write",
+    "pre_quality",
+    "post_quality",
+]
+
+@runtime_checkable
+class HookProtocol(Protocol):
+
+    @property
+    def phase(self) -> HookPhase:
+        """Which phase boundary this hook fires at."""
+        ...
+
+    def __call__(self, context: HookContext) -> None:
+        """Execute the hook."""
+        ...
+```
+
+### HookPhase Values
+
+| Phase | Fires When | Typical Use |
+|---|---|---|
+| `pre_execute` | Before SQL/Python execution (after config load) | Validation, logging, setup |
+| `post_execute` | After execution completes (result table available) | Data profiling, metrics |
+| `pre_write` | Before Iceberg write | Schema validation, transformations |
+| `post_write` | After Iceberg write completes | Row count logging, notifications |
+| `pre_quality` | Before quality tests run | Custom quality setup |
+| `post_quality` | After quality tests complete | Alert on quality failures |
+
+### Entry Point Registration
+
+```toml filename="pyproject.toml"
+[project.entry-points."rat.hooks"]
+my_hook = "my_plugin.module:MyHookClass"
+```
+
+<Callout type="warning">
+Hooks **must never crash pipelines**. The `PluginRegistry.dispatch_hooks()` method wraps every hook call in a try/except — errors are logged but do not propagate. Design your hooks defensively.
+</Callout>
+
+---
+
+## HookContext
+
+The context object passed to every hook callback. Provides metadata about the current pipeline run.
+
+```python filename="Dataclass definition"
+from dataclasses import dataclass, field
+from rat_runner.models import PipelineConfig, PipelineLogger
+
+@dataclass
+class HookContext:
+    namespace: str
+    layer: str
+    name: str
+    run_id: str
+    config: PipelineConfig | None
+    logger: PipelineLogger
+    branch: str = ""
+    extra: dict[str, object] = field(default_factory=dict)
+```
+
+### Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `namespace` | `str` | Pipeline namespace (e.g. `"ecommerce"`) |
+| `layer` | `str` | Pipeline layer (e.g. `"silver"`) |
+| `name` | `str` | Pipeline name (e.g. `"enriched_orders"`) |
+| `run_id` | `str` | Unique run identifier (UUID) |
+| `config` | `PipelineConfig \| None` | Merged pipeline configuration (from config.yaml + annotations) |
+| `logger` | `PipelineLogger` | Run-scoped logger — use this to emit logs visible in the portal |
+| `branch` | `str` | Nessie branch for this run (ephemeral branch name or `"main"`) |
+| `extra` | `dict[str, object]` | Phase-specific metadata populated by the executor (see below) |
+
+### `extra` Keys
+
+The executor populates `extra` with run-time data at every hook dispatch. Available keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `rows_written` | `int` | Number of rows written to Iceberg. `0` before `post_write` phase. |
+| `row_count` | `int` | Number of rows returned by the SQL/Python execution. `0` before `pre_write` phase. |
+
+```python
+# Example: accessing row count in a post_write hook
+rows = context.extra.get("rows_written", 0)
+context.logger.info(f"Wrote {rows} rows")
+```
+
+<Callout type="info">
+Use `context.logger.info(...)` instead of Python's `logging` module. Messages sent through `context.logger` appear in the run log stream in the portal UI.
+</Callout>
+
+---
+
+## JinjaHelperProtocol
+
+Defines a custom function that can be used in SQL templates via Jinja2.
+
+```python filename="Protocol definition"
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class JinjaHelperProtocol(Protocol):
+
+    @property
+    def name(self) -> str:
+        """Function name as it appears in templates (e.g. 'my_func')."""
+        ...
+
+    def __call__(self, *args: object, **kwargs: object) -> object:
+        """The template function itself."""
+        ...
+```
+
+### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `name` | `str` | The function name available in templates. Must be a valid Python identifier. |
+
+### Usage in Templates
+
+Once registered, the helper is available in SQL templates:
+
+```sql filename="pipeline.sql"
+-- If your helper is named "env_var":
+SELECT * FROM {{ ref('bronze.data') }}
+WHERE region = '{{ env_var("AWS_REGION", "us-east-1") }}'
+```
+
+### Built-in Shadowing Protection
+
+Plugin helpers **cannot override** built-in template functions. If a helper's `name` conflicts with a built-in, it is silently skipped with a warning log:
+
+```
+Plugin Jinja helper 'ref' conflicts with built-in, skipping
+```
+
+**Protected names** (cannot be overridden):
+
+| Name | Type |
+|---|---|
+| `ref` | function |
+| `landing_zone` | function |
+| `this` | variable |
+| `run_started_at` | variable |
+| `watermark_value` | variable |
+| `is_incremental` | function |
+| `is_scd2` | function |
+| `is_snapshot` | function |
+| `is_append_only` | function |
+| `is_delete_insert` | function |
+
+### Entry Point Registration
+
+```toml filename="pyproject.toml"
+[project.entry-points."rat.jinja_helpers"]
+my_func = "my_plugin.module:MyHelperClass"
+```
+
+---
+
+## PipelineTypeProtocol
+
+Defines a new pipeline language. Implementations receive raw source code and return a PyArrow table.
+
+```python filename="Protocol definition"
+from typing import Protocol, runtime_checkable
+import pyarrow as pa
+from rat_runner.config import NessieConfig, S3Config
+from rat_runner.models import PipelineConfig
+
+@runtime_checkable
+class PipelineTypeProtocol(Protocol):
+
+    @property
+    def name(self) -> str:
+        """Pipeline type identifier (e.g. 'sql', 'python', 'r')."""
+        ...
+
+    @property
+    def file_extension(self) -> str:
+        """File extension without dot (e.g. 'sql', 'py', 'r')."""
+        ...
+
+    def execute(
+        self,
+        source: str,
+        namespace: str,
+        layer: str,
+        pipeline_name: str,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+        config: PipelineConfig | None,
+    ) -> pa.Table:
+        """Execute the pipeline source and return a result table."""
+        ...
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `source` | `str` | Raw source code of the pipeline file |
+| `namespace` | `str` | Pipeline namespace |
+| `layer` | `str` | Pipeline layer |
+| `pipeline_name` | `str` | Pipeline name |
+| `s3_config` | `S3Config` | S3 connection configuration |
+| `nessie_config` | `NessieConfig` | Nessie catalog configuration |
+| `config` | `PipelineConfig \| None` | Pipeline configuration |
+
+### Return Value
+
+`pa.Table` — The pipeline result as a PyArrow table.
+
+### Entry Point Registration
+
+```toml filename="pyproject.toml"
+[project.entry-points."rat.pipeline_types"]
+r = "my_plugin.module:RLangPipelineType"
+```
+
+---
+
+## SourceConnectorProtocol
+
+Defines an external data source connector. Source connectors fetch data from systems outside S3/Iceberg and return Arrow tables.
+
+```python filename="Protocol definition"
+from typing import Protocol, runtime_checkable
+import pyarrow as pa
+from rat_runner.config import S3Config
+
+@runtime_checkable
+class SourceConnectorProtocol(Protocol):
+
+    @property
+    def name(self) -> str:
+        """Source type identifier (e.g. 'postgres', 'mysql', 'api')."""
+        ...
+
+    def fetch(
+        self,
+        config: dict[str, object],
+        s3_config: S3Config,
+    ) -> pa.Table:
+        """Fetch data from the external source and return as Arrow table."""
+        ...
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `config` | `dict[str, object]` | Source-specific configuration (connection strings, queries, etc.) |
+| `s3_config` | `S3Config` | S3 configuration (for staging data if needed) |
+
+### Return Value
+
+`pa.Table` — The fetched data as a PyArrow table.
+
+### Entry Point Registration
+
+```toml filename="pyproject.toml"
+[project.entry-points."rat.sources"]
+postgres = "my_plugin.module:PostgresSource"
+```
+
+---
+
+## PluginRegistry API
+
+The `PluginRegistry` class manages discovery and access to all runner plugins for a single pipeline run.
+
+```python filename="rat_runner/plugin_registry.py"
+class PluginRegistry:
+    def __init__(self) -> None: ...
+    def discover(self) -> None: ...
+```
+
+### Public Methods
+
+| Method | Return Type | Description |
+|---|---|---|
+| `discover()` | `None` | Scan installed entry points and load all plugins. Call once per run. |
+| `get_strategy(name)` | `MergeStrategyProtocol \| None` | Get a merge strategy by name |
+| `get_pipeline_type(name)` | `PipelineTypeProtocol \| None` | Get a pipeline type by name |
+| `get_helpers()` | `dict[str, JinjaHelperProtocol]` | Get all registered Jinja helpers |
+| `get_hooks(phase)` | `list[HookProtocol]` | Get all hooks for a specific phase |
+| `get_source(name)` | `SourceConnectorProtocol \| None` | Get a source connector by name |
+| `has_strategy(name)` | `bool` | Check if a strategy is registered |
+| `strategy_names()` | `list[str]` | List all registered strategy names |
+| `pipeline_type_names()` | `list[str]` | List all registered pipeline type names |
+| `dispatch_hooks(phase, context)` | `None` | Fire all hooks for a phase. Errors are logged, not raised. |
+
+### Discovery Lifecycle
+
+<Mermaid chart={`
+sequenceDiagram
+    participant E as Executor
+    participant R as PluginRegistry
+    participant EP as entry_points()
+
+    E->>R: PluginRegistry()
+    E->>R: discover()
+    R->>EP: entry_points(group="rat.strategies")
+    EP-->>R: [ep1, ep2, ...]
+    R->>R: Load + validate each entry point
+    R->>EP: entry_points(group="rat.hooks")
+    EP-->>R: [ep3, ...]
+    R->>R: Load + validate
+    Note over R: Repeat for all 5 groups
+    R-->>E: Discovery complete
+    E->>R: get_strategy("soft_delete")
+    R-->>E: SoftDeleteStrategy instance
+`} />
+
+### Validation
+
+Each entry point is loaded and checked against its protocol using `isinstance()` with `@runtime_checkable`. Invalid plugins are:
+
+- **Logged** with a warning (plugin name, group, and expected protocol)
+- **Skipped** — they do not break the pipeline or other plugins
+
+```
+WARNING - Plugin 'bad_plugin' from group 'rat.strategies' does not implement MergeStrategyProtocol, skipping
+```
+
+---
+
+## Entry Point Registration
+
+All runner plugins are registered via `[project.entry-points]` in `pyproject.toml`. The format is:
+
+```toml filename="pyproject.toml"
+[project.entry-points."<group>"]
+<name> = "<module>:<ClassName>"
+```
+
+### Complete Example
+
+A plugin package that registers across multiple groups:
+
+```toml filename="pyproject.toml"
+[project]
+name = "rat-plugin-example"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["pyarrow>=17.0"]
+
+[project.entry-points."rat.strategies"]
+soft_delete = "rat_plugin_example.strategy:SoftDeleteStrategy"
+
+[project.entry-points."rat.hooks"]
+row_stats = "rat_plugin_example.hook:RowStatsHook"
+
+[project.entry-points."rat.jinja_helpers"]
+env_var = "rat_plugin_example.helpers:EnvVarHelper"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+```
+
+### Entry Point Naming Rules
+
+- The **name** (left side) is the identifier used to look up the plugin (e.g., strategy name in `@merge_strategy: soft_delete`)
+- The **value** (right side) is `module:ClassName` — the entry point can be a class (instantiated by the registry) or a pre-built instance
+- Names must be valid Python identifiers (alphanumeric + underscore)
+
+---
+
+## Built-in Strategies
+
+These strategies are registered by the `rat-runner` package itself and are always available:
+
+| Strategy | Entry Point | Class | Description |
+|---|---|---|---|
+| `full_refresh` | `rat_runner.strategies:FullRefreshStrategy` | `FullRefreshStrategy` | Full table overwrite — idempotent |
+| `incremental` | `rat_runner.strategies:IncrementalStrategy` | `IncrementalStrategy` | Upsert merge on unique_key |
+| `append_only` | `rat_runner.strategies:AppendOnlyStrategy` | `AppendOnlyStrategy` | Pure append — NOT idempotent |
+| `delete_insert` | `rat_runner.strategies:DeleteInsertStrategy` | `DeleteInsertStrategy` | Delete matching keys, then insert |
+| `scd2` | `rat_runner.strategies:SCD2Strategy` | `SCD2Strategy` | Slowly Changing Dimension Type 2 |
+| `snapshot` | `rat_runner.strategies:SnapshotStrategy` | `SnapshotStrategy` | Partition-aware overwrite |
+
+<Callout type="info">
+Custom strategies can coexist with built-in ones. If a custom strategy uses the same name as a built-in (e.g., `full_refresh`), the last-loaded entry point wins. Avoid shadowing built-in names unless you intentionally want to replace them.
+</Callout>
+
+---
+
+## Built-in Jinja Functions
+
+These template functions are always available and **cannot be overridden** by plugins:
+
+| Function / Variable | Type | Description |
+|---|---|---|
+| `ref('layer.name')` | function | Reference an Iceberg table |
+| `landing_zone('name')` | function | Resolve a landing zone S3 path |
+| `this` | variable | Current pipeline's Iceberg table |
+| `run_started_at` | variable | ISO 8601 UTC timestamp of run start |
+| `watermark_value` | variable | MAX of watermark column from existing table |
+| `is_incremental()` | function | `true` if incremental + table exists |
+| `is_scd2()` | function | `true` if scd2 strategy |
+| `is_snapshot()` | function | `true` if snapshot strategy |
+| `is_append_only()` | function | `true` if append_only strategy |
+| `is_delete_insert()` | function | `true` if delete_insert strategy |
+
+See [SQL Templating Reference](/reference/sql-templating) for full details on each function.
+
+---
+
+## HookPhase Execution Order
+
+Hooks fire at 6 phase boundaries within the pipeline execution flow:
+
+<Mermaid chart={`
+flowchart TD
+    P0["Phase 0: Create Branch"] --> P1["Phase 1: Detect & Load Config"]
+    P1 --> H1["🔌 pre_execute hooks"]
+    H1 --> P2["Phase 2: Execute SQL/Python"]
+    P2 --> H2["🔌 pre_write hooks"]
+    H2 --> P3["Phase 3: Write to Iceberg"]
+    P3 --> H3["🔌 post_write hooks"]
+    H3 --> H4["🔌 pre_quality hooks"]
+    H4 --> P4["Phase 4: Quality Tests"]
+    P4 --> H5["🔌 post_quality hooks"]
+    H5 --> P5["Phase 5: Merge/Discard Branch"]
+    P5 --> H6["🔌 post_execute hooks"]
+
+    style H1 fill:#a855f7,color:#fff
+    style H2 fill:#a855f7,color:#fff
+    style H3 fill:#a855f7,color:#fff
+    style H4 fill:#a855f7,color:#fff
+    style H5 fill:#a855f7,color:#fff
+    style H6 fill:#a855f7,color:#fff
+`} />
+
+### Hook Dispatch Rules
+
+1. **Multiple hooks per phase**: All hooks registered for a phase are called in discovery order
+2. **Error isolation**: Each hook is wrapped in try/except — a failing hook does not block other hooks
+3. **No return values**: Hooks return `None`. They observe and side-effect only.
+4. **Fresh context**: A new `HookContext` is built before each dispatch, with up-to-date `extra` values reflecting the current pipeline state
+
+---
+
+## Error Handling
+
+### Plugin Load Errors
+
+If a plugin fails to load (import error, instantiation error), the error is logged and the plugin is skipped:
+
+```
+WARNING - Failed to load plugin 'broken_plugin' from group 'rat.strategies'
+```
+
+Other plugins in the same group and other groups continue loading normally.
+
+### Protocol Validation Errors
+
+If a loaded plugin does not satisfy its protocol (missing methods/properties), it is logged and skipped:
+
+```
+WARNING - Plugin 'bad_impl' from group 'rat.strategies' does not implement MergeStrategyProtocol, skipping
+```
+
+### Hook Runtime Errors
+
+Hook errors during pipeline execution are caught by `dispatch_hooks()`:
+
+```
+WARNING - Hook failed at phase 'post_write'
+```
+
+The pipeline continues. Hooks must be designed as non-critical observers.
+
+### Strategy Runtime Errors
+
+Strategy errors during `execute()` are **not** caught by the registry — they propagate to the executor and fail the pipeline run. Strategies must handle their own error cases or let them bubble up intentionally.

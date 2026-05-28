@@ -26,18 +26,19 @@ def _nessie() -> NessieConfig:
 class TestCreateBranch:
     @patch("rat_runner.nessie.urllib.request.urlopen")
     def test_creates_branch_from_main(self, mock_urlopen: MagicMock):
-        # First call: _get_reference (GET main)
+        # First call: _get_reference (GET main) — Nessie 0.99.x wraps the
+        # reference under a top-level "reference" key.
         ref_response = MagicMock()
         ref_response.read.return_value = json.dumps(
-            {"name": "main", "hash": "abc123", "type": "BRANCH"}
+            {"reference": {"name": "main", "hash": "abc123", "type": "BRANCH"}}
         ).encode()
         ref_response.__enter__ = lambda s: s
         ref_response.__exit__ = MagicMock(return_value=False)
 
-        # Second call: create branch (POST /trees)
+        # Second call: create branch (POST /trees) — also wrapped.
         create_response = MagicMock()
         create_response.read.return_value = json.dumps(
-            {"name": "run-r1", "hash": "abc123", "type": "BRANCH"}
+            {"reference": {"name": "run-r1", "hash": "abc123", "type": "BRANCH"}}
         ).encode()
         create_response.__enter__ = lambda s: s
         create_response.__exit__ = MagicMock(return_value=False)
@@ -52,13 +53,21 @@ class TestCreateBranch:
 class TestMergeBranch:
     @patch("rat_runner.nessie.urllib.request.urlopen")
     def test_merges_source_to_target(self, mock_urlopen: MagicMock):
-        # _get_reference
-        ref_response = MagicMock()
-        ref_response.read.return_value = json.dumps(
-            {"name": "run-r1", "hash": "def456", "type": "BRANCH"}
+        # _get_reference (source: run-r1)
+        source_ref_response = MagicMock()
+        source_ref_response.read.return_value = json.dumps(
+            {"reference": {"name": "run-r1", "hash": "def456", "type": "BRANCH"}}
         ).encode()
-        ref_response.__enter__ = lambda s: s
-        ref_response.__exit__ = MagicMock(return_value=False)
+        source_ref_response.__enter__ = lambda s: s
+        source_ref_response.__exit__ = MagicMock(return_value=False)
+
+        # _get_reference (target: main) — needed for path-embedded @hash
+        target_ref_response = MagicMock()
+        target_ref_response.read.return_value = json.dumps(
+            {"reference": {"name": "main", "hash": "main123", "type": "BRANCH"}}
+        ).encode()
+        target_ref_response.__enter__ = lambda s: s
+        target_ref_response.__exit__ = MagicMock(return_value=False)
 
         # merge
         merge_response = MagicMock()
@@ -66,9 +75,10 @@ class TestMergeBranch:
         merge_response.__enter__ = lambda s: s
         merge_response.__exit__ = MagicMock(return_value=False)
 
-        mock_urlopen.side_effect = [ref_response, merge_response]
+        mock_urlopen.side_effect = [source_ref_response, target_ref_response, merge_response]
 
         merge_branch(_nessie(), "run-r1", target="main")  # should not raise
+        assert mock_urlopen.call_count == 3
 
 
 class TestDeleteBranch:
@@ -163,26 +173,35 @@ class TestBranchNameValidation:
 
     @patch("rat_runner.nessie.urllib.request.urlopen")
     def test_merge_branch_url_encodes_target(self, mock_urlopen: MagicMock):
-        ref_response = MagicMock()
-        ref_response.read.return_value = json.dumps(
-            {"name": "run-r1", "hash": "def456", "type": "BRANCH"}
+        source_ref_response = MagicMock()
+        source_ref_response.read.return_value = json.dumps(
+            {"reference": {"name": "run-r1", "hash": "def456", "type": "BRANCH"}}
         ).encode()
-        ref_response.__enter__ = lambda s: s
-        ref_response.__exit__ = MagicMock(return_value=False)
+        source_ref_response.__enter__ = lambda s: s
+        source_ref_response.__exit__ = MagicMock(return_value=False)
+
+        target_ref_response = MagicMock()
+        target_ref_response.read.return_value = json.dumps(
+            {"reference": {"name": "main", "hash": "main123", "type": "BRANCH"}}
+        ).encode()
+        target_ref_response.__enter__ = lambda s: s
+        target_ref_response.__exit__ = MagicMock(return_value=False)
 
         merge_response = MagicMock()
         merge_response.read.return_value = b"{}"
         merge_response.__enter__ = lambda s: s
         merge_response.__exit__ = MagicMock(return_value=False)
 
-        mock_urlopen.side_effect = [ref_response, merge_response]
+        mock_urlopen.side_effect = [source_ref_response, target_ref_response, merge_response]
 
         merge_branch(_nessie(), "run-r1", target="main")
 
-        # Verify the merge URL was called with a properly encoded target
-        merge_call = mock_urlopen.call_args_list[1]
+        # Verify the merge URL was called with a properly encoded target,
+        # including the path-embedded @hash expected-hash suffix.
+        merge_call = mock_urlopen.call_args_list[2]
         merge_url = merge_call[0][0].full_url
-        assert "/trees/main/history/merge" in merge_url
+        # @ encodes to %40 via urllib.parse.quote(safe='')
+        assert "/trees/main%40main123/history/merge" in merge_url
 
 
 def _http_error(code: int, msg: str = "Error") -> urllib.error.HTTPError:
@@ -447,7 +466,11 @@ class TestCreateBranchRetry:
         ref_resp_1 = _ok_response()
         # Second attempt (retry): _get_reference succeeds, POST succeeds
         ref_resp_2 = _ok_response()
-        create_resp = _ok_response({"name": "run-r1", "hash": "abc123", "type": "BRANCH"})
+        # Create response must be wrapped — create_branch reads
+        # result["reference"]["hash"] per Nessie 0.99.x.
+        create_resp = _ok_response(
+            {"reference": {"name": "run-r1", "hash": "abc123", "type": "BRANCH"}}
+        )
 
         mock_urlopen.side_effect = [
             ref_resp_1,  # _get_reference (1st attempt)
@@ -486,6 +509,111 @@ class TestMergeBranchRetry:
         assert mock_urlopen.call_count == 4
 
 
+class TestMergeBranchConflictRetry:
+    """In-function retry of 409 CONFLICT on the merge POST (concurrent
+    merge moved target). merge_branch should refetch the target hash and
+    retry up to MERGE_CONFLICT_MAX_RETRIES times before giving up.
+    """
+
+    @staticmethod
+    def _src_ref(hash_: str = "src0") -> MagicMock:
+        return _ok_response({"reference": {"name": "run-r1", "hash": hash_, "type": "BRANCH"}})
+
+    @staticmethod
+    def _tgt_ref(hash_: str) -> MagicMock:
+        return _ok_response({"reference": {"name": "main", "hash": hash_, "type": "BRANCH"}})
+
+    @staticmethod
+    def _merge_ok() -> MagicMock:
+        resp = MagicMock()
+        resp.read.return_value = b"{}"
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    @patch("rat_runner.nessie.time.sleep")
+    @patch("rat_runner.nessie.urllib.request.urlopen")
+    def test_merge_conflict_409_refetches_target_hash_and_retries(
+        self, mock_urlopen: MagicMock, mock_sleep: MagicMock
+    ):
+        """A 409 on the merge POST triggers an internal refetch of the
+        target hash and a re-post — no outer-decorator backoff sleeps."""
+        # Attempt 1:
+        #   _get_reference(source) → src
+        #   _get_reference(target) → hashA
+        #   POST merge → 409 CONFLICT
+        # Attempt 2:
+        #   _get_reference(target) → hashB  (NOTE: refetch — source not re-fetched)
+        #   POST merge → 200 OK
+        mock_urlopen.side_effect = [
+            self._src_ref("src0"),
+            self._tgt_ref("hashA"),
+            _http_error(409, "Conflict"),
+            self._tgt_ref("hashB"),
+            self._merge_ok(),
+        ]
+
+        merge_branch(_nessie(), "run-r1", target="main")
+
+        # 5 urlopen calls: src + 2× target + 2× merge POST.
+        assert mock_urlopen.call_count == 5
+        # The transient-retry backoff sleep MUST NOT fire — 409 is handled
+        # in-function, not by the @retry_on_transient decorator.
+        mock_sleep.assert_not_called()
+
+        # Confirm the SECOND merge POST URL used the fresh target hash (hashB).
+        merge_calls = [
+            c for c in mock_urlopen.call_args_list if "/history/merge" in c[0][0].full_url
+        ]
+        assert len(merge_calls) == 2
+        assert "main%40hashA" in merge_calls[0][0][0].full_url
+        assert "main%40hashB" in merge_calls[1][0][0].full_url
+
+    @patch("rat_runner.nessie.time.sleep")
+    @patch("rat_runner.nessie.urllib.request.urlopen")
+    def test_merge_conflict_409_exhausts_retries_and_raises(
+        self, mock_urlopen: MagicMock, mock_sleep: MagicMock
+    ):
+        """When every attempt 409s, merge_branch raises HTTPError(409)."""
+        # 3 attempts. Each attempt: 1 target GET + 1 merge POST = 2 calls.
+        # Plus the initial source GET = 1 + 3×2 = 7 calls total.
+        mock_urlopen.side_effect = [
+            self._src_ref(),
+            self._tgt_ref("hashA"),
+            _http_error(409, "Conflict"),
+            self._tgt_ref("hashB"),
+            _http_error(409, "Conflict"),
+            self._tgt_ref("hashC"),
+            _http_error(409, "Conflict"),
+        ]
+
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            merge_branch(_nessie(), "run-r1", target="main")
+        assert exc_info.value.code == 409
+        # 3 in-function attempts, no transient-decorator retries.
+        assert mock_urlopen.call_count == 7
+        mock_sleep.assert_not_called()
+
+    @patch("rat_runner.nessie.time.sleep")
+    @patch("rat_runner.nessie.urllib.request.urlopen")
+    def test_merge_non_409_4xx_raises_immediately_no_refetch(
+        self, mock_urlopen: MagicMock, mock_sleep: MagicMock
+    ):
+        """A 400 on the merge POST is permanent and raised on the first
+        attempt — no in-function refetch, no decorator retry."""
+        mock_urlopen.side_effect = [
+            self._src_ref(),
+            self._tgt_ref("hashA"),
+            _http_error(400, "Bad Request"),
+        ]
+
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            merge_branch(_nessie(), "run-r1", target="main")
+        assert exc_info.value.code == 400
+        assert mock_urlopen.call_count == 3
+        mock_sleep.assert_not_called()
+
+
 class TestUrlopenTimeoutParameter:
     """Verify that every urlopen call in nessie.py passes timeout=10."""
 
@@ -506,7 +634,10 @@ class TestUrlopenTimeoutParameter:
     def test_create_branch_passes_timeout_on_all_calls(self, mock_urlopen: MagicMock):
         """create_branch should pass timeout=10 on both _get_reference and POST."""
         ref_resp = _ok_response()
-        create_resp = _ok_response({"name": "run-r1", "hash": "abc123", "type": "BRANCH"})
+        # Wrapped shape per Nessie 0.99.x.
+        create_resp = _ok_response(
+            {"reference": {"name": "run-r1", "hash": "abc123", "type": "BRANCH"}}
+        )
         mock_urlopen.side_effect = [ref_resp, create_resp]
 
         create_branch(_nessie(), "run-r1")
@@ -518,20 +649,29 @@ class TestUrlopenTimeoutParameter:
 
     @patch("rat_runner.nessie.urllib.request.urlopen")
     def test_merge_branch_passes_timeout_on_all_calls(self, mock_urlopen: MagicMock):
-        """merge_branch should pass timeout=10 on both _get_reference and POST."""
-        ref_resp = _ok_response({"name": "run-r1", "hash": "def456", "type": "BRANCH"})
+        """merge_branch should pass timeout on all three urlopen calls.
+
+        Nessie 0.99.x requires GET source ref, GET target ref (for the
+        @hash expected-hash), and POST merge — three calls total.
+        """
+        source_ref_resp = _ok_response(
+            {"reference": {"name": "run-r1", "hash": "def456", "type": "BRANCH"}}
+        )
+        target_ref_resp = _ok_response(
+            {"reference": {"name": "main", "hash": "main123", "type": "BRANCH"}}
+        )
         merge_resp = MagicMock()
         merge_resp.read.return_value = b"{}"
         merge_resp.__enter__ = lambda s: s
         merge_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.side_effect = [ref_resp, merge_resp]
+        mock_urlopen.side_effect = [source_ref_resp, target_ref_resp, merge_resp]
 
         merge_branch(_nessie(), "run-r1", target="main")
 
-        assert mock_urlopen.call_count == 2
+        assert mock_urlopen.call_count == 3
         for call_obj in mock_urlopen.call_args_list:
             _, kwargs = call_obj
-            assert kwargs.get("timeout") == 10
+            assert kwargs.get("timeout") in (10, 30)
 
     @patch("rat_runner.nessie.urllib.request.urlopen")
     def test_delete_branch_passes_timeout_on_all_calls(self, mock_urlopen: MagicMock):

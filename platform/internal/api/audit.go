@@ -29,7 +29,7 @@ func AuditMiddleware(store AuditStore) func(http.Handler) http.Handler {
 			if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
 				userID := "anonymous"
 				if user := plugins.UserFromContext(r.Context()); user != nil {
-					userID = user.UserId
+					userID = user.UserID
 				}
 
 				action := strings.ToLower(r.Method)

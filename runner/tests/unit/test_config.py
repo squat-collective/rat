@@ -529,6 +529,29 @@ class TestValidatePipelineConfig:
         for strategy in MergeStrategy:
             validate_pipeline_config({"merge_strategy": strategy})
 
+    def test_plugin_strategy_accepted_via_known_strategies(self):
+        """A non-built-in strategy is accepted when passed in known_strategies."""
+        validate_pipeline_config(
+            {"merge_strategy": "soft_delete"}, known_strategies=["soft_delete"]
+        )
+
+    def test_plugin_strategy_rejected_without_known_strategies(self):
+        """A non-built-in strategy is still rejected when known_strategies is omitted."""
+        with pytest.raises(ValueError, match="Invalid merge_strategy 'soft_delete'"):
+            validate_pipeline_config({"merge_strategy": "soft_delete"})
+
+    def test_unknown_strategy_rejected_even_with_known_strategies(self):
+        """known_strategies extends the accepted set but does not disable validation."""
+        with pytest.raises(ValueError, match="Invalid merge_strategy 'bogus'"):
+            validate_pipeline_config({"merge_strategy": "bogus"}, known_strategies=["soft_delete"])
+
+    def test_parse_pipeline_config_accepts_plugin_strategy(self):
+        """parse_pipeline_config accepts a plugin strategy passed via known_strategies."""
+        config = parse_pipeline_config(
+            "merge_strategy: soft_delete", known_strategies=["soft_delete"]
+        )
+        assert config.merge_strategy == "soft_delete"
+
     def test_merge_strategy_not_present_is_ok(self):
         """Omitting merge_strategy should not raise."""
         validate_pipeline_config({"description": "no strategy"})

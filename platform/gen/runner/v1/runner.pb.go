@@ -883,6 +883,155 @@ func (x *FileValidation) GetWarnings() []string {
 	return nil
 }
 
+type ListPluginsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPluginsRequest) Reset() {
+	*x = ListPluginsRequest{}
+	mi := &file_runner_v1_runner_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPluginsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPluginsRequest) ProtoMessage() {}
+
+func (x *ListPluginsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_runner_v1_runner_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPluginsRequest.ProtoReflect.Descriptor instead.
+func (*ListPluginsRequest) Descriptor() ([]byte, []int) {
+	return file_runner_v1_runner_proto_rawDescGZIP(), []int{11}
+}
+
+type ListPluginsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Plugins       []*RunnerPlugin        `protobuf:"bytes,1,rep,name=plugins,proto3" json:"plugins,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListPluginsResponse) Reset() {
+	*x = ListPluginsResponse{}
+	mi := &file_runner_v1_runner_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListPluginsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListPluginsResponse) ProtoMessage() {}
+
+func (x *ListPluginsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_runner_v1_runner_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListPluginsResponse.ProtoReflect.Descriptor instead.
+func (*ListPluginsResponse) Descriptor() ([]byte, []int) {
+	return file_runner_v1_runner_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ListPluginsResponse) GetPlugins() []*RunnerPlugin {
+	if x != nil {
+		return x.Plugins
+	}
+	return nil
+}
+
+// RunnerPlugin describes a single Python entry point discovered by the runner.
+type RunnerPlugin struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`                                  // entry point name ("soft_delete", "env_var")
+	Group         string                 `protobuf:"bytes,2,opt,name=group,proto3" json:"group,omitempty"`                                // "rat.strategies", "rat.hooks", etc.
+	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`                            // package version
+	PackageName   string                 `protobuf:"bytes,4,opt,name=package_name,json=packageName,proto3" json:"package_name,omitempty"` // Python package name ("rat-plugin-soft-delete")
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RunnerPlugin) Reset() {
+	*x = RunnerPlugin{}
+	mi := &file_runner_v1_runner_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunnerPlugin) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunnerPlugin) ProtoMessage() {}
+
+func (x *RunnerPlugin) ProtoReflect() protoreflect.Message {
+	mi := &file_runner_v1_runner_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunnerPlugin.ProtoReflect.Descriptor instead.
+func (*RunnerPlugin) Descriptor() ([]byte, []int) {
+	return file_runner_v1_runner_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *RunnerPlugin) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *RunnerPlugin) GetGroup() string {
+	if x != nil {
+		return x.Group
+	}
+	return ""
+}
+
+func (x *RunnerPlugin) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *RunnerPlugin) GetPackageName() string {
+	if x != nil {
+		return x.PackageName
+	}
+	return ""
+}
+
 var File_runner_v1_runner_proto protoreflect.FileDescriptor
 
 const file_runner_v1_runner_proto_rawDesc = "" +
@@ -967,7 +1116,15 @@ const file_runner_v1_runner_proto_rawDesc = "" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
 	"\x05valid\x18\x02 \x01(\bR\x05valid\x12\x16\n" +
 	"\x06errors\x18\x03 \x03(\tR\x06errors\x12\x1a\n" +
-	"\bwarnings\x18\x04 \x03(\tR\bwarnings2\x89\x05\n" +
+	"\bwarnings\x18\x04 \x03(\tR\bwarnings\"\x14\n" +
+	"\x12ListPluginsRequest\"T\n" +
+	"\x13ListPluginsResponse\x12=\n" +
+	"\aplugins\x18\x01 \x03(\v2#.ratatouille.runner.v1.RunnerPluginR\aplugins\"u\n" +
+	"\fRunnerPlugin\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05group\x18\x02 \x01(\tR\x05group\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\tR\aversion\x12!\n" +
+	"\fpackage_name\x18\x04 \x01(\tR\vpackageName2\xef\x05\n" +
 	"\rRunnerService\x12m\n" +
 	"\x0eSubmitPipeline\x12,.ratatouille.runner.v1.SubmitPipelineRequest\x1a-.ratatouille.runner.v1.SubmitPipelineResponse\x12g\n" +
 	"\fGetRunStatus\x12*.ratatouille.common.v1.GetRunStatusRequest\x1a+.ratatouille.common.v1.GetRunStatusResponse\x12Y\n" +
@@ -975,7 +1132,8 @@ const file_runner_v1_runner_proto_rawDesc = "" +
 	"StreamLogs\x12(.ratatouille.common.v1.StreamLogsRequest\x1a\x1f.ratatouille.common.v1.LogEntry0\x01\x12^\n" +
 	"\tCancelRun\x12'.ratatouille.common.v1.CancelRunRequest\x1a(.ratatouille.common.v1.CancelRunResponse\x12p\n" +
 	"\x0fPreviewPipeline\x12-.ratatouille.runner.v1.PreviewPipelineRequest\x1a..ratatouille.runner.v1.PreviewPipelineResponse\x12s\n" +
-	"\x10ValidatePipeline\x12..ratatouille.runner.v1.ValidatePipelineRequest\x1a/.ratatouille.runner.v1.ValidatePipelineResponseB\xd7\x01\n" +
+	"\x10ValidatePipeline\x12..ratatouille.runner.v1.ValidatePipelineRequest\x1a/.ratatouille.runner.v1.ValidatePipelineResponse\x12d\n" +
+	"\vListPlugins\x12).ratatouille.runner.v1.ListPluginsRequest\x1a*.ratatouille.runner.v1.ListPluginsResponseB\xd7\x01\n" +
 	"\x19com.ratatouille.runner.v1B\vRunnerProtoP\x01Z7github.com/rat-data/rat/platform/gen/runner/v1;runnerv1\xa2\x02\x03RRX\xaa\x02\x15Ratatouille.Runner.V1\xca\x02\x15Ratatouille\\Runner\\V1\xe2\x02!Ratatouille\\Runner\\V1\\GPBMetadata\xea\x02\x17Ratatouille::Runner::V1b\x06proto3"
 
 var (
@@ -990,7 +1148,7 @@ func file_runner_v1_runner_proto_rawDescGZIP() []byte {
 	return file_runner_v1_runner_proto_rawDescData
 }
 
-var file_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_runner_v1_runner_proto_goTypes = []any{
 	(*SubmitPipelineRequest)(nil),    // 0: ratatouille.runner.v1.SubmitPipelineRequest
 	(*SubmitPipelineResponse)(nil),   // 1: ratatouille.runner.v1.SubmitPipelineResponse
@@ -1003,57 +1161,63 @@ var file_runner_v1_runner_proto_goTypes = []any{
 	(*ValidatePipelineRequest)(nil),  // 8: ratatouille.runner.v1.ValidatePipelineRequest
 	(*ValidatePipelineResponse)(nil), // 9: ratatouille.runner.v1.ValidatePipelineResponse
 	(*FileValidation)(nil),           // 10: ratatouille.runner.v1.FileValidation
-	nil,                              // 11: ratatouille.runner.v1.SubmitPipelineRequest.EnvEntry
-	nil,                              // 12: ratatouille.runner.v1.SubmitPipelineRequest.PublishedVersionsEntry
-	nil,                              // 13: ratatouille.runner.v1.PreviewPipelineRequest.EnvEntry
-	nil,                              // 14: ratatouille.runner.v1.PhaseProfile.MetadataEntry
-	(v1.Layer)(0),                    // 15: ratatouille.common.v1.Layer
-	(*v1.S3Credentials)(nil),         // 16: ratatouille.common.v1.S3Credentials
-	(v1.RunStatus)(0),                // 17: ratatouille.common.v1.RunStatus
-	(*v1.LogEntry)(nil),              // 18: ratatouille.common.v1.LogEntry
-	(*v1.GetRunStatusRequest)(nil),   // 19: ratatouille.common.v1.GetRunStatusRequest
-	(*v1.StreamLogsRequest)(nil),     // 20: ratatouille.common.v1.StreamLogsRequest
-	(*v1.CancelRunRequest)(nil),      // 21: ratatouille.common.v1.CancelRunRequest
-	(*v1.GetRunStatusResponse)(nil),  // 22: ratatouille.common.v1.GetRunStatusResponse
-	(*v1.CancelRunResponse)(nil),     // 23: ratatouille.common.v1.CancelRunResponse
+	(*ListPluginsRequest)(nil),       // 11: ratatouille.runner.v1.ListPluginsRequest
+	(*ListPluginsResponse)(nil),      // 12: ratatouille.runner.v1.ListPluginsResponse
+	(*RunnerPlugin)(nil),             // 13: ratatouille.runner.v1.RunnerPlugin
+	nil,                              // 14: ratatouille.runner.v1.SubmitPipelineRequest.EnvEntry
+	nil,                              // 15: ratatouille.runner.v1.SubmitPipelineRequest.PublishedVersionsEntry
+	nil,                              // 16: ratatouille.runner.v1.PreviewPipelineRequest.EnvEntry
+	nil,                              // 17: ratatouille.runner.v1.PhaseProfile.MetadataEntry
+	(v1.Layer)(0),                    // 18: ratatouille.common.v1.Layer
+	(*v1.S3Credentials)(nil),         // 19: ratatouille.common.v1.S3Credentials
+	(v1.RunStatus)(0),                // 20: ratatouille.common.v1.RunStatus
+	(*v1.LogEntry)(nil),              // 21: ratatouille.common.v1.LogEntry
+	(*v1.GetRunStatusRequest)(nil),   // 22: ratatouille.common.v1.GetRunStatusRequest
+	(*v1.StreamLogsRequest)(nil),     // 23: ratatouille.common.v1.StreamLogsRequest
+	(*v1.CancelRunRequest)(nil),      // 24: ratatouille.common.v1.CancelRunRequest
+	(*v1.GetRunStatusResponse)(nil),  // 25: ratatouille.common.v1.GetRunStatusResponse
+	(*v1.CancelRunResponse)(nil),     // 26: ratatouille.common.v1.CancelRunResponse
 }
 var file_runner_v1_runner_proto_depIdxs = []int32{
-	15, // 0: ratatouille.runner.v1.SubmitPipelineRequest.layer:type_name -> ratatouille.common.v1.Layer
-	16, // 1: ratatouille.runner.v1.SubmitPipelineRequest.s3_credentials:type_name -> ratatouille.common.v1.S3Credentials
-	11, // 2: ratatouille.runner.v1.SubmitPipelineRequest.env:type_name -> ratatouille.runner.v1.SubmitPipelineRequest.EnvEntry
-	12, // 3: ratatouille.runner.v1.SubmitPipelineRequest.published_versions:type_name -> ratatouille.runner.v1.SubmitPipelineRequest.PublishedVersionsEntry
-	17, // 4: ratatouille.runner.v1.SubmitPipelineResponse.status:type_name -> ratatouille.common.v1.RunStatus
-	15, // 5: ratatouille.runner.v1.PreviewPipelineRequest.layer:type_name -> ratatouille.common.v1.Layer
-	16, // 6: ratatouille.runner.v1.PreviewPipelineRequest.s3_credentials:type_name -> ratatouille.common.v1.S3Credentials
-	13, // 7: ratatouille.runner.v1.PreviewPipelineRequest.env:type_name -> ratatouille.runner.v1.PreviewPipelineRequest.EnvEntry
+	18, // 0: ratatouille.runner.v1.SubmitPipelineRequest.layer:type_name -> ratatouille.common.v1.Layer
+	19, // 1: ratatouille.runner.v1.SubmitPipelineRequest.s3_credentials:type_name -> ratatouille.common.v1.S3Credentials
+	14, // 2: ratatouille.runner.v1.SubmitPipelineRequest.env:type_name -> ratatouille.runner.v1.SubmitPipelineRequest.EnvEntry
+	15, // 3: ratatouille.runner.v1.SubmitPipelineRequest.published_versions:type_name -> ratatouille.runner.v1.SubmitPipelineRequest.PublishedVersionsEntry
+	20, // 4: ratatouille.runner.v1.SubmitPipelineResponse.status:type_name -> ratatouille.common.v1.RunStatus
+	18, // 5: ratatouille.runner.v1.PreviewPipelineRequest.layer:type_name -> ratatouille.common.v1.Layer
+	19, // 6: ratatouille.runner.v1.PreviewPipelineRequest.s3_credentials:type_name -> ratatouille.common.v1.S3Credentials
+	16, // 7: ratatouille.runner.v1.PreviewPipelineRequest.env:type_name -> ratatouille.runner.v1.PreviewPipelineRequest.EnvEntry
 	4,  // 8: ratatouille.runner.v1.PreviewPipelineResponse.data:type_name -> ratatouille.runner.v1.PreviewSuccess
 	5,  // 9: ratatouille.runner.v1.PreviewPipelineResponse.preview_error:type_name -> ratatouille.runner.v1.PreviewFailure
-	18, // 10: ratatouille.runner.v1.PreviewPipelineResponse.logs:type_name -> ratatouille.common.v1.LogEntry
+	21, // 10: ratatouille.runner.v1.PreviewPipelineResponse.logs:type_name -> ratatouille.common.v1.LogEntry
 	6,  // 11: ratatouille.runner.v1.PreviewPipelineResponse.columns:type_name -> ratatouille.runner.v1.ColumnInfo
 	7,  // 12: ratatouille.runner.v1.PreviewPipelineResponse.phases:type_name -> ratatouille.runner.v1.PhaseProfile
 	6,  // 13: ratatouille.runner.v1.PreviewSuccess.columns:type_name -> ratatouille.runner.v1.ColumnInfo
 	7,  // 14: ratatouille.runner.v1.PreviewSuccess.phases:type_name -> ratatouille.runner.v1.PhaseProfile
-	14, // 15: ratatouille.runner.v1.PhaseProfile.metadata:type_name -> ratatouille.runner.v1.PhaseProfile.MetadataEntry
-	15, // 16: ratatouille.runner.v1.ValidatePipelineRequest.layer:type_name -> ratatouille.common.v1.Layer
-	16, // 17: ratatouille.runner.v1.ValidatePipelineRequest.s3_credentials:type_name -> ratatouille.common.v1.S3Credentials
+	17, // 15: ratatouille.runner.v1.PhaseProfile.metadata:type_name -> ratatouille.runner.v1.PhaseProfile.MetadataEntry
+	18, // 16: ratatouille.runner.v1.ValidatePipelineRequest.layer:type_name -> ratatouille.common.v1.Layer
+	19, // 17: ratatouille.runner.v1.ValidatePipelineRequest.s3_credentials:type_name -> ratatouille.common.v1.S3Credentials
 	10, // 18: ratatouille.runner.v1.ValidatePipelineResponse.files:type_name -> ratatouille.runner.v1.FileValidation
-	0,  // 19: ratatouille.runner.v1.RunnerService.SubmitPipeline:input_type -> ratatouille.runner.v1.SubmitPipelineRequest
-	19, // 20: ratatouille.runner.v1.RunnerService.GetRunStatus:input_type -> ratatouille.common.v1.GetRunStatusRequest
-	20, // 21: ratatouille.runner.v1.RunnerService.StreamLogs:input_type -> ratatouille.common.v1.StreamLogsRequest
-	21, // 22: ratatouille.runner.v1.RunnerService.CancelRun:input_type -> ratatouille.common.v1.CancelRunRequest
-	2,  // 23: ratatouille.runner.v1.RunnerService.PreviewPipeline:input_type -> ratatouille.runner.v1.PreviewPipelineRequest
-	8,  // 24: ratatouille.runner.v1.RunnerService.ValidatePipeline:input_type -> ratatouille.runner.v1.ValidatePipelineRequest
-	1,  // 25: ratatouille.runner.v1.RunnerService.SubmitPipeline:output_type -> ratatouille.runner.v1.SubmitPipelineResponse
-	22, // 26: ratatouille.runner.v1.RunnerService.GetRunStatus:output_type -> ratatouille.common.v1.GetRunStatusResponse
-	18, // 27: ratatouille.runner.v1.RunnerService.StreamLogs:output_type -> ratatouille.common.v1.LogEntry
-	23, // 28: ratatouille.runner.v1.RunnerService.CancelRun:output_type -> ratatouille.common.v1.CancelRunResponse
-	3,  // 29: ratatouille.runner.v1.RunnerService.PreviewPipeline:output_type -> ratatouille.runner.v1.PreviewPipelineResponse
-	9,  // 30: ratatouille.runner.v1.RunnerService.ValidatePipeline:output_type -> ratatouille.runner.v1.ValidatePipelineResponse
-	25, // [25:31] is the sub-list for method output_type
-	19, // [19:25] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	13, // 19: ratatouille.runner.v1.ListPluginsResponse.plugins:type_name -> ratatouille.runner.v1.RunnerPlugin
+	0,  // 20: ratatouille.runner.v1.RunnerService.SubmitPipeline:input_type -> ratatouille.runner.v1.SubmitPipelineRequest
+	22, // 21: ratatouille.runner.v1.RunnerService.GetRunStatus:input_type -> ratatouille.common.v1.GetRunStatusRequest
+	23, // 22: ratatouille.runner.v1.RunnerService.StreamLogs:input_type -> ratatouille.common.v1.StreamLogsRequest
+	24, // 23: ratatouille.runner.v1.RunnerService.CancelRun:input_type -> ratatouille.common.v1.CancelRunRequest
+	2,  // 24: ratatouille.runner.v1.RunnerService.PreviewPipeline:input_type -> ratatouille.runner.v1.PreviewPipelineRequest
+	8,  // 25: ratatouille.runner.v1.RunnerService.ValidatePipeline:input_type -> ratatouille.runner.v1.ValidatePipelineRequest
+	11, // 26: ratatouille.runner.v1.RunnerService.ListPlugins:input_type -> ratatouille.runner.v1.ListPluginsRequest
+	1,  // 27: ratatouille.runner.v1.RunnerService.SubmitPipeline:output_type -> ratatouille.runner.v1.SubmitPipelineResponse
+	25, // 28: ratatouille.runner.v1.RunnerService.GetRunStatus:output_type -> ratatouille.common.v1.GetRunStatusResponse
+	21, // 29: ratatouille.runner.v1.RunnerService.StreamLogs:output_type -> ratatouille.common.v1.LogEntry
+	26, // 30: ratatouille.runner.v1.RunnerService.CancelRun:output_type -> ratatouille.common.v1.CancelRunResponse
+	3,  // 31: ratatouille.runner.v1.RunnerService.PreviewPipeline:output_type -> ratatouille.runner.v1.PreviewPipelineResponse
+	9,  // 32: ratatouille.runner.v1.RunnerService.ValidatePipeline:output_type -> ratatouille.runner.v1.ValidatePipelineResponse
+	12, // 33: ratatouille.runner.v1.RunnerService.ListPlugins:output_type -> ratatouille.runner.v1.ListPluginsResponse
+	27, // [27:34] is the sub-list for method output_type
+	20, // [20:27] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_runner_v1_runner_proto_init() }
@@ -1071,7 +1235,7 @@ func file_runner_v1_runner_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_runner_v1_runner_proto_rawDesc), len(file_runner_v1_runner_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   15,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

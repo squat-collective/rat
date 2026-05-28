@@ -29,7 +29,9 @@ from runner.v1 import (
 from rat_runner.callback import notify_run_complete
 from rat_runner.config import NessieConfig, S3Config, list_s3_keys, read_s3_text
 from rat_runner.executor import execute_pipeline
+from rat_runner.log import run_log_extras
 from rat_runner.models import RunState, RunStatus
+from rat_runner.plugin_registry import PluginRegistry
 from rat_runner.preview import preview_pipeline
 from rat_runner.state_dir import (
     collect_crashed_runs,
@@ -40,6 +42,31 @@ from rat_runner.state_dir import (
 from rat_runner.templating import validate_template
 
 logger = logging.getLogger(__name__)
+
+
+# gRPC metadata is case-insensitive but the standard convention is lowercase.
+# ratd's Go middleware sets the header as "X-Request-ID"; ConnectRPC
+# lowercases header names before placing them on the wire as gRPC metadata.
+_REQUEST_ID_METADATA_KEYS: tuple[str, ...] = ("x-request-id",)
+
+
+def _request_id_from_context(context: grpc.ServicerContext) -> str:
+    """Extract the X-Request-ID propagated by ratd from gRPC metadata.
+
+    Returns an empty string when the caller didn't supply one. We accept the
+    lowercased form because both ConnectRPC and grpcio normalise headers to
+    lowercase on the receiving side, and the constants here document the
+    contract with ratd's ``propagateRequestID`` helper.
+    """
+    try:
+        metadata = dict(context.invocation_metadata() or ())
+    except Exception:
+        return ""
+    for key in _REQUEST_ID_METADATA_KEYS:
+        value = metadata.get(key)
+        if value:
+            return str(value)
+    return ""
 
 
 def _sanitize_error(error: str) -> str:
@@ -93,7 +120,17 @@ _STATUS_TO_PROTO: dict[RunStatus, int] = {
 
 
 def _s3_credentials_to_dict(creds: common_pb2.S3Credentials) -> dict[str, str]:
-    """Convert a proto S3Credentials message to a dict for S3Config.with_overrides()."""
+    """Convert a proto S3Credentials message to a dict for S3Config.with_overrides().
+
+    Precedence rule (per ADR-018): per-run overrides supplied here win over the
+    env-level S3 config baked into the runner container. Only fields that are
+    explicitly set on the wire are forwarded — empty fields fall back to the
+    runner's S3Config defaults via with_overrides().
+
+    SECURITY: credential values must NEVER be logged. Only the *presence* of
+    overrides may be logged — see the SubmitPipeline handler for the redacted
+    "applied S3 overrides" line.
+    """
     d: dict[str, str] = {}
     if creds.endpoint:
         d["endpoint"] = creds.endpoint
@@ -107,6 +144,8 @@ def _s3_credentials_to_dict(creds: common_pb2.S3Credentials) -> dict[str, str]:
         d["bucket"] = creds.bucket
     if creds.use_ssl:
         d["use_ssl"] = "true"
+    if creds.session_token:
+        d["session_token"] = creds.session_token
     return d
 
 
@@ -126,6 +165,7 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
         max_workers: int = 4,
         state_dir: Path | None = None,
         max_concurrent_runs: int | None = None,
+        plugin_registry: PluginRegistry | None = None,
     ) -> None:
         self._s3_config = s3_config
         self._nessie_config = nessie_config
@@ -141,6 +181,12 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
             target=self._cleanup_loop, daemon=True, name="run-cleanup"
         )
         self._cleanup_thread.start()
+
+        # Server-level plugin registry for the ListPlugins endpoint.
+        # One-time discovery at startup — separate from per-run discovery in the executor.
+        self._plugin_registry = plugin_registry or PluginRegistry()
+        if plugin_registry is None:
+            self._plugin_registry.discover()
 
         # Reconcile runs that were in-flight when the previous process crashed.
         self._reconcile_crashed_runs()
@@ -194,11 +240,8 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
                 )
                 self._runs[cr.run_id] = run
                 logger.warning(
-                    "Crash recovery: marked run %s (%s.%s.%s) as FAILED",
-                    cr.run_id,
-                    cr.namespace,
-                    cr.layer,
-                    cr.pipeline_name,
+                    "Crash recovery: marked run as FAILED",
+                    extra=run_log_extras(run),
                 )
 
     def _execute_with_marker(
@@ -260,7 +303,7 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
             return
 
         try:
-            config = parse_pipeline_config(config_yaml)
+            config = parse_pipeline_config(config_yaml, self._plugin_registry.strategy_names())
         except Exception:
             return
 
@@ -269,14 +312,11 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
 
         for attempt in range(1, config.max_retries + 1):
             logger.info(
-                "Retry %d/%d for run %s (%s.%s.%s) after %ds delay",
+                "Retry %d/%d after %ds delay",
                 attempt,
                 config.max_retries,
-                run.run_id,
-                ns,
-                layer,
-                name,
                 config.retry_delay_seconds,
+                extra=run_log_extras(run),
             )
             run.add_log(
                 "info",
@@ -304,9 +344,9 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
             run.add_log("warn", f"Retry {attempt}/{config.max_retries} failed: {run.error}")
 
         logger.warning(
-            "All %d retries exhausted for run %s",
+            "All %d retries exhausted",
             config.max_retries,
-            run.run_id,
+            extra=run_log_extras(run),
         )
 
     def SubmitPipeline(  # noqa: N802
@@ -323,17 +363,27 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
         # Use platform-assigned run_id if provided (keeps archive folder names in sync)
         run_id = request.run_id if request.run_id else str(uuid.uuid4())
 
-        # Per-run S3 config overrides (STS credentials)
+        # Per-run S3 config overrides (typically STS credentials vended by the
+        # cloud provider plugin, see ADR-018). Precedence: per-run overrides
+        # win over the env-level S3Config baked into the container. The merged
+        # config is passed to the DuckDB engine and PyIceberg catalog used by
+        # this run only — the runner-wide self._s3_config is never mutated.
         s3_config = self._s3_config
+        overrides_applied = False
         if request.HasField("s3_credentials"):
-            s3_config = self._s3_config.with_overrides(
-                _s3_credentials_to_dict(request.s3_credentials)
-            )
+            override_dict = _s3_credentials_to_dict(request.s3_credentials)
+            if override_dict:
+                s3_config = self._s3_config.with_overrides(override_dict)
+                overrides_applied = True
 
         # Per-run env vars
         env: dict[str, str] = {}
         if hasattr(request, "env") and request.env:
             env = dict(request.env)
+
+        # Extract X-Request-ID propagated by ratd so every log line + the
+        # outbound status callback can echo it back for cross-service tracing.
+        request_id = _request_id_from_context(context)
 
         run = RunState(
             run_id=run_id,
@@ -341,6 +391,7 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
             layer=layer_str,
             pipeline_name=request.pipeline_name,
             trigger=request.trigger,
+            request_id=request_id,
             env=env,
         )
 
@@ -360,13 +411,39 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
             self._runs[run_id] = run
 
         logger.info(
-            "Submitting pipeline: %s.%s.%s (run=%s, trigger=%s)",
+            "Submitting pipeline %s.%s.%s",
             request.namespace,
             layer_str,
             request.pipeline_name,
-            run_id,
-            request.trigger,
+            extra={
+                **run_log_extras(run),
+                "trigger": request.trigger,
+            },
         )
+
+        # Log only the *presence* of per-run S3 overrides — credential values
+        # must NEVER hit the logs. The boolean flags allow operators to
+        # diagnose "is the cloud plugin actually vending?" without exposing
+        # secrets.
+        if overrides_applied:
+            creds_msg = request.s3_credentials
+            logger.info(
+                "Applied per-run S3 overrides",
+                extra={
+                    **run_log_extras(run),
+                    "has_access_key": bool(creds_msg.access_key_id),
+                    "has_secret_key": bool(creds_msg.secret_access_key),
+                    "has_session_token": bool(creds_msg.session_token),
+                    "has_region": bool(creds_msg.region),
+                    "has_endpoint": bool(creds_msg.endpoint),
+                    "has_bucket": bool(creds_msg.bucket),
+                },
+            )
+        else:
+            logger.debug(
+                "No S3 overrides — using env-level S3Config",
+                extra=run_log_extras(run),
+            )
 
         # Write marker file before dispatching — if the process crashes during
         # execution, the marker will survive and be picked up on next startup.
@@ -412,7 +489,11 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
         # Sanitize error messages before returning — log full error server-side.
         error_msg = run.error
         if error_msg:
-            logger.debug("Full run error for %s: %s", run.run_id, error_msg)
+            logger.debug(
+                "Full run error: %s",
+                error_msg,
+                extra=run_log_extras(run),
+            )
             error_msg = _sanitize_error(error_msg)
 
         return common_pb2.GetRunStatusResponse(
@@ -624,6 +705,25 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
             valid=all_valid,
             files=file_validations,
         )
+
+    def ListPlugins(  # noqa: N802
+        self,
+        request: runner_pb2.ListPluginsRequest,
+        context: grpc.ServicerContext,
+    ) -> runner_pb2.ListPluginsResponse:
+        # Fresh discovery each call so newly-installed plugins are reflected.
+        registry = PluginRegistry()
+        registry.discover()
+        plugins = [
+            runner_pb2.RunnerPlugin(
+                name=p.name,
+                group=p.group,
+                version=p.version,
+                package_name=p.package_name,
+            )
+            for p in registry.list_plugins()
+        ]
+        return runner_pb2.ListPluginsResponse(plugins=plugins)
 
     @property
     def active_run_count(self) -> int:

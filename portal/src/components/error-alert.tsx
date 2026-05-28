@@ -12,13 +12,21 @@ interface ErrorAlertProps {
  * Uses the existing error-block CSS class for consistent styling
  * with the scanning red line animation.
  */
+/** Best-effort human message from whatever the API/SWR threw. */
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  // RAT API errors often arrive as plain objects: {message} or {error}.
+  if (error && typeof error === "object") {
+    const o = error as Record<string, unknown>;
+    if (typeof o.message === "string") return o.message;
+    if (typeof o.error === "string") return o.error;
+  }
+  return "An unexpected error occurred";
+}
+
 export function ErrorAlert({ error, prefix }: ErrorAlertProps) {
-  const message =
-    error instanceof Error
-      ? error.message
-      : typeof error === "string"
-        ? error
-        : "An unexpected error occurred";
+  const message = errorMessage(error);
 
   return (
     <div className="error-block px-4 py-3 flex items-start gap-2">

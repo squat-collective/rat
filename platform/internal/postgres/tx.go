@@ -5,9 +5,78 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rat-data/rat/platform/internal/api"
 	"github.com/rat-data/rat/platform/internal/domain"
+	"github.com/rat-data/rat/platform/internal/postgres/gen"
 )
+
+// InTx runs fn inside a pgx transaction. Commits on a clean return from fn,
+// rolls back on any error or panic.
+//
+// Contract: fn MUST only perform database work against the supplied tx. Do
+// NOT make HTTP calls, gRPC calls, file IO, or anything else that blocks on
+// a remote system inside fn — a pooled DB connection is held for the entire
+// duration and starving the pool will deadlock the platform under load.
+// The pattern for handlers that mix DB writes and network IO is: do the
+// IO first (or last), then open a tx for the DB mutations only.
+//
+// This is a low-level helper. Most callers should use TxRunner.InTx, which
+// exposes tx-bound stores so handlers do not have to import pgx.
+func InTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) (err error) {
+	tx, beginErr := pool.Begin(ctx)
+	if beginErr != nil {
+		return fmt.Errorf("begin tx: %w", beginErr)
+	}
+
+	// Recover from a panic inside fn so we always release the connection.
+	// Re-panic after rolling back so the original stack still reaches the
+	// process panic handler — atomicity guarantees, not panic-swallowing.
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback(ctx) //nolint:errcheck // best-effort during panic
+			panic(p)
+		}
+		if err != nil {
+			// Best-effort rollback. If commit already ran, Rollback returns
+			// ErrTxClosed which we deliberately ignore.
+			_ = tx.Rollback(ctx) //nolint:errcheck
+		}
+	}()
+
+	if err = fn(tx); err != nil { //nolint:gocritic // must assign to the named return so the deferred rollback sees fn's error
+		return err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	return nil
+}
+
+// TxRunner wires together the tx-bound stores used by multi-step handlers.
+// Construct via NewTxRunner(pool). Pass through api.TxRunner to handlers.
+type TxRunner struct {
+	pool *pgxpool.Pool
+}
+
+// NewTxRunner creates a TxRunner backed by the given pool.
+func NewTxRunner(pool *pgxpool.Pool) *TxRunner {
+	return &TxRunner{pool: pool}
+}
+
+// InTx runs fn inside a pgx transaction with tx-scoped stores.
+// Same contract as the free InTx: fn must perform DB work only.
+func (t *TxRunner) InTx(ctx context.Context, fn func(api.TxStores) error) error {
+	return InTx(ctx, t.pool, func(tx pgx.Tx) error {
+		txQ := gen.New(tx)
+		return fn(api.TxStores{
+			Runs:      &RunStore{pool: t.pool, q: txQ},
+			Triggers:  &TriggerStore{q: txQ},
+			Schedules: &ScheduleStore{q: txQ},
+		})
+	})
+}
 
 // PipelinePublisher provides transactional publish and rollback operations.
 // All steps within a single call share a database transaction so they either

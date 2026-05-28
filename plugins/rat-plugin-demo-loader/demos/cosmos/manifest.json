@@ -1,0 +1,117 @@
+{
+  "id": "cosmos",
+  "name": "🚀 Cosmos",
+  "description": "Space missions, planetary observations and satellites — a full bronze → silver → gold pipeline that showcases multiple merge strategies, layered transforms, quality tests, table-level documentation and a cron schedule.",
+  "namespace": "cosmos",
+  "pipelines": [
+    {
+      "layer": "bronze",
+      "name": "missions",
+      "type": "sql",
+      "description": "200 synthetic rocket missions across six agencies and five planetary targets — full_refresh strategy.",
+      "file": "bronze/missions.sql",
+      "table_metadata": {
+        "description": "Rocket missions registry. One row per mission, regenerated in full every run (full_refresh).",
+        "column_descriptions": {
+          "id": "Synthetic primary key (1..200).",
+          "mission_id": "Public mission identifier in the form M-0001.",
+          "mission_name": "Human-readable mission name.",
+          "program": "Space agency that flew the mission (SpaceX, NASA, ESA, ...).",
+          "target_planet": "Target body for the mission.",
+          "launched_at": "Launch date — synthesised between 2020 and 2026.",
+          "status": "Outcome — success / partial / failure (~78/14/8 split).",
+          "payload_kg": "Mass carried to orbit, kilograms."
+        }
+      }
+    },
+    {
+      "layer": "bronze",
+      "name": "observations",
+      "type": "sql",
+      "description": "Telescope observations — APPEND_ONLY strategy. Each run adds new observation rows; nothing is rewritten.",
+      "file": "bronze/observations.sql",
+      "table_metadata": {
+        "description": "Telescope observations of planetary bodies. Append-only: every run extends the history.",
+        "column_descriptions": {
+          "id": "Synthetic primary key.",
+          "observatory": "Where the observation was taken (Mauna Kea, Paranal, Hubble, JWST).",
+          "target_planet": "Body observed.",
+          "observed_at": "Timestamp of the observation.",
+          "magnitude": "Apparent magnitude — brightness; lower = brighter.",
+          "instrument": "Type of measurement (spectroscopy / photometry / astrometry)."
+        }
+      }
+    },
+    {
+      "layer": "bronze",
+      "name": "satellites",
+      "type": "sql",
+      "description": "120 satellites in current operation grouped by type and operator.",
+      "file": "bronze/satellites.sql",
+      "table_metadata": {
+        "description": "Active satellites inventory. Operator + orbit altitude + launch date.",
+        "column_descriptions": {
+          "satellite_id": "Synthetic key.",
+          "satellite_name": "SAT-0001 style id.",
+          "satellite_type": "communications / observation / navigation / scientific.",
+          "operator": "Owner / operator.",
+          "launched_at": "Date the satellite went up.",
+          "orbit_km": "Altitude in kilometers."
+        }
+      }
+    },
+    {
+      "layer": "silver",
+      "name": "missions_enriched",
+      "type": "sql",
+      "description": "Missions joined with derived mission_type and decade — uses ref() to read bronze.",
+      "file": "silver/missions_enriched.sql"
+    },
+    {
+      "layer": "silver",
+      "name": "observations_daily",
+      "type": "sql",
+      "description": "Observations aggregated to one row per day-planet — uses ref() to read the append-only bronze.",
+      "file": "silver/observations_daily.sql"
+    },
+    {
+      "layer": "gold",
+      "name": "success_by_program",
+      "type": "sql",
+      "description": "Mission success rate per agency. Cron-scheduled hourly for live dashboards.",
+      "file": "gold/success_by_program.sql"
+    },
+    {
+      "layer": "gold",
+      "name": "satellite_summary",
+      "type": "sql",
+      "description": "Satellites grouped by type and operator.",
+      "file": "gold/satellite_summary.sql"
+    }
+  ],
+  "quality_tests": [
+    {
+      "layer": "bronze",
+      "pipeline": "missions",
+      "name": "missions_id_not_null",
+      "severity": "error",
+      "description": "Every mission must have a mission_id — primary-key completeness.",
+      "file": "tests/missions_id_not_null.sql"
+    },
+    {
+      "layer": "bronze",
+      "pipeline": "observations",
+      "name": "observations_magnitude_sane",
+      "severity": "warn",
+      "description": "Magnitudes outside -10..30 are suspect.",
+      "file": "tests/observations_magnitude_sane.sql"
+    }
+  ],
+  "schedules": [
+    {
+      "layer": "gold",
+      "pipeline": "success_by_program",
+      "cron": "0 * * * *"
+    }
+  ]
+}

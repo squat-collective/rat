@@ -12,13 +12,19 @@ plugins:
   - remote: buf.build/connectrpc/go
     out: ../platform/gen
     opt: paths=source_relative
-  # Python (runner)
-  - remote: buf.build/protocolbuffers/python
+  # Python (runner) — pin protocolbuffers/python to v33.x so the generated
+  # gencode targets the protobuf 6.33.x Python runtime we install. Unpinned
+  # defaults to the latest plugin version (currently v35+), which emits
+  # gencode targeting protobuf 7.x — there is no protobuf 7.x Python
+  # runtime on PyPI yet, so the gencode would reject the only installable
+  # runtime at import time. Bump in lockstep with the runtime pin in
+  # runner/pyproject.toml when upgrading.
+  - remote: buf.build/protocolbuffers/python:v33.0
     out: ../runner/src/rat_runner/gen
   - remote: buf.build/grpc/python
     out: ../runner/src/rat_runner/gen
-  # Python (query)
-  - remote: buf.build/protocolbuffers/python
+  # Python (query) — same pin as runner.
+  - remote: buf.build/protocolbuffers/python:v33.0
     out: ../query/src/rat_query/gen
   - remote: buf.build/grpc/python
     out: ../query/src/rat_query/gen

@@ -11,22 +11,40 @@ import (
 	"github.com/rat-data/rat/platform/internal/domain"
 )
 
+// stuckPendingTimeout is the grace window before a PENDING run is force-failed.
+// Matches the "I'll fix it tomorrow" operator-tolerable window: if a run has
+// been queued but never picked up by an executor for a full day, something is
+// wrong and we'd rather mark it FAILED so the orphan-branch reaper can clean
+// up its Nessie branch on the next tick.
+const stuckPendingTimeout = 24 * time.Hour
+
 // Reaper is a background daemon that enforces data retention policies.
 // It periodically cleans up old runs, logs, quality results, orphan branches,
 // soft-deleted pipelines, and processed landing zone files.
 type Reaper struct {
-	settings  api.SettingsStore
-	runs      api.RunStore
-	pipelines api.PipelineStore
-	zones     api.LandingZoneStore
-	storage   api.StorageStore
-	audit     api.AuditStore
-	nessie    NessieClient
-	cancel    context.CancelFunc
-	done      chan struct{}
+	settings     api.SettingsStore
+	runs         api.RunStore
+	pipelines    api.PipelineStore
+	zones        api.LandingZoneStore
+	storage      api.StorageStore
+	audit        api.AuditStore
+	failedMerges api.FailedMergesStore // optional: branches with recent rows are NOT swept.
+	nessie       NessieClient
+	cancel       context.CancelFunc
+	done         chan struct{}
 }
 
+// failedMergeRetentionDays is the window during which a branch name listed in
+// failed_merges is protected from the orphan-branch sweeper. Branches with a
+// failed Phase 5 merge represent data the runner already wrote and quality
+// tested but couldn't merge to main — an operator needs time to recover.
+const failedMergeRetentionDays = 7
+
 // New creates a Reaper with the given store dependencies.
+//
+// `failedMerges` may be nil (dev mode without Postgres) — in that case the
+// orphan-branch sweeper falls back to its previous behaviour of reaping any
+// run-* branch whose run is terminal.
 func New(
 	settings api.SettingsStore,
 	runs api.RunStore,
@@ -34,16 +52,18 @@ func New(
 	zones api.LandingZoneStore,
 	storage api.StorageStore,
 	audit api.AuditStore,
+	failedMerges api.FailedMergesStore,
 	nessie NessieClient,
 ) *Reaper {
 	return &Reaper{
-		settings:  settings,
-		runs:      runs,
-		pipelines: pipelines,
-		zones:     zones,
-		storage:   storage,
-		audit:     audit,
-		nessie:    nessie,
+		settings:     settings,
+		runs:         runs,
+		pipelines:    pipelines,
+		zones:        zones,
+		storage:      storage,
+		audit:        audit,
+		failedMerges: failedMerges,
+		nessie:       nessie,
 	}
 }
 
@@ -121,10 +141,16 @@ func (r *Reaper) tick(ctx context.Context) *domain.ReaperStatus {
 		status.RunsPruned = count
 	})
 
-	// Task 2: Fail stuck runs
+	// Task 2: Fail stuck runs (RUNNING > StuckRunTimeoutMinutes)
 	r.safeRun("failStuckRuns", func() {
 		count := r.failStuckRuns(ctx, cfg, now)
 		status.RunsFailed = count
+	})
+
+	// Task 2b: Fail stuck PENDING runs (PENDING > 24h — executor never picked them up)
+	r.safeRun("failStuckPendingRuns", func() {
+		count := r.failStuckPendingRuns(ctx, now)
+		status.RunsFailed += count
 	})
 
 	// Task 3: Purge soft-deleted pipelines
@@ -208,7 +234,8 @@ func (r *Reaper) pruneRuns(ctx context.Context, cfg domain.RetentionConfig, now 
 	return total
 }
 
-// failStuckRuns marks pending/running runs as failed if they exceed the timeout.
+// failStuckRuns marks RUNNING runs as failed if they exceed the timeout.
+// PENDING runs use a separate, longer grace window — see failStuckPendingRuns.
 func (r *Reaper) failStuckRuns(ctx context.Context, cfg domain.RetentionConfig, now time.Time) int {
 	if r.runs == nil {
 		return 0
@@ -226,6 +253,35 @@ func (r *Reaper) failStuckRuns(ctx context.Context, cfg domain.RetentionConfig, 
 		errMsg := "run timed out (stuck for too long)"
 		if err := r.runs.UpdateRunStatus(ctx, run.ID.String(), domain.RunStatusFailed, &errMsg, nil, nil); err != nil {
 			slog.Warn("reaper: failed to fail stuck run", "run_id", run.ID, "error", err)
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// failStuckPendingRuns marks PENDING runs as failed if they have been waiting
+// for the executor for longer than stuckPendingTimeout (24h). This catches the
+// case where the executor crashed during dispatch and the run was never started.
+// Without this, the run stays PENDING forever and its Nessie branch is never
+// reaped — branches accumulate slowly until Nessie disk fills.
+func (r *Reaper) failStuckPendingRuns(ctx context.Context, now time.Time) int {
+	if r.runs == nil {
+		return 0
+	}
+
+	cutoff := now.Add(-stuckPendingTimeout)
+	stuck, err := r.runs.ListStuckPendingRuns(ctx, cutoff)
+	if err != nil {
+		slog.Error("reaper: failed to list stuck pending runs", "error", err)
+		return 0
+	}
+
+	count := 0
+	for _, run := range stuck {
+		errMsg := "run timed out in PENDING state for >24h (executor never picked it up)"
+		if err := r.runs.UpdateRunStatus(ctx, run.ID.String(), domain.RunStatusFailed, &errMsg, nil, nil); err != nil {
+			slog.Warn("reaper: failed to fail stuck pending run", "run_id", run.ID, "error", err)
 			continue
 		}
 		count++
@@ -268,9 +324,31 @@ func (r *Reaper) purgeSoftDeletedPipelines(ctx context.Context, cfg domain.Reten
 }
 
 // cleanOrphanBranches deletes Nessie branches named "run-*" that have no active run.
-func (r *Reaper) cleanOrphanBranches(ctx context.Context, _ domain.RetentionConfig, _ time.Time) int {
+//
+// Branches that appear in failed_merges within the last failedMergeRetentionDays
+// are SKIPPED — they hold data that Phase 3 wrote and Phase 4 quality-tested,
+// but which couldn't reach main, and a human needs to recover them.
+// Stuck-PENDING runs (>24h) also free their branches as a safety net.
+func (r *Reaper) cleanOrphanBranches(ctx context.Context, _ domain.RetentionConfig, now time.Time) int {
 	if r.nessie == nil || r.runs == nil {
 		return 0
+	}
+
+	// Build the "do not auto-reap" set from recent failed_merges rows.
+	// On error we WARN but continue with the empty set rather than block
+	// cleanup entirely — repeated warnings will alert the operator.
+	skip := map[string]bool{}
+	if r.failedMerges != nil {
+		since := now.AddDate(0, 0, -failedMergeRetentionDays)
+		names, err := r.failedMerges.RecentBranchNames(ctx, since)
+		if err != nil {
+			slog.Warn("reaper: failed to load recent failed_merges (will not skip any branches)",
+				"error", err)
+		} else {
+			for _, n := range names {
+				skip[n] = true
+			}
+		}
 	}
 
 	branches, err := r.nessie.ListBranches(ctx)
@@ -279,9 +357,17 @@ func (r *Reaper) cleanOrphanBranches(ctx context.Context, _ domain.RetentionConf
 		return 0
 	}
 
+	pendingCutoff := now.Add(-stuckPendingTimeout)
+
 	count := 0
 	for _, b := range branches {
 		if !strings.HasPrefix(b.Name, "run-") {
+			continue
+		}
+
+		if skip[b.Name] {
+			slog.Info("reaper: skipping branch with recent failed merge (operator recovery pending)",
+				"branch", b.Name)
 			continue
 		}
 
@@ -293,9 +379,19 @@ func (r *Reaper) cleanOrphanBranches(ctx context.Context, _ domain.RetentionConf
 			continue
 		}
 
-		// Delete branch if run doesn't exist or is in a terminal state
-		if run == nil || run.Status == domain.RunStatusSuccess ||
-			run.Status == domain.RunStatusFailed || run.Status == domain.RunStatusCancelled {
+		// Delete branch if run doesn't exist or is in a terminal state.
+		// Also delete if the run has been PENDING for longer than stuckPendingTimeout:
+		// failStuckPendingRuns runs earlier in the same tick and will normally
+		// mark it FAILED, but this safety net catches any orphan whose run row
+		// somehow stayed PENDING (e.g. a future code path that never updates
+		// status). Young PENDING (<24h) is preserved in case some delayed-
+		// dispatch path needs the branch to remain available.
+		stalePending := run != nil && run.Status == domain.RunStatusPending &&
+			run.CreatedAt.Before(pendingCutoff)
+		terminal := run != nil && (run.Status == domain.RunStatusSuccess ||
+			run.Status == domain.RunStatusFailed || run.Status == domain.RunStatusCancelled)
+
+		if run == nil || terminal || stalePending {
 			if err := r.nessie.DeleteBranch(ctx, b.Name, b.Hash); err != nil {
 				slog.Warn("reaper: failed to delete orphan branch", "branch", b.Name, "error", err)
 				continue

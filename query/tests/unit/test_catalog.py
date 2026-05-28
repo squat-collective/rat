@@ -151,12 +151,14 @@ class TestNessieCatalog:
                     layer="silver",
                     name="orders",
                     s3_base_path="s3://test-bucket/default/silver/orders_abc",
+                    metadata_location="s3://test-bucket/default/silver/orders_abc/metadata/00000.metadata.json",
                 ),
                 TableEntry(
                     namespace="default",
                     layer="gold",
                     name="revenue",
                     s3_base_path="s3://test-bucket/default/gold/revenue_def",
+                    metadata_location="s3://test-bucket/default/gold/revenue_def/metadata/00000.metadata.json",
                 ),
             ]
             catalog.register_tables("default")
@@ -167,13 +169,13 @@ class TestNessieCatalog:
         engine.register_view.assert_any_call(
             "silver",
             "orders",
-            "s3://test-bucket/default/silver/orders_abc",
+            "s3://test-bucket/default/silver/orders_abc/metadata/00000.metadata.json",
             namespace="default",
         )
         engine.register_view.assert_any_call(
             "gold",
             "revenue",
-            "s3://test-bucket/default/gold/revenue_def",
+            "s3://test-bucket/default/gold/revenue_def/metadata/00000.metadata.json",
             namespace="default",
         )
 
@@ -191,12 +193,14 @@ class TestNessieCatalog:
                     layer="silver",
                     name="orders",
                     s3_base_path="s3://test-bucket/default/silver/orders_abc",
+                    metadata_location="s3://test-bucket/default/silver/orders_abc/metadata/00000.metadata.json",
                 ),
                 TableEntry(
                     namespace="default",
                     layer="gold",
                     name="revenue",
                     s3_base_path="s3://test-bucket/default/gold/revenue_def",
+                    metadata_location="s3://test-bucket/default/gold/revenue_def/metadata/00000.metadata.json",
                 ),
             ]
             catalog.register_tables("default")
@@ -211,6 +215,7 @@ class TestNessieCatalog:
                     layer="silver",
                     name="orders",
                     s3_base_path="s3://test-bucket/default/silver/orders_abc",
+                    metadata_location="s3://test-bucket/default/silver/orders_abc/metadata/00000.metadata.json",
                 ),
             ]
             catalog.register_tables("default")
@@ -235,6 +240,27 @@ class TestNessieCatalog:
             catalog.register_tables("empty")
 
         engine.drop_all_views.assert_not_called()
+        engine.register_view.assert_not_called()
+
+    def test_register_tables_skips_entry_without_metadata(
+        self, s3_config: S3Config, nessie_config: NessieConfig
+    ):
+        """A table with no metadata_location cannot be read via iceberg_scan — skip it."""
+        engine = MagicMock()
+        catalog = NessieCatalog(nessie_config, s3_config, engine)
+
+        with patch.object(catalog, "discover_tables") as mock_discover:
+            mock_discover.return_value = [
+                TableEntry(
+                    namespace="default",
+                    layer="silver",
+                    name="orders",
+                    s3_base_path="",
+                    metadata_location="",
+                ),
+            ]
+            catalog.register_tables("default")
+
         engine.register_view.assert_not_called()
 
     def test_get_tables_returns_cached(self, s3_config: S3Config, nessie_config: NessieConfig):
@@ -272,22 +298,31 @@ class TestNessieCatalog:
         catalog = NessieCatalog(nessie_config, s3_config, engine)
         stop_event = threading.Event()
 
-        with patch.object(catalog, "register_tables") as mock_register:
-            # Run refresh loop in a thread with very short interval
+        # Deterministic instead of sleep-based: signal once we've observed
+        # >= 2 iterations and wait on that with a generous timeout, so a
+        # slow/loaded CI runner can't make this flaky.
+        two_calls = threading.Event()
+        calls = 0
+
+        def _count(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls >= 2:
+                two_calls.set()
+
+        # refresh_loop drives register_all_tables (not register_tables) and
+        # takes (stop_event, interval) — no per-namespace arg.
+        with patch.object(catalog, "register_all_tables", side_effect=_count):
             thread = threading.Thread(
                 target=catalog.refresh_loop,
-                args=("default", stop_event, 0.05),
+                args=(stop_event, 0.05),
             )
             thread.start()
-
-            # Let it run a couple iterations
-            import time
-
-            time.sleep(0.15)
+            assert two_calls.wait(timeout=5), "expected >= 2 refresh iterations"
             stop_event.set()
             thread.join(timeout=1)
 
-        assert mock_register.call_count >= 2
+        assert calls >= 2
 
 
 def _ok_urlopen_response(data: bytes) -> MagicMock:
@@ -515,7 +550,7 @@ class TestRefreshLoopErrorHandling:
         stop_event = threading.Event()
         call_count = 0
 
-        def _failing_then_ok(namespace: str) -> None:
+        def _failing_then_ok(*_args, **_kwargs) -> None:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -523,10 +558,10 @@ class TestRefreshLoopErrorHandling:
             # On subsequent calls, stop the loop
             stop_event.set()
 
-        with patch.object(catalog, "register_tables", side_effect=_failing_then_ok):
+        with patch.object(catalog, "register_all_tables", side_effect=_failing_then_ok):
             thread = threading.Thread(
                 target=catalog.refresh_loop,
-                args=("default", stop_event, 0.05),
+                args=(stop_event, 0.05),
             )
             thread.start()
             thread.join(timeout=2)
@@ -543,17 +578,17 @@ class TestRefreshLoopErrorHandling:
         stop_event = threading.Event()
         call_count = 0
 
-        def _failing_then_ok(namespace: str) -> None:
+        def _failing_then_ok(*_args, **_kwargs) -> None:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 raise urllib.error.URLError("Connection refused")
             stop_event.set()
 
-        with patch.object(catalog, "register_tables", side_effect=_failing_then_ok):
+        with patch.object(catalog, "register_all_tables", side_effect=_failing_then_ok):
             thread = threading.Thread(
                 target=catalog.refresh_loop,
-                args=("default", stop_event, 0.05),
+                args=(stop_event, 0.05),
             )
             thread.start()
             thread.join(timeout=2)

@@ -8,6 +8,7 @@ import { ErrorAlert } from "@/components/error-alert";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { RAT_LOGO, STATUS_COLORS, STATUS_EMOJI, LAYER_BADGE_COLORS } from "@/lib/constants";
+import { PluginSlot } from "@/components/plugins";
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -105,6 +106,8 @@ export default function HomePage() {
         </p>
       </div>
 
+      <PluginSlot name="dashboard-actions" />
+
       {/* Row 2 — Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard
@@ -135,6 +138,8 @@ export default function HomePage() {
           subtitle={`${successCount} success / ${failedCount} failed`}
         />
       </div>
+
+      <PluginSlot name="dashboard-stats" />
 
       {/* Row 3 — Detail Panels */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -258,6 +263,8 @@ export default function HomePage() {
           )}
         </div>
       </div>
+
+      <PluginSlot name="dashboard-widgets" />
     </div>
   );
 }

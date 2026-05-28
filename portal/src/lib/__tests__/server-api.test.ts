@@ -36,7 +36,9 @@ describe("serverApi", () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const [url, options] = mockFetch.mock.calls[0];
     expect(url).toContain("/api/v1/pipelines");
-    expect(options.next?.revalidate).toBeGreaterThan(0);
+    // Lists use revalidate: 0 (== cache: no-store) so a freshly created or
+    // deleted pipeline is never served from a stale Next.js fetch cache.
+    expect(options.next?.revalidate).toBe(0);
     expect(result).toEqual(mockData);
   });
 
@@ -86,14 +88,14 @@ describe("serverApi", () => {
     );
   });
 
-  it("uses ISR revalidation cache strategy for all requests", async () => {
+  it("uses no-store (revalidate: 0) cache strategy for list requests", async () => {
     mockFetch.mockResolvedValueOnce(createMockResponse({ tables: [] }));
 
     const { serverApi } = await import("../server-api");
     await serverApi.tables.list();
 
     const [, options] = mockFetch.mock.calls[0];
-    expect(options.next?.revalidate).toBeGreaterThan(0);
+    expect(options.next?.revalidate).toBe(0);
   });
 
   it("defaults to localhost:8080 when no env vars are set", async () => {

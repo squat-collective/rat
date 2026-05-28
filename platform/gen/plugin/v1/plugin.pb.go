@@ -160,6 +160,891 @@ func (x *HealthCheckResponse) GetMessage() string {
 	return ""
 }
 
+type DescribeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DescribeRequest) Reset() {
+	*x = DescribeRequest{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DescribeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DescribeRequest) ProtoMessage() {}
+
+func (x *DescribeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DescribeRequest.ProtoReflect.Descriptor instead.
+func (*DescribeRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{2}
+}
+
+type DescribeResponse struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Name               string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`                                                       // unique plugin name (e.g., "auth-keycloak")
+	Version            string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`                                                 // semver version string
+	Description        string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`                                         // human-readable description
+	Capabilities       []string               `protobuf:"bytes,4,rep,name=capabilities,proto3" json:"capabilities,omitempty"`                                       // well-known capabilities: "auth", "executor", "sharing", "enforcement", "cloud"
+	Routes             []*RouteDeclaration    `protobuf:"bytes,5,rep,name=routes,proto3" json:"routes,omitempty"`                                                   // HTTP routes the plugin exposes (proxied via /api/v1/x/{plugin}/...)
+	EventSubscriptions []string               `protobuf:"bytes,6,rep,name=event_subscriptions,json=eventSubscriptions,proto3" json:"event_subscriptions,omitempty"` // event channels to subscribe to (e.g., "run_completed", "pipeline_created")
+	ProvidesWorker     bool                   `protobuf:"varint,7,opt,name=provides_worker,json=providesWorker,proto3" json:"provides_worker,omitempty"`            // true if the plugin runs background work
+	Ui                 *PluginUIDescriptor    `protobuf:"bytes,8,opt,name=ui,proto3" json:"ui,omitempty"`                                                           // portal UI integration metadata
+	ConfigSchemaJson   string                 `protobuf:"bytes,9,opt,name=config_schema_json,json=configSchemaJson,proto3" json:"config_schema_json,omitempty"`     // JSON Schema for the plugin's config object
+	// Per-startup random token. When present, ratd's reverse proxy sends
+	// it as X-RAT-Plugin-Token on every forwarded request, and the plugin
+	// MUST reject inbound requests without the matching token. Lets the
+	// plugin distinguish "request via ratd proxy" from direct peer calls
+	// on the docker network. Regenerated on every plugin startup; ratd
+	// refreshes its copy via Describe on each re-registration.
+	PlatformToken string `protobuf:"bytes,10,opt,name=platform_token,json=platformToken,proto3" json:"platform_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DescribeResponse) Reset() {
+	*x = DescribeResponse{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DescribeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DescribeResponse) ProtoMessage() {}
+
+func (x *DescribeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DescribeResponse.ProtoReflect.Descriptor instead.
+func (*DescribeResponse) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *DescribeResponse) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *DescribeResponse) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *DescribeResponse) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *DescribeResponse) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
+func (x *DescribeResponse) GetRoutes() []*RouteDeclaration {
+	if x != nil {
+		return x.Routes
+	}
+	return nil
+}
+
+func (x *DescribeResponse) GetEventSubscriptions() []string {
+	if x != nil {
+		return x.EventSubscriptions
+	}
+	return nil
+}
+
+func (x *DescribeResponse) GetProvidesWorker() bool {
+	if x != nil {
+		return x.ProvidesWorker
+	}
+	return false
+}
+
+func (x *DescribeResponse) GetUi() *PluginUIDescriptor {
+	if x != nil {
+		return x.Ui
+	}
+	return nil
+}
+
+func (x *DescribeResponse) GetConfigSchemaJson() string {
+	if x != nil {
+		return x.ConfigSchemaJson
+	}
+	return ""
+}
+
+func (x *DescribeResponse) GetPlatformToken() string {
+	if x != nil {
+		return x.PlatformToken
+	}
+	return ""
+}
+
+// RouteDeclaration describes an HTTP route the plugin exposes.
+type RouteDeclaration struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Method        string                 `protobuf:"bytes,1,opt,name=method,proto3" json:"method,omitempty"`                                  // HTTP method (GET, POST, PUT, DELETE)
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`                                      // route path relative to plugin root (e.g., "/users")
+	AuthRequired  bool                   `protobuf:"varint,3,opt,name=auth_required,json=authRequired,proto3" json:"auth_required,omitempty"` // whether ratd should enforce auth before proxying
+	Description   string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`                        // human-readable description of the endpoint
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RouteDeclaration) Reset() {
+	*x = RouteDeclaration{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RouteDeclaration) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RouteDeclaration) ProtoMessage() {}
+
+func (x *RouteDeclaration) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RouteDeclaration.ProtoReflect.Descriptor instead.
+func (*RouteDeclaration) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *RouteDeclaration) GetMethod() string {
+	if x != nil {
+		return x.Method
+	}
+	return ""
+}
+
+func (x *RouteDeclaration) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *RouteDeclaration) GetAuthRequired() bool {
+	if x != nil {
+		return x.AuthRequired
+	}
+	return false
+}
+
+func (x *RouteDeclaration) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+// PluginUIDescriptor describes how the plugin integrates with the portal UI.
+type PluginUIDescriptor struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	BundleUrl string                 `protobuf:"bytes,1,opt,name=bundle_url,json=bundleUrl,proto3" json:"bundle_url,omitempty"` // URL to the plugin's JS bundle
+	Slots     []*UISlotDeclaration   `protobuf:"bytes,2,rep,name=slots,proto3" json:"slots,omitempty"`                          // UI slots the plugin fills
+	NavItems  []*UINavItem           `protobuf:"bytes,3,rep,name=nav_items,json=navItems,proto3" json:"nav_items,omitempty"`    // navigation items to add to the portal sidebar
+	Routes    []*UIRoute             `protobuf:"bytes,4,rep,name=routes,proto3" json:"routes,omitempty"`                        // client-side routes the plugin handles
+	// SHA-256 hash of the bundle in SRI format ("sha256-<base64>") — when present, the portal sets <script integrity=…> so a tampered bundle is rejected by the browser. Optional for now to keep older plugins working; will become required in a future version.
+	BundleHash    string `protobuf:"bytes,5,opt,name=bundle_hash,json=bundleHash,proto3" json:"bundle_hash,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PluginUIDescriptor) Reset() {
+	*x = PluginUIDescriptor{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginUIDescriptor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginUIDescriptor) ProtoMessage() {}
+
+func (x *PluginUIDescriptor) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginUIDescriptor.ProtoReflect.Descriptor instead.
+func (*PluginUIDescriptor) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *PluginUIDescriptor) GetBundleUrl() string {
+	if x != nil {
+		return x.BundleUrl
+	}
+	return ""
+}
+
+func (x *PluginUIDescriptor) GetSlots() []*UISlotDeclaration {
+	if x != nil {
+		return x.Slots
+	}
+	return nil
+}
+
+func (x *PluginUIDescriptor) GetNavItems() []*UINavItem {
+	if x != nil {
+		return x.NavItems
+	}
+	return nil
+}
+
+func (x *PluginUIDescriptor) GetRoutes() []*UIRoute {
+	if x != nil {
+		return x.Routes
+	}
+	return nil
+}
+
+func (x *PluginUIDescriptor) GetBundleHash() string {
+	if x != nil {
+		return x.BundleHash
+	}
+	return ""
+}
+
+// UISlotDeclaration describes a UI slot the plugin fills in the portal.
+type UISlotDeclaration struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SlotId        string                 `protobuf:"bytes,1,opt,name=slot_id,json=slotId,proto3" json:"slot_id,omitempty"`                      // well-known slot ID (e.g., "pipeline.sidebar", "dashboard.widget")
+	ComponentName string                 `protobuf:"bytes,2,opt,name=component_name,json=componentName,proto3" json:"component_name,omitempty"` // exported component name from the bundle
+	Priority      int32                  `protobuf:"varint,3,opt,name=priority,proto3" json:"priority,omitempty"`                               // rendering order (lower = first)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UISlotDeclaration) Reset() {
+	*x = UISlotDeclaration{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UISlotDeclaration) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UISlotDeclaration) ProtoMessage() {}
+
+func (x *UISlotDeclaration) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UISlotDeclaration.ProtoReflect.Descriptor instead.
+func (*UISlotDeclaration) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *UISlotDeclaration) GetSlotId() string {
+	if x != nil {
+		return x.SlotId
+	}
+	return ""
+}
+
+func (x *UISlotDeclaration) GetComponentName() string {
+	if x != nil {
+		return x.ComponentName
+	}
+	return ""
+}
+
+func (x *UISlotDeclaration) GetPriority() int32 {
+	if x != nil {
+		return x.Priority
+	}
+	return 0
+}
+
+// UINavItem describes a navigation item added to the portal sidebar.
+type UINavItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Label         string                 `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"`        // display text
+	Icon          string                 `protobuf:"bytes,2,opt,name=icon,proto3" json:"icon,omitempty"`          // icon name (lucide icon set)
+	Path          string                 `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`          // client-side route path
+	Priority      int32                  `protobuf:"varint,4,opt,name=priority,proto3" json:"priority,omitempty"` // ordering (lower = higher in sidebar)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UINavItem) Reset() {
+	*x = UINavItem{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UINavItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UINavItem) ProtoMessage() {}
+
+func (x *UINavItem) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UINavItem.ProtoReflect.Descriptor instead.
+func (*UINavItem) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *UINavItem) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *UINavItem) GetIcon() string {
+	if x != nil {
+		return x.Icon
+	}
+	return ""
+}
+
+func (x *UINavItem) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *UINavItem) GetPriority() int32 {
+	if x != nil {
+		return x.Priority
+	}
+	return 0
+}
+
+// UIRoute describes a client-side route the plugin handles.
+type UIRoute struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`                                        // route path pattern (e.g., "/x/my-plugin/settings")
+	ComponentName string                 `protobuf:"bytes,2,opt,name=component_name,json=componentName,proto3" json:"component_name,omitempty"` // exported component from the bundle
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UIRoute) Reset() {
+	*x = UIRoute{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UIRoute) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UIRoute) ProtoMessage() {}
+
+func (x *UIRoute) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UIRoute.ProtoReflect.Descriptor instead.
+func (*UIRoute) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *UIRoute) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *UIRoute) GetComponentName() string {
+	if x != nil {
+		return x.ComponentName
+	}
+	return ""
+}
+
+type HandleEventRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EventType     string                 `protobuf:"bytes,1,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"` // channel name (e.g., "run_completed")
+	Payload       []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`                      // JSON-encoded event payload
+	EventId       string                 `protobuf:"bytes,3,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`       // unique event identifier for deduplication
+	Timestamp     string                 `protobuf:"bytes,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                  // RFC3339 event timestamp
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HandleEventRequest) Reset() {
+	*x = HandleEventRequest{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HandleEventRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HandleEventRequest) ProtoMessage() {}
+
+func (x *HandleEventRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HandleEventRequest.ProtoReflect.Descriptor instead.
+func (*HandleEventRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *HandleEventRequest) GetEventType() string {
+	if x != nil {
+		return x.EventType
+	}
+	return ""
+}
+
+func (x *HandleEventRequest) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *HandleEventRequest) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *HandleEventRequest) GetTimestamp() string {
+	if x != nil {
+		return x.Timestamp
+	}
+	return ""
+}
+
+type HandleEventResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HandleEventResponse) Reset() {
+	*x = HandleEventResponse{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HandleEventResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HandleEventResponse) ProtoMessage() {}
+
+func (x *HandleEventResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HandleEventResponse.ProtoReflect.Descriptor instead.
+func (*HandleEventResponse) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{10}
+}
+
+type AuthenticateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"` // bearer token from Authorization header
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuthenticateRequest) Reset() {
+	*x = AuthenticateRequest{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuthenticateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuthenticateRequest) ProtoMessage() {}
+
+func (x *AuthenticateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuthenticateRequest.ProtoReflect.Descriptor instead.
+func (*AuthenticateRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *AuthenticateRequest) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+type AuthenticateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Authenticated bool                   `protobuf:"varint,1,opt,name=authenticated,proto3" json:"authenticated,omitempty"`                  // true if the token is valid
+	User          *UserIdentity          `protobuf:"bytes,2,opt,name=user,proto3" json:"user,omitempty"`                                     // populated when authenticated == true
+	ErrorMessage  string                 `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"` // human-readable error when authenticated == false
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuthenticateResponse) Reset() {
+	*x = AuthenticateResponse{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuthenticateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuthenticateResponse) ProtoMessage() {}
+
+func (x *AuthenticateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuthenticateResponse.ProtoReflect.Descriptor instead.
+func (*AuthenticateResponse) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *AuthenticateResponse) GetAuthenticated() bool {
+	if x != nil {
+		return x.Authenticated
+	}
+	return false
+}
+
+func (x *AuthenticateResponse) GetUser() *UserIdentity {
+	if x != nil {
+		return x.User
+	}
+	return nil
+}
+
+func (x *AuthenticateResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+// UserIdentity represents an authenticated user.
+type UserIdentity struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Email         string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`
+	DisplayName   string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Roles         []string               `protobuf:"bytes,4,rep,name=roles,proto3" json:"roles,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UserIdentity) Reset() {
+	*x = UserIdentity{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserIdentity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserIdentity) ProtoMessage() {}
+
+func (x *UserIdentity) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserIdentity.ProtoReflect.Descriptor instead.
+func (*UserIdentity) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *UserIdentity) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *UserIdentity) GetEmail() string {
+	if x != nil {
+		return x.Email
+	}
+	return ""
+}
+
+func (x *UserIdentity) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *UserIdentity) GetRoles() []string {
+	if x != nil {
+		return x.Roles
+	}
+	return nil
+}
+
+type AuthorizeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	ResourceType  string                 `protobuf:"bytes,2,opt,name=resource_type,json=resourceType,proto3" json:"resource_type,omitempty"` // e.g., "pipeline", "namespace", "landing_zone"
+	ResourceId    string                 `protobuf:"bytes,3,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`       // resource identifier
+	Action        string                 `protobuf:"bytes,4,opt,name=action,proto3" json:"action,omitempty"`                                 // e.g., "read", "write", "delete", "admin"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuthorizeRequest) Reset() {
+	*x = AuthorizeRequest{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuthorizeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuthorizeRequest) ProtoMessage() {}
+
+func (x *AuthorizeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuthorizeRequest.ProtoReflect.Descriptor instead.
+func (*AuthorizeRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *AuthorizeRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *AuthorizeRequest) GetResourceType() string {
+	if x != nil {
+		return x.ResourceType
+	}
+	return ""
+}
+
+func (x *AuthorizeRequest) GetResourceId() string {
+	if x != nil {
+		return x.ResourceId
+	}
+	return ""
+}
+
+func (x *AuthorizeRequest) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+type AuthorizeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Allowed       bool                   `protobuf:"varint,1,opt,name=allowed,proto3" json:"allowed,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"` // explanation when denied
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuthorizeResponse) Reset() {
+	*x = AuthorizeResponse{}
+	mi := &file_plugin_v1_plugin_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuthorizeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuthorizeResponse) ProtoMessage() {}
+
+func (x *AuthorizeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_v1_plugin_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuthorizeResponse.ProtoReflect.Descriptor instead.
+func (*AuthorizeResponse) Descriptor() ([]byte, []int) {
+	return file_plugin_v1_plugin_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *AuthorizeResponse) GetAllowed() bool {
+	if x != nil {
+		return x.Allowed
+	}
+	return false
+}
+
+func (x *AuthorizeResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 var File_plugin_v1_plugin_proto protoreflect.FileDescriptor
 
 const file_plugin_v1_plugin_proto_rawDesc = "" +
@@ -168,13 +1053,82 @@ const file_plugin_v1_plugin_proto_rawDesc = "" +
 	"\x12HealthCheckRequest\"f\n" +
 	"\x13HealthCheckResponse\x125\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x1d.ratatouille.plugin.v1.StatusR\x06status\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage*L\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\x11\n" +
+	"\x0fDescribeRequest\"\xb1\x03\n" +
+	"\x10DescribeResponse\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\"\n" +
+	"\fcapabilities\x18\x04 \x03(\tR\fcapabilities\x12?\n" +
+	"\x06routes\x18\x05 \x03(\v2'.ratatouille.plugin.v1.RouteDeclarationR\x06routes\x12/\n" +
+	"\x13event_subscriptions\x18\x06 \x03(\tR\x12eventSubscriptions\x12'\n" +
+	"\x0fprovides_worker\x18\a \x01(\bR\x0eprovidesWorker\x129\n" +
+	"\x02ui\x18\b \x01(\v2).ratatouille.plugin.v1.PluginUIDescriptorR\x02ui\x12,\n" +
+	"\x12config_schema_json\x18\t \x01(\tR\x10configSchemaJson\x12%\n" +
+	"\x0eplatform_token\x18\n" +
+	" \x01(\tR\rplatformToken\"\x85\x01\n" +
+	"\x10RouteDeclaration\x12\x16\n" +
+	"\x06method\x18\x01 \x01(\tR\x06method\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12#\n" +
+	"\rauth_required\x18\x03 \x01(\bR\fauthRequired\x12 \n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescription\"\x8b\x02\n" +
+	"\x12PluginUIDescriptor\x12\x1d\n" +
+	"\n" +
+	"bundle_url\x18\x01 \x01(\tR\tbundleUrl\x12>\n" +
+	"\x05slots\x18\x02 \x03(\v2(.ratatouille.plugin.v1.UISlotDeclarationR\x05slots\x12=\n" +
+	"\tnav_items\x18\x03 \x03(\v2 .ratatouille.plugin.v1.UINavItemR\bnavItems\x126\n" +
+	"\x06routes\x18\x04 \x03(\v2\x1e.ratatouille.plugin.v1.UIRouteR\x06routes\x12\x1f\n" +
+	"\vbundle_hash\x18\x05 \x01(\tR\n" +
+	"bundleHash\"o\n" +
+	"\x11UISlotDeclaration\x12\x17\n" +
+	"\aslot_id\x18\x01 \x01(\tR\x06slotId\x12%\n" +
+	"\x0ecomponent_name\x18\x02 \x01(\tR\rcomponentName\x12\x1a\n" +
+	"\bpriority\x18\x03 \x01(\x05R\bpriority\"e\n" +
+	"\tUINavItem\x12\x14\n" +
+	"\x05label\x18\x01 \x01(\tR\x05label\x12\x12\n" +
+	"\x04icon\x18\x02 \x01(\tR\x04icon\x12\x12\n" +
+	"\x04path\x18\x03 \x01(\tR\x04path\x12\x1a\n" +
+	"\bpriority\x18\x04 \x01(\x05R\bpriority\"D\n" +
+	"\aUIRoute\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12%\n" +
+	"\x0ecomponent_name\x18\x02 \x01(\tR\rcomponentName\"\x86\x01\n" +
+	"\x12HandleEventRequest\x12\x1d\n" +
+	"\n" +
+	"event_type\x18\x01 \x01(\tR\teventType\x12\x18\n" +
+	"\apayload\x18\x02 \x01(\fR\apayload\x12\x19\n" +
+	"\bevent_id\x18\x03 \x01(\tR\aeventId\x12\x1c\n" +
+	"\ttimestamp\x18\x04 \x01(\tR\ttimestamp\"\x15\n" +
+	"\x13HandleEventResponse\"+\n" +
+	"\x13AuthenticateRequest\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"\x9a\x01\n" +
+	"\x14AuthenticateResponse\x12$\n" +
+	"\rauthenticated\x18\x01 \x01(\bR\rauthenticated\x127\n" +
+	"\x04user\x18\x02 \x01(\v2#.ratatouille.plugin.v1.UserIdentityR\x04user\x12#\n" +
+	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"v\n" +
+	"\fUserIdentity\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
+	"\x05email\x18\x02 \x01(\tR\x05email\x12!\n" +
+	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12\x14\n" +
+	"\x05roles\x18\x04 \x03(\tR\x05roles\"\x89\x01\n" +
+	"\x10AuthorizeRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\x12#\n" +
+	"\rresource_type\x18\x02 \x01(\tR\fresourceType\x12\x1f\n" +
+	"\vresource_id\x18\x03 \x01(\tR\n" +
+	"resourceId\x12\x16\n" +
+	"\x06action\x18\x04 \x01(\tR\x06action\"E\n" +
+	"\x11AuthorizeResponse\x12\x18\n" +
+	"\aallowed\x18\x01 \x01(\bR\aallowed\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason*L\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eSTATUS_SERVING\x10\x01\x12\x16\n" +
-	"\x12STATUS_NOT_SERVING\x10\x022u\n" +
+	"\x12STATUS_NOT_SERVING\x10\x022\x81\x04\n" +
 	"\rPluginService\x12d\n" +
-	"\vHealthCheck\x12).ratatouille.plugin.v1.HealthCheckRequest\x1a*.ratatouille.plugin.v1.HealthCheckResponseB\xd7\x01\n" +
+	"\vHealthCheck\x12).ratatouille.plugin.v1.HealthCheckRequest\x1a*.ratatouille.plugin.v1.HealthCheckResponse\x12[\n" +
+	"\bDescribe\x12&.ratatouille.plugin.v1.DescribeRequest\x1a'.ratatouille.plugin.v1.DescribeResponse\x12d\n" +
+	"\vHandleEvent\x12).ratatouille.plugin.v1.HandleEventRequest\x1a*.ratatouille.plugin.v1.HandleEventResponse\x12g\n" +
+	"\fAuthenticate\x12*.ratatouille.plugin.v1.AuthenticateRequest\x1a+.ratatouille.plugin.v1.AuthenticateResponse\x12^\n" +
+	"\tAuthorize\x12'.ratatouille.plugin.v1.AuthorizeRequest\x1a(.ratatouille.plugin.v1.AuthorizeResponseB\xd7\x01\n" +
 	"\x19com.ratatouille.plugin.v1B\vPluginProtoP\x01Z7github.com/rat-data/rat/platform/gen/plugin/v1;pluginv1\xa2\x02\x03RPX\xaa\x02\x15Ratatouille.Plugin.V1\xca\x02\x15Ratatouille\\Plugin\\V1\xe2\x02!Ratatouille\\Plugin\\V1\\GPBMetadata\xea\x02\x17Ratatouille::Plugin::V1b\x06proto3"
 
 var (
@@ -190,21 +1144,49 @@ func file_plugin_v1_plugin_proto_rawDescGZIP() []byte {
 }
 
 var file_plugin_v1_plugin_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_plugin_v1_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_plugin_v1_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_plugin_v1_plugin_proto_goTypes = []any{
-	(Status)(0),                 // 0: ratatouille.plugin.v1.Status
-	(*HealthCheckRequest)(nil),  // 1: ratatouille.plugin.v1.HealthCheckRequest
-	(*HealthCheckResponse)(nil), // 2: ratatouille.plugin.v1.HealthCheckResponse
+	(Status)(0),                  // 0: ratatouille.plugin.v1.Status
+	(*HealthCheckRequest)(nil),   // 1: ratatouille.plugin.v1.HealthCheckRequest
+	(*HealthCheckResponse)(nil),  // 2: ratatouille.plugin.v1.HealthCheckResponse
+	(*DescribeRequest)(nil),      // 3: ratatouille.plugin.v1.DescribeRequest
+	(*DescribeResponse)(nil),     // 4: ratatouille.plugin.v1.DescribeResponse
+	(*RouteDeclaration)(nil),     // 5: ratatouille.plugin.v1.RouteDeclaration
+	(*PluginUIDescriptor)(nil),   // 6: ratatouille.plugin.v1.PluginUIDescriptor
+	(*UISlotDeclaration)(nil),    // 7: ratatouille.plugin.v1.UISlotDeclaration
+	(*UINavItem)(nil),            // 8: ratatouille.plugin.v1.UINavItem
+	(*UIRoute)(nil),              // 9: ratatouille.plugin.v1.UIRoute
+	(*HandleEventRequest)(nil),   // 10: ratatouille.plugin.v1.HandleEventRequest
+	(*HandleEventResponse)(nil),  // 11: ratatouille.plugin.v1.HandleEventResponse
+	(*AuthenticateRequest)(nil),  // 12: ratatouille.plugin.v1.AuthenticateRequest
+	(*AuthenticateResponse)(nil), // 13: ratatouille.plugin.v1.AuthenticateResponse
+	(*UserIdentity)(nil),         // 14: ratatouille.plugin.v1.UserIdentity
+	(*AuthorizeRequest)(nil),     // 15: ratatouille.plugin.v1.AuthorizeRequest
+	(*AuthorizeResponse)(nil),    // 16: ratatouille.plugin.v1.AuthorizeResponse
 }
 var file_plugin_v1_plugin_proto_depIdxs = []int32{
-	0, // 0: ratatouille.plugin.v1.HealthCheckResponse.status:type_name -> ratatouille.plugin.v1.Status
-	1, // 1: ratatouille.plugin.v1.PluginService.HealthCheck:input_type -> ratatouille.plugin.v1.HealthCheckRequest
-	2, // 2: ratatouille.plugin.v1.PluginService.HealthCheck:output_type -> ratatouille.plugin.v1.HealthCheckResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0,  // 0: ratatouille.plugin.v1.HealthCheckResponse.status:type_name -> ratatouille.plugin.v1.Status
+	5,  // 1: ratatouille.plugin.v1.DescribeResponse.routes:type_name -> ratatouille.plugin.v1.RouteDeclaration
+	6,  // 2: ratatouille.plugin.v1.DescribeResponse.ui:type_name -> ratatouille.plugin.v1.PluginUIDescriptor
+	7,  // 3: ratatouille.plugin.v1.PluginUIDescriptor.slots:type_name -> ratatouille.plugin.v1.UISlotDeclaration
+	8,  // 4: ratatouille.plugin.v1.PluginUIDescriptor.nav_items:type_name -> ratatouille.plugin.v1.UINavItem
+	9,  // 5: ratatouille.plugin.v1.PluginUIDescriptor.routes:type_name -> ratatouille.plugin.v1.UIRoute
+	14, // 6: ratatouille.plugin.v1.AuthenticateResponse.user:type_name -> ratatouille.plugin.v1.UserIdentity
+	1,  // 7: ratatouille.plugin.v1.PluginService.HealthCheck:input_type -> ratatouille.plugin.v1.HealthCheckRequest
+	3,  // 8: ratatouille.plugin.v1.PluginService.Describe:input_type -> ratatouille.plugin.v1.DescribeRequest
+	10, // 9: ratatouille.plugin.v1.PluginService.HandleEvent:input_type -> ratatouille.plugin.v1.HandleEventRequest
+	12, // 10: ratatouille.plugin.v1.PluginService.Authenticate:input_type -> ratatouille.plugin.v1.AuthenticateRequest
+	15, // 11: ratatouille.plugin.v1.PluginService.Authorize:input_type -> ratatouille.plugin.v1.AuthorizeRequest
+	2,  // 12: ratatouille.plugin.v1.PluginService.HealthCheck:output_type -> ratatouille.plugin.v1.HealthCheckResponse
+	4,  // 13: ratatouille.plugin.v1.PluginService.Describe:output_type -> ratatouille.plugin.v1.DescribeResponse
+	11, // 14: ratatouille.plugin.v1.PluginService.HandleEvent:output_type -> ratatouille.plugin.v1.HandleEventResponse
+	13, // 15: ratatouille.plugin.v1.PluginService.Authenticate:output_type -> ratatouille.plugin.v1.AuthenticateResponse
+	16, // 16: ratatouille.plugin.v1.PluginService.Authorize:output_type -> ratatouille.plugin.v1.AuthorizeResponse
+	12, // [12:17] is the sub-list for method output_type
+	7,  // [7:12] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_plugin_v1_plugin_proto_init() }
@@ -218,7 +1200,7 @@ func file_plugin_v1_plugin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plugin_v1_plugin_proto_rawDesc), len(file_plugin_v1_plugin_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   2,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

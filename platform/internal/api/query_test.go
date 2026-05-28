@@ -2,12 +2,16 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	connect "connectrpc.com/connect"
 	"github.com/rat-data/rat/platform/internal/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -91,6 +95,43 @@ func TestExecuteQuery_DefaultsLimitTo1000(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// stubQueryStoreReturningErr is a QueryStore that always returns a fixed
+// error from ExecuteQuery — used to test ratd's error-mapping branches.
+type stubQueryStoreReturningErr struct {
+	*memoryQueryStore
+	err error
+}
+
+func (s *stubQueryStoreReturningErr) ExecuteQuery(_ context.Context, _ string, _ string, _ int) (*api.QueryResult, error) {
+	return nil, s.err
+}
+
+func TestExecuteQuery_DeadlineExceeded_Returns504(t *testing.T) {
+	// ratq's watchdog interrupts long-running queries and surfaces a
+	// ConnectRPC DEADLINE_EXCEEDED. ratd must translate that to HTTP 504
+	// with a clear "timed out" message — NOT a generic 500.
+	srv, _ := newQueryTestServer()
+	srv.Query = &stubQueryStoreReturningErr{
+		memoryQueryStore: newMemoryQueryStore(),
+		err: fmt.Errorf("execute query: %w", connect.NewError(
+			connect.CodeDeadlineExceeded,
+			errors.New("Query timed out: query exceeded 2s timeout"),
+		)),
+	}
+	router := api.NewRouter(srv)
+
+	body := `{"sql":"SELECT count(*) FROM range(10000000000)"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/query", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusGatewayTimeout, rec.Code)
+	respBody := rec.Body.String()
+	assert.Contains(t, respBody, "DEADLINE_EXCEEDED")
+	assert.Contains(t, strings.ToLower(respBody), "timed out")
 }
 
 // --- List Tables ---

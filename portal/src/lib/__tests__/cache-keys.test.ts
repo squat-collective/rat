@@ -197,15 +197,7 @@ describe("KEYS", () => {
     });
   });
 
-  describe("lineage", () => {
-    it("returns namespaced lineage key", () => {
-      expect(KEYS.lineage("myns")).toBe("lineage-myns");
-    });
-
-    it("returns all-lineage key without namespace", () => {
-      expect(KEYS.lineage()).toBe("lineage-all");
-    });
-  });
+  // Lineage moved to rat-plugin-lineage — KEYS.lineage no longer exists.
 
   describe("features", () => {
     it("returns constant key", () => {
@@ -275,16 +267,7 @@ describe("KEYS.match", () => {
     });
   });
 
-  describe("lineage matcher", () => {
-    it("matches lineage keys", () => {
-      expect(KEYS.match.lineage("lineage-myns")).toBe(true);
-      expect(KEYS.match.lineage("lineage-all")).toBe(true);
-    });
-
-    it("does not match unrelated keys", () => {
-      expect(KEYS.match.lineage("pipelines")).toBe(false);
-    });
-  });
+  // Lineage matcher removed alongside the cache key.
 
   describe("files matcher", () => {
     it("matches files keys with prefix", () => {

@@ -28,6 +28,7 @@ export type {
   RollbackRequest,
   RollbackResponse,
   Layer,
+  BuiltinMergeStrategy,
   MergeStrategy,
   Run,
   RunListResponse,
@@ -101,6 +102,28 @@ export type {
   WebhookListResponse,
   CreateWebhookRequest,
   CreateWebhookResponse,
+  PluginStatus,
+  PluginKind,
+  PluginEntry,
+  RunnerPlugin,
+  PluginSource,
+  CreatePluginSourceRequest,
+  PluginPolicy,
+  CreatePluginPolicyRequest,
+  PrincipalType,
+  Grant,
+  GrantListResponse,
+  CreateGrantRequest,
+  ResourceAccessResponse,
+  Verb,
+  VerbListResponse,
+  Group,
+  GroupListResponse,
+  GroupMember,
+  GroupMemberListResponse,
+  IdentityUser,
+  IdentityUserListResponse,
+  IdentityCapabilities,
 } from "./models";
 
 export { HealthResource } from "./resources/health";
@@ -114,3 +137,4 @@ export { TriggersResource } from "./resources/triggers";
 export { QualityResource } from "./resources/quality";
 export { LineageResource } from "./resources/lineage";
 export { RetentionResource } from "./resources/retention";
+export { PluginsResource } from "./resources/plugins";

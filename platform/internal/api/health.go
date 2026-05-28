@@ -14,15 +14,16 @@ import (
 // readinessTimeout is the per-dependency timeout for readiness checks.
 const readinessTimeout = 2 * time.Second
 
-// Build-time version information. These are set via -ldflags at build time:
+// Build-time version information. These are injected via -ldflags by the
+// release pipeline (.github/workflows/release.yml → platform/Dockerfile
+// ARG VERSION), so the git tag is the single source of truth — never
+// hardcode a real version here. Local / unstamped builds report "dev".
 //
-//	go build -ldflags "-X api.Version=2.0.0 -X api.GitCommit=abc1234 -X api.BuildTime=2026-02-16T12:00:00Z"
-//
-// If not set, defaults are used.
+//	go build -ldflags "-X github.com/rat-data/rat/platform/internal/api.Version=0.2.0-beta.1 ..."
 var (
-	Version   = "dev"     // Semantic version (e.g., "2.0.0")
-	GitCommit = "unknown" // Git commit SHA
-	BuildTime = "unknown" // ISO 8601 build timestamp
+	Version   = "dev"     // Semantic version — injected at release build
+	GitCommit = "unknown" // Git commit SHA — injected at release build
+	BuildTime = "unknown" // ISO 8601 build timestamp — injected at release build
 )
 
 // HealthChecker verifies that a dependency is reachable and healthy.
@@ -179,6 +180,68 @@ func (s *Server) HandleMetrics(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, "# TYPE ratd_sse_connections_active gauge\n")
 		fmt.Fprintf(w, "ratd_sse_connections_active %d\n", s.SSELimiter.GlobalCount())
 	}
+
+	// Postgres pool saturation — main pool.
+	// total = pool size (max connections), acquired = currently in-use.
+	// Saturation = acquired / total → 1.0 means every connection is busy;
+	// next acquire blocks until one is freed. Use the difference between
+	// the two gauges in PromQL to alert on sustained near-saturation.
+	if s.DBPoolStats != nil {
+		total, acquired := s.DBPoolStats()
+		fmt.Fprintf(w, "# HELP ratd_postgres_pool_total Total connections configured for the main Postgres pool.\n")
+		fmt.Fprintf(w, "# TYPE ratd_postgres_pool_total gauge\n")
+		fmt.Fprintf(w, "ratd_postgres_pool_total %d\n", total)
+
+		fmt.Fprintf(w, "# HELP ratd_postgres_pool_acquired Currently-acquired connections from the main Postgres pool.\n")
+		fmt.Fprintf(w, "# TYPE ratd_postgres_pool_acquired gauge\n")
+		fmt.Fprintf(w, "ratd_postgres_pool_acquired %d\n", acquired)
+	}
+
+	// Postgres pool saturation — dedicated heartbeat pool (when enabled).
+	// This pool exists so a saturated main pool can't starve the leader
+	// heartbeat ping (see main.go: RAT_HEARTBEAT_POOL_ENABLED). If this
+	// dedicated pool itself looks saturated something is very wrong — the
+	// heartbeat path should at most need one connection at a time.
+	if s.HeartbeatPoolStats != nil {
+		total, acquired := s.HeartbeatPoolStats()
+		fmt.Fprintf(w, "# HELP ratd_postgres_heartbeat_pool_total Total connections configured for the dedicated heartbeat pool.\n")
+		fmt.Fprintf(w, "# TYPE ratd_postgres_heartbeat_pool_total gauge\n")
+		fmt.Fprintf(w, "ratd_postgres_heartbeat_pool_total %d\n", total)
+
+		fmt.Fprintf(w, "# HELP ratd_postgres_heartbeat_pool_acquired Currently-acquired connections from the dedicated heartbeat pool.\n")
+		fmt.Fprintf(w, "# TYPE ratd_postgres_heartbeat_pool_acquired gauge\n")
+		fmt.Fprintf(w, "ratd_postgres_heartbeat_pool_acquired %d\n", acquired)
+	}
+
+	// Plugin fleet health.
+	// total counts every registered plugin (any status); healthy counts only
+	// those currently in PluginStatusEnabled. The delta is "registered but
+	// not currently passing the 30s health-loop probe".
+	if s.PluginHealthStats != nil {
+		total, healthy := s.PluginHealthStats()
+		fmt.Fprintf(w, "# HELP ratd_plugins_total Total number of registered plugins (any status).\n")
+		fmt.Fprintf(w, "# TYPE ratd_plugins_total gauge\n")
+		fmt.Fprintf(w, "ratd_plugins_total %d\n", total)
+
+		fmt.Fprintf(w, "# HELP ratd_plugins_healthy Plugins currently in the enabled status (passing health-loop probes).\n")
+		fmt.Fprintf(w, "# TYPE ratd_plugins_healthy gauge\n")
+		fmt.Fprintf(w, "ratd_plugins_healthy %d\n", healthy)
+	}
+
+	// Scheduler tick observability.
+	// last_tick_duration_seconds growth signals the planning phase (store
+	// reads) is slowing down — usually a Postgres or schedule-count issue.
+	// last_tick_dispatched_total spikes show bursty load on the runner.
+	if s.SchedulerMetrics != nil {
+		lastTickSeconds, dispatched := s.SchedulerMetrics()
+		fmt.Fprintf(w, "# HELP ratd_scheduler_last_tick_duration_seconds Duration of the most recent scheduler tick.\n")
+		fmt.Fprintf(w, "# TYPE ratd_scheduler_last_tick_duration_seconds gauge\n")
+		fmt.Fprintf(w, "ratd_scheduler_last_tick_duration_seconds %g\n", lastTickSeconds)
+
+		fmt.Fprintf(w, "# HELP ratd_scheduler_last_tick_dispatched_total Schedules dispatched in the most recent scheduler tick.\n")
+		fmt.Fprintf(w, "# TYPE ratd_scheduler_last_tick_dispatched_total gauge\n")
+		fmt.Fprintf(w, "ratd_scheduler_last_tick_dispatched_total %d\n", dispatched)
+	}
 }
 
 // HandleFeatures returns the active platform capabilities.
@@ -195,13 +258,7 @@ func (s *Server) HandleFeatures(w http.ResponseWriter, _ *http.Request) {
 			Edition:    "community",
 			Namespaces: false,
 			MultiUser:  false,
-			Plugins: map[string]domain.PluginFeature{
-				"auth":        {Enabled: false},
-				"sharing":     {Enabled: false},
-				"executor":    {Enabled: true, Type: "warmpool"},
-				"audit":       {Enabled: false},
-				"enforcement": {Enabled: false},
-			},
+			Plugins:    map[string]domain.PluginFeature{},
 		}
 	}
 

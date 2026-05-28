@@ -1,10 +1,22 @@
 # Build stage
-FROM golang:1.24-alpine AS builder
+FROM golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 AS builder
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -extldflags '-static'" -o /ratd ./cmd/ratd
+
+# Version metadata injected by the release pipeline. Defaults keep local
+# `docker build` honest ("dev") — the git tag is the single source of truth,
+# passed through .github/workflows/release.yml → --build-arg.
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=unknown
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w -extldflags '-static' \
+      -X github.com/rat-data/rat/platform/internal/api.Version=${VERSION} \
+      -X github.com/rat-data/rat/platform/internal/api.GitCommit=${GIT_COMMIT} \
+      -X github.com/rat-data/rat/platform/internal/api.BuildTime=${BUILD_TIME}" \
+    -o /ratd ./cmd/ratd
 
 # Runtime stage — scratch for minimal attack surface (~15-20 MB final image).
 # No shell or utilities — healthcheck uses the built-in `ratd healthcheck` command.

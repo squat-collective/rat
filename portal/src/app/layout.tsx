@@ -3,7 +3,10 @@ import { headers } from "next/headers";
 import { JetBrains_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import "./globals.css";
+import { SessionProvider } from "@/providers/session-provider";
 import { ApiProvider } from "@/providers/api-provider";
+import { PluginWrapper } from "@/components/plugins";
+import { ReactGlobals } from "@/components/plugins/react-globals";
 import { AppShell } from "@/components/app-shell";
 
 const jetbrains = JetBrains_Mono({ subsets: ["latin"] });
@@ -30,9 +33,14 @@ export default async function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={`${jetbrains.className} noise scanlines`}>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem nonce={nonce}>
-          <ApiProvider>
-            <AppShell>{children}</AppShell>
-          </ApiProvider>
+          <SessionProvider>
+            <ApiProvider>
+              <ReactGlobals />
+              <PluginWrapper nonce={nonce}>
+                <AppShell>{children}</AppShell>
+              </PluginWrapper>
+            </ApiProvider>
+          </SessionProvider>
         </ThemeProvider>
       </body>
     </html>

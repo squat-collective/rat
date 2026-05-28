@@ -94,7 +94,7 @@ jobs:
             sdk-typescript/package-lock.json
             portal/package-lock.json
 
-      # Build + test SDK first (portal depends on it)
+      # Build + lint + test SDK first (portal depends on it)
       - name: Install SDK dependencies
         working-directory: sdk-typescript
         run: npm ci
@@ -103,14 +103,22 @@ jobs:
         working-directory: sdk-typescript
         run: npm run build
 
+      - name: Lint SDK
+        working-directory: sdk-typescript
+        run: npm run lint
+
       - name: Test SDK
         working-directory: sdk-typescript
         run: npm test
 
-      # Then test portal
+      # Then lint + test portal
       - name: Install portal dependencies
         working-directory: portal
         run: npm ci
+
+      - name: Lint portal
+        working-directory: portal
+        run: npm run lint
 
       - name: Test portal
         working-directory: portal
@@ -140,13 +148,20 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # Pinned (not "latest") so a new golangci release can't silently
+          # turn a green build red — matches GO_LINT_IMAGE in the Makefile so
+          # `make ci` locally == this job.
+          version: v1.64.8
           working-directory: platform
           args: --timeout=3m
 
       # — Python lint —
+      # Pin ruff: an unpinned `pipx install ruff` grabs whatever's latest,
+      # and each ruff release adds rules + tweaks the formatter, so a green
+      # build silently breaks on the next release. 0.6.9 is the version the
+      # runner/query sources are clean against (matches the pyproject dev pin).
       - name: Install ruff
-        run: pipx install ruff
+        run: pipx install ruff==0.6.9
 
       - name: Ruff check (runner)
         working-directory: runner
@@ -170,6 +185,27 @@ jobs:
         if: github.event_name == 'pull_request'
         working-directory: proto
         run: buf breaking --against "https://github.com/${{ github.repository }}.git#branch=${{ github.base_ref }},subdir=proto"
+
+  # ── Security (secret scan — blocking) ─────────────────────────
+  # Just the fast, deterministic secret scan here. The slower dependency
+  # vuln scanners (govulncheck / npm audit / pip-audit) are report-only in
+  # `make security` and run locally + via Dependabot, to keep CI minutes down.
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: gitleaks secret scan
+        run: make security-secrets
+
+  # ── Docs (broken links + env-var coverage — blocking) ─────────
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docs-check
+        run: make docs-check
 
   # ── Docker Build (verify all images compile) ──────────────────
   docker-build:
@@ -218,3 +254,87 @@ jobs:
           push: false
           cache-from: type=gha,scope=portal
           cache-to: type=gha,mode=max,scope=portal
+
+  # ── Integration Tests (real Postgres + MinIO) ─────────────────
+  # Runs `make test-integration`, which spins up postgres-test + minio-test
+  # via infra/docker-compose.test.yml (test profile), then runs the Go
+  # postgres/store integration tests against them. Catches regressions in
+  # real DB queries that unit tests with in-memory stores cannot.
+  test-integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-integration-${{ hashFiles('platform/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-integration-
+            ${{ runner.os }}-go-
+
+      - name: Run integration tests
+        run: make test-integration
+
+      - name: Dump test service logs on failure
+        if: failure()
+        run: docker compose -f infra/docker-compose.test.yml --profile test logs
+
+      - name: Tear down test services
+        if: always()
+        run: docker compose -f infra/docker-compose.test.yml --profile test down -v
+
+  # ── Example Plugin Tests ──────────────────────────────────────
+  # Each plugins/rat-plugin-* directory ships a Makefile with a `test`
+  # target that runs `go test ./...` against the plugin (with the platform
+  # module mounted via go.mod replace). Without this matrix, plugin tests
+  # bit-rot silently — a change to platform's plugin SDK can break every
+  # plugin and merge without anyone noticing until a user deploys one.
+  test-examples:
+    name: Plugin Tests (${{ matrix.plugin }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin:
+          - rat-plugin-agents
+          - rat-plugin-ai-provider
+          - rat-plugin-chat
+          - rat-plugin-demo-loader
+          - rat-plugin-dev-assistant
+          - rat-plugin-docs-assistant
+          - rat-plugin-event-notifier
+          - rat-plugin-interconnect
+          - rat-plugin-mcp-docs
+          - rat-plugin-mcp-sql
+          - rat-plugin-pg-sync
+          - rat-plugin-secrets
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # All plugins share the platform module via the local `replace`
+      # directive, so caching ~/go/pkg/mod across the matrix is a big win.
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-plugins-${{ matrix.plugin }}-${{ hashFiles('platform/go.sum', format('plugins/{0}/go.sum', matrix.plugin)) }}
+          restore-keys: |
+            ${{ runner.os }}-go-plugins-
+            ${{ runner.os }}-go-
+
+      - name: Run plugin tests
+        working-directory: plugins/${{ matrix.plugin }}
+        run: make test

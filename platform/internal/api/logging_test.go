@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,13 +14,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// captureLogs installs a JSON slog handler that writes to a buffer,
-// runs fn, then restores the previous default logger. Returns the
-// captured log output as a string.
+// captureLogs installs a JSON slog handler (wrapped in the production
+// ContextHandler, so request_id is auto-attached from context) that writes
+// to a buffer, runs fn, then restores the previous default logger. Returns
+// the captured log output as a string.
 func captureLogs(t *testing.T, fn func()) string {
 	t.Helper()
 	var buf bytes.Buffer
-	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	base := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	handler := api.NewContextHandler(base)
 	prev := slog.Default()
 	slog.SetDefault(slog.New(handler))
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -27,6 +30,20 @@ func captureLogs(t *testing.T, fn func()) string {
 	fn()
 
 	return buf.String()
+}
+
+// countKeyOccurrences scans the raw JSON bytes for the number of times
+// "<key>" appears as a top-level field. This catches duplicate keys
+// (which are valid JSON but lost during normal decoding into a map).
+func countKeyOccurrences(raw, key string) int {
+	needle := `"` + key + `":`
+	count := 0
+	for i := 0; i+len(needle) <= len(raw); i++ {
+		if raw[i:i+len(needle)] == needle {
+			count++
+		}
+	}
+	return count
 }
 
 func TestRequestLogger_200_LogsInfoLevel(t *testing.T) {
@@ -154,6 +171,43 @@ func TestRequestLogger_IncludesRequestID(t *testing.T) {
 	})
 
 	assert.Contains(t, output, `"request_id":"test-req-123"`)
+}
+
+// TestRequestLogger_RequestIDAppearsExactlyOnce is a regression test for the
+// duplicate-key bug: ContextHandler attaches request_id from context, so the
+// RequestLogger must NOT also append it explicitly — otherwise the JSON
+// output ends up with two "request_id" keys, which confuses log aggregators.
+func TestRequestLogger_RequestIDAppearsExactlyOnce(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := api.RequestID(api.RequestLogger(inner))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/anything", http.NoBody)
+	req.Header.Set("X-Request-ID", "uniq-req-id-xyz")
+	rec := httptest.NewRecorder()
+
+	output := captureLogs(t, func() {
+		handler.ServeHTTP(rec, req)
+	})
+
+	require.NotEmpty(t, output, "expected at least one log line")
+
+	for _, line := range strings.Split(strings.TrimRight(output, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		// JSON must parse cleanly.
+		var obj map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &obj), "log line should be valid JSON: %s", line)
+
+		// Raw-text scan: request_id must appear exactly once.
+		assert.Equalf(t, 1, countKeyOccurrences(line, "request_id"),
+			"request_id should appear exactly once in: %s", line)
+
+		// The single value must be the propagated ID.
+		assert.Equal(t, "uniq-req-id-xyz", obj["request_id"], "request_id value should be propagated")
+	}
 }
 
 func TestRequestLogger_IncludesResponseSize(t *testing.T) {

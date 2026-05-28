@@ -99,7 +99,10 @@ export function PipelineSettings({
       await api.pipelines.delete(pipeline.namespace, pipeline.layer, pipeline.name);
       // Revalidate all pipeline-related SWR keys so the list page is fresh
       await mutate(KEYS.match.pipelines);
-      await mutate(KEYS.match.lineage);
+      // /pipelines is a Server Component fetched via serverApi — SWR can't
+      // reach Next.js's router cache, so refresh() is required for the
+      // deleted pipeline to actually disappear from the list.
+      router.refresh();
       router.push("/pipelines");
     } catch (e) {
       console.error("Failed to delete pipeline:", e);

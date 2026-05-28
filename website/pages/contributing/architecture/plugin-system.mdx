@@ -451,3 +451,89 @@ ratd maintains a persistent gRPC connection to each plugin. Connections are:
 - **Automatically reconnected** on failure
 - **Timeout-bounded** (5 second dial timeout, 10 second RPC timeout)
 - **Load-balanced** if the plugin runs multiple replicas (via DNS round-robin)
+
+---
+
+## Runner Plugin System
+
+RAT has a **three-layer plugin architecture**. The sections above cover Layer 2 (Platform Plugins — Go gRPC containers). This section covers Layer 1: Runner Plugins.
+
+<Mermaid chart={`
+flowchart TB
+    subgraph L3 ["Layer 3: Portal Plugins (UI)"]
+        Portal["URL-loaded JS bundles\nExtend the web IDE"]
+    end
+    subgraph L2 ["Layer 2: Platform Plugins (API/Logic)"]
+        Platform["gRPC containers\nAuth, executor, sharing, cloud"]
+    end
+    subgraph L1 ["Layer 1: Runner Plugins (Data)"]
+        Runner["Python entry points\nStrategies, hooks, helpers"]
+    end
+
+    L3 -.-> L2
+    L2 -.-> L1
+
+    style L1 fill:#22c55e,color:#000
+    style L2 fill:#a855f7,color:#fff
+    style L3 fill:#3b82f6,color:#fff
+`} />
+
+### Overview
+
+Runner plugins are Python packages that extend the data processing layer. They are discovered via `importlib.metadata.entry_points()` — the same mechanism used by pytest, pip, and other Python tools.
+
+Key characteristics:
+
+- **Per-run discovery**: Plugins are scanned at the start of each pipeline run (not server startup)
+- **Protocol-based**: Each extension point defines a `Protocol` (structural typing) — no inheritance needed
+- **Zero config**: Install a package in the runner container and it is automatically available
+- **Fail-safe**: Invalid plugins are logged and skipped — they never break other plugins or the pipeline
+
+### Extension Point Groups
+
+| Group | Entry Point | Protocol | Description |
+|---|---|---|---|
+| **Strategies** | `rat.strategies` | `MergeStrategyProtocol` | Custom merge strategies (how data is written to Iceberg) |
+| **Hooks** | `rat.hooks` | `HookProtocol` | Pre/post phase callbacks (logging, metrics, alerts) |
+| **Jinja Helpers** | `rat.jinja_helpers` | `JinjaHelperProtocol` | Custom template functions for SQL pipelines |
+| **Pipeline Types** | `rat.pipeline_types` | `PipelineTypeProtocol` | New pipeline languages (R, Scala, etc.) |
+| **Sources** | `rat.sources` | `SourceConnectorProtocol` | External data source connectors |
+
+### How PluginRegistry Fits into the Executor
+
+<Mermaid chart={`
+flowchart TD
+    EX["execute_pipeline()"] --> REG["PluginRegistry.discover()"]
+    REG --> P0["Phase 0: Create Branch"]
+    P0 --> H1["dispatch_hooks(pre_execute)"]
+    H1 --> P1["Phase 1: Detect & Load"]
+    P1 --> P2["Phase 2: Execute SQL/Python"]
+    P2 --> H2["dispatch_hooks(pre_write)"]
+    H2 --> P3["Phase 3: Write via get_strategy()"]
+    P3 --> H3["dispatch_hooks(post_write)"]
+    H3 --> P4["Phase 4: Quality Tests"]
+    P4 --> H4["dispatch_hooks(post_quality)"]
+    H4 --> P5["Phase 5: Merge Branch"]
+    P5 --> H5["dispatch_hooks(post_execute)"]
+
+    REG -.->|"get_helpers()"| P2
+    REG -.->|"get_strategy(name)"| P3
+
+    style REG fill:#22c55e,color:#000
+    style H1 fill:#a855f7,color:#fff
+    style H2 fill:#a855f7,color:#fff
+    style H3 fill:#a855f7,color:#fff
+    style H4 fill:#a855f7,color:#fff
+    style H5 fill:#a855f7,color:#fff
+`} />
+
+The `PluginRegistry` is created fresh for each pipeline run in `execute_pipeline()`. After discovery:
+
+- **Strategies** are resolved via `get_strategy(name)` during Phase 3 (Iceberg write)
+- **Jinja helpers** are injected via `get_helpers()` into the SQL template compilation in Phase 2
+- **Hooks** are dispatched at 6 phase boundaries via `dispatch_hooks(phase, context)`
+
+### Further Reading
+
+- **[Runner Plugin Guide](/guides/runner-plugins)** — Tutorial-style walkthrough with examples
+- **[Runner Plugin Reference](/reference/runner-plugins)** — Complete protocol signatures and API

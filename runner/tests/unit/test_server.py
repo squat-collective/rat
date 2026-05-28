@@ -8,6 +8,7 @@ import threading
 import time
 from concurrent import futures
 from pathlib import Path
+from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import grpc
@@ -19,6 +20,7 @@ from runner.v1 import runner_pb2, runner_pb2_grpc
 
 from rat_runner.config import NessieConfig, S3Config
 from rat_runner.models import RunStatus
+from rat_runner.plugin_registry import PluginInfo, PluginRegistry
 from rat_runner.server import RunnerServiceImpl, _configure_server_port, _s3_credentials_to_dict
 from rat_runner.state_dir import write_marker
 
@@ -90,6 +92,77 @@ class TestSubmitPipeline:
                 )
             )
         assert exc_info.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+    @patch("rat_runner.server.execute_pipeline")
+    def test_s3_credentials_applied_without_logging_values(
+        self,
+        _mock_exec: None,
+        stub: runner_pb2_grpc.RunnerServiceStub,
+        service: RunnerServiceImpl,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """When SubmitPipeline carries S3Credentials, they merge into the per-run
+        config but their values must NEVER appear in logs (ADR-018 security).
+        """
+        creds = common_pb2.S3Credentials(
+            endpoint="s3.eu-west-3.amazonaws.com",
+            access_key_id="AKIA-LOGTEST",
+            secret_access_key="super-secret-value",
+            region="eu-west-3",
+            bucket="tenant-bucket",
+            session_token="sts-do-not-log",
+        )
+
+        with caplog.at_level("DEBUG", logger="rat_runner.server"):
+            resp = stub.SubmitPipeline(
+                runner_pb2.SubmitPipelineRequest(
+                    namespace="myns",
+                    layer=common_pb2.LAYER_SILVER,
+                    pipeline_name="orders",
+                    trigger="manual",
+                    s3_credentials=creds,
+                )
+            )
+
+        assert resp.run_id != ""
+
+        # The "applied" message should fire with presence flags only.
+        applied_records = [
+            r for r in caplog.records if "Applied per-run S3 overrides" in r.getMessage()
+        ]
+        assert applied_records, "Expected 'Applied per-run S3 overrides' info log"
+
+        # CRITICAL: no credential value may appear anywhere in the captured logs.
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        assert "AKIA-LOGTEST" not in joined
+        assert "super-secret-value" not in joined
+        assert "sts-do-not-log" not in joined
+
+    @patch("rat_runner.server.execute_pipeline")
+    def test_no_s3_credentials_uses_env_level_config(
+        self,
+        _mock_exec: None,
+        stub: runner_pb2_grpc.RunnerServiceStub,
+        service: RunnerServiceImpl,
+        s3_config: S3Config,
+    ):
+        """Without S3Credentials the runner falls back to its env-level S3Config.
+
+        Proves the no-cloud-plugin path keeps working (pipelines that don't
+        need per-run creds are not blocked by the integration).
+        """
+        resp = stub.SubmitPipeline(
+            runner_pb2.SubmitPipelineRequest(
+                namespace="myns",
+                layer=common_pb2.LAYER_SILVER,
+                pipeline_name="orders",
+                trigger="manual",
+            )
+        )
+        assert resp.run_id != ""
+        # The runner-wide config is preserved — it is the source of truth when
+        # no overrides are supplied.
+        assert service._s3_config is s3_config
 
 
 class TestGetRunStatus:
@@ -287,9 +360,9 @@ class TestStreamLogs:
         # The log should arrive well under the old 500ms polling interval.
         # With condition-based wakeup it should be near-instant (< 100ms).
         latency = received[0] - add_time
-        assert latency < 0.3, (
-            f"Log delivery took {latency:.3f}s — expected < 0.3s with condition wakeup"
-        )
+        assert (
+            latency < 0.3
+        ), f"Log delivery took {latency:.3f}s — expected < 0.3s with condition wakeup"
 
 
 class TestBackpressure:
@@ -881,3 +954,93 @@ class TestValidatePipelineRPC:
             )
         )
         assert resp.valid is True
+
+
+# ── ListPlugins RPC tests ──────────────────────────────────────────
+
+
+class TestListPluginsRPC:
+    """Tests for the ListPlugins gRPC endpoint."""
+
+    def test_list_plugins_returns_discovered_plugins(
+        self,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+        state_dir: Path,
+    ):
+        """ListPlugins does a fresh discovery and returns plugin metadata."""
+        fake_plugins = [
+            PluginInfo(
+                name="soft_delete",
+                group="rat.hooks",
+                version="0.3.1",
+                package_name="rat-plugin-soft-delete",
+            ),
+            PluginInfo(
+                name="env_var",
+                group="rat.jinja_helpers",
+                version="1.0.0",
+                package_name="rat-plugin-env",
+            ),
+        ]
+
+        def _fake_discover(self_reg):
+            self_reg._discovered_plugins = list(fake_plugins)
+
+        registry = PluginRegistry()
+        svc = RunnerServiceImpl(
+            s3_config, nessie_config, max_workers=1, state_dir=state_dir, plugin_registry=registry
+        )
+        try:
+            server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
+            runner_pb2_grpc.add_RunnerServiceServicer_to_server(svc, server)
+            port = server.add_insecure_port("[::]:0")
+            server.start()
+            channel = grpc.insecure_channel(f"localhost:{port}")
+            stub = runner_pb2_grpc.RunnerServiceStub(channel)
+
+            with mock.patch.object(PluginRegistry, "discover", _fake_discover):
+                resp = stub.ListPlugins(runner_pb2.ListPluginsRequest())
+
+            assert len(resp.plugins) == 2
+            names = {p.name for p in resp.plugins}
+            assert names == {"soft_delete", "env_var"}
+
+            sd = next(p for p in resp.plugins if p.name == "soft_delete")
+            assert sd.group == "rat.hooks"
+            assert sd.version == "0.3.1"
+            assert sd.package_name == "rat-plugin-soft-delete"
+
+            channel.close()
+            server.stop(grace=0)
+        finally:
+            svc.shutdown()
+
+    def test_list_plugins_empty_when_no_plugins(
+        self,
+        s3_config: S3Config,
+        nessie_config: NessieConfig,
+        state_dir: Path,
+    ):
+        """ListPlugins returns empty list when discovery finds nothing."""
+        registry = PluginRegistry()
+        svc = RunnerServiceImpl(
+            s3_config, nessie_config, max_workers=1, state_dir=state_dir, plugin_registry=registry
+        )
+        try:
+            server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
+            runner_pb2_grpc.add_RunnerServiceServicer_to_server(svc, server)
+            port = server.add_insecure_port("[::]:0")
+            server.start()
+            channel = grpc.insecure_channel(f"localhost:{port}")
+            stub = runner_pb2_grpc.RunnerServiceStub(channel)
+
+            # Mock discover to do nothing (no entry points found)
+            with mock.patch.object(PluginRegistry, "discover"):
+                resp = stub.ListPlugins(runner_pb2.ListPluginsRequest())
+            assert len(resp.plugins) == 0
+
+            channel.close()
+            server.stop(grace=0)
+        finally:
+            svc.shutdown()

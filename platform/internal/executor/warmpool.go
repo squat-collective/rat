@@ -46,6 +46,15 @@ var ErrRunnerBusy = errors.New("runner at capacity")
 // network partitions, runner crashes).
 const FallbackPollInterval = 60 * time.Second
 
+// orphanNotFoundThreshold is the number of consecutive NotFound responses
+// from the runner that mark a run as orphaned. The runner keeps run state
+// in memory only, so a process restart (crash, plugin auto-install re-exec,
+// container restart) wipes every in-flight run. Without this check, those
+// runs would sit at "running" until the reaper's 30-minute timeout — and
+// the UI would lie that whole time. 3 polls = ~3 minutes is enough to be
+// confident the run is gone, not just transiently unreachable.
+const orphanNotFoundThreshold = 3
+
 // WarmPoolExecutor dispatches pipeline runs to a ConnectRPC runner service.
 // It maintains an in-memory map of active runs. Status updates are primarily
 // received via push callbacks from the runner (HandleStatusCallback). Polling
@@ -58,6 +67,7 @@ type WarmPoolExecutor struct {
 	mu            sync.Mutex
 	active        map[string]*domain.Run // ratd run_id → Run
 	runnerIDs     map[string]string      // ratd run_id → runner run_id
+	notFoundCount map[string]int         // ratd run_id → consecutive NotFound polls
 	pollInterval  time.Duration
 	cancel        context.CancelFunc
 	done          chan struct{}
@@ -81,9 +91,10 @@ func NewWarmPoolExecutor(runnerAddr string, runs api.RunStore, httpClient ...*ht
 	return &WarmPoolExecutor{
 		runner:       client,
 		runs:         runs,
-		active:       make(map[string]*domain.Run),
-		runnerIDs:    make(map[string]string),
-		pollInterval: FallbackPollInterval,
+		active:        make(map[string]*domain.Run),
+		runnerIDs:     make(map[string]string),
+		notFoundCount: make(map[string]int),
+		pollInterval:  FallbackPollInterval,
 	}
 }
 
@@ -104,15 +115,22 @@ func newWarmPoolExecutorWithClient(client runnerv1connect.RunnerServiceClient, r
 	return &WarmPoolExecutor{
 		runner:       client,
 		runs:         runs,
-		active:       make(map[string]*domain.Run),
-		runnerIDs:    make(map[string]string),
-		pollInterval: FallbackPollInterval,
+		active:        make(map[string]*domain.Run),
+		runnerIDs:     make(map[string]string),
+		notFoundCount: make(map[string]int),
+		pollInterval:  FallbackPollInterval,
 	}
 }
 
 // Submit sends a pipeline run to the runner service.
 // On success, updates the run status to "running" and tracks it in the active map.
 // On failure, updates the run status to "failed".
+//
+// When the cloud plugin has vended per-run credentials (see api/runs.go
+// HandleCreateRun), they are attached as S3Credentials on the proto request.
+// The runner merges them over its env-level S3Config — per-run overrides win.
+// When the map is empty (no cloud plugin, or non-cloud-aware pipeline), the
+// field is left nil and the runner falls back to its env-level config.
 func (e *WarmPoolExecutor) Submit(ctx context.Context, run *domain.Run, pipeline *domain.Pipeline) error {
 	req := connect.NewRequest(&runnerv1.SubmitPipelineRequest{
 		Namespace:         pipeline.Namespace,
@@ -121,6 +139,7 @@ func (e *WarmPoolExecutor) Submit(ctx context.Context, run *domain.Run, pipeline
 		Trigger:           run.Trigger,
 		PublishedVersions: pipeline.PublishedVersions,
 		RunId:             run.ID.String(),
+		S3Credentials:     s3OverridesToProto(run.S3Overrides),
 	})
 	propagateRequestID(ctx, req)
 
@@ -226,9 +245,19 @@ func (e *WarmPoolExecutor) poll(ctx context.Context) {
 		// Use runner's run_id for polling (runner generates its own ID)
 		e.mu.Lock()
 		runnerID, ok := e.runnerIDs[id]
+		run := e.active[id]
 		e.mu.Unlock()
 		if !ok {
 			runnerID = id // fallback
+		}
+
+		// Bind run_id (and pipeline_id when known) to a request-scoped slog
+		// logger so every nested call inside this iteration inherits the IDs
+		// — avoids "poll: …" log lines without a run_id that make grep'ing
+		// across services painful.
+		log := slog.With("run_id", id, "runner_id", runnerID)
+		if run != nil {
+			log = log.With("pipeline_id", run.PipelineID.String())
 		}
 
 		req := connect.NewRequest(&commonv1.GetRunStatusRequest{
@@ -238,9 +267,40 @@ func (e *WarmPoolExecutor) poll(ctx context.Context) {
 
 		resp, err := e.runner.GetRunStatus(ctx, req)
 		if err != nil {
-			slog.Warn("poll: failed to get run status", "run_id", id, "runner_id", runnerID, "error", err)
+			// If the runner says NotFound repeatedly, the run is orphaned —
+			// the runner process restarted (crash or plugin re-exec) and lost
+			// it. Fail the run so the UI stops claiming it's still running.
+			if connectErr := new(connect.Error); errors.As(err, &connectErr) && connectErr.Code() == connect.CodeNotFound {
+				e.mu.Lock()
+				e.notFoundCount[id]++
+				count := e.notFoundCount[id]
+				e.mu.Unlock()
+				if count >= orphanNotFoundThreshold {
+					errMsg := "runner lost track of this run (process restarted mid-execution)"
+					if uErr := e.runs.UpdateRunStatus(ctx, id, domain.RunStatusFailed, &errMsg, nil, nil); uErr != nil {
+						log.Error("poll: failed to mark orphaned run failed", "error", uErr)
+						continue
+					}
+					log.Warn("poll: marked orphaned run as failed", "consecutive_not_found", count)
+					e.mu.Lock()
+					delete(e.active, id)
+					delete(e.runnerIDs, id)
+					delete(e.notFoundCount, id)
+					e.mu.Unlock()
+					continue
+				}
+				log.Warn("poll: run not found (will retry)", "consecutive_not_found", count, "threshold", orphanNotFoundThreshold)
+				continue
+			}
+			log.Warn("poll: failed to get run status", "error", err)
 			continue
 		}
+
+		// Any successful response resets the orphan counter — a transient
+		// blip shouldn't accumulate across reachable polls.
+		e.mu.Lock()
+		delete(e.notFoundCount, id)
+		e.mu.Unlock()
 
 		status := protoStatusToDomain(resp.Msg.Status)
 		if status == domain.RunStatusSuccess || status == domain.RunStatusFailed {
@@ -259,7 +319,7 @@ func (e *WarmPoolExecutor) poll(ctx context.Context) {
 				rowsWritten = &v
 			}
 			if err := e.runs.UpdateRunStatus(ctx, id, status, errMsg, durationMs, rowsWritten); err != nil {
-				slog.Error("poll: failed to update run status", "run_id", id, "error", err)
+				log.Error("poll: failed to update run status", "error", err)
 				continue
 			}
 
@@ -282,7 +342,7 @@ func (e *WarmPoolExecutor) poll(ctx context.Context) {
 			// Persist logs before removing from active tracking
 			if logs, err := e.GetLogs(ctx, id); err == nil && len(logs) > 0 {
 				if err := e.runs.SaveRunLogs(ctx, id, logs); err != nil {
-					slog.Error("poll: failed to save run logs", "run_id", id, "error", err)
+					log.Error("poll: failed to save run logs", "error", err)
 				}
 			}
 
@@ -306,7 +366,7 @@ func (e *WarmPoolExecutor) poll(ctx context.Context) {
 			delete(e.runnerIDs, id)
 			e.mu.Unlock()
 
-			slog.Info("run completed", "run_id", id, "status", status)
+			log.Info("poll: run completed", "status", status)
 		}
 	}
 }
@@ -531,6 +591,28 @@ func (e *WarmPoolExecutor) ValidatePipeline(ctx context.Context, pipeline *domai
 	}, nil
 }
 
+// ListRunnerPlugins calls the runner's ListPlugins RPC and converts the response.
+func (e *WarmPoolExecutor) ListRunnerPlugins(ctx context.Context) ([]domain.RunnerPlugin, error) {
+	req := connect.NewRequest(&runnerv1.ListPluginsRequest{})
+	propagateRequestID(ctx, req)
+
+	resp, err := e.runner.ListPlugins(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("list runner plugins: %w", err)
+	}
+
+	plugins := make([]domain.RunnerPlugin, 0, len(resp.Msg.Plugins))
+	for _, p := range resp.Msg.Plugins {
+		plugins = append(plugins, domain.RunnerPlugin{
+			Name:        p.Name,
+			Group:       p.Group,
+			Version:     p.Version,
+			PackageName: p.PackageName,
+		})
+	}
+	return plugins, nil
+}
+
 // domainLayerToProto converts domain.Layer to proto Layer enum.
 func domainLayerToProto(l domain.Layer) commonv1.Layer {
 	switch l {
@@ -574,10 +656,20 @@ func (e *WarmPoolExecutor) HandleStatusCallback(ctx context.Context, update api.
 	// Check if this run is tracked. If not, it may have already been
 	// cleaned up by the poll fallback — accept idempotently.
 	e.mu.Lock()
-	_, tracked := e.active[id]
+	run, tracked := e.active[id]
 	e.mu.Unlock()
+
+	// Bind run_id (+ pipeline_id when known) to the slog logger so every
+	// nested log inherits the correlation IDs. ctx already carries the
+	// request_id (chi middleware injects it via RequestID), which the
+	// process-wide context-aware handler will surface in JSON output.
+	log := slog.With("run_id", id)
+	if run != nil {
+		log = log.With("pipeline_id", run.PipelineID.String())
+	}
+
 	if !tracked {
-		slog.Info("callback: run not in active map (already processed or unknown)", "run_id", id)
+		log.Info("callback: run not in active map (already processed or unknown)")
 		return nil
 	}
 
@@ -623,7 +715,7 @@ func (e *WarmPoolExecutor) HandleStatusCallback(ctx context.Context, update api.
 	// Persist logs before removing from active tracking
 	if logs, err := e.GetLogs(ctx, id); err == nil && len(logs) > 0 {
 		if err := e.runs.SaveRunLogs(ctx, id, logs); err != nil {
-			slog.Error("callback: failed to save run logs", "run_id", id, "error", err)
+			log.Error("callback: failed to save run logs", "error", err)
 		}
 	}
 
@@ -648,7 +740,7 @@ func (e *WarmPoolExecutor) HandleStatusCallback(ctx context.Context, update api.
 	delete(e.runnerIDs, id)
 	e.mu.Unlock()
 
-	slog.Info("callback: run completed", "run_id", id, "status", status)
+	log.Info("callback: run completed", "status", status)
 	return nil
 }
 

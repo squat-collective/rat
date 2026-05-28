@@ -11,6 +11,7 @@ import { TriggersResource } from "./resources/triggers";
 import { QualityResource } from "./resources/quality";
 import { LineageResource } from "./resources/lineage";
 import { RetentionResource } from "./resources/retention";
+import { PluginsResource } from "./resources/plugins";
 import { Transport } from "./transport";
 
 /**
@@ -32,6 +33,7 @@ export class RatClient {
   public readonly quality: QualityResource;
   public readonly lineage: LineageResource;
   public readonly retention: RetentionResource;
+  public readonly plugins: PluginsResource;
 
   private readonly _config: ClientConfig;
   private readonly _transport: Transport;
@@ -60,9 +62,22 @@ export class RatClient {
     this.quality = new QualityResource(this._transport);
     this.lineage = new LineageResource(this._transport);
     this.retention = new RetentionResource(this._transport);
+    this.plugins = new PluginsResource(this._transport);
   }
 
   get config(): ClientConfig {
     return this._config;
+  }
+
+  /** Raw HTTP request for endpoints not yet covered by a typed resource. */
+  request<T = unknown>(
+    method: string,
+    path: string,
+    options?: {
+      json?: object;
+      params?: Record<string, string>;
+    },
+  ): Promise<T> {
+    return this._transport.request<T>(method, path, options);
   }
 }

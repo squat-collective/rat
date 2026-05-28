@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import logging
 import time
+import urllib.error
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -31,6 +32,7 @@ from rat_runner.config import (
     read_s3_text_version,
 )
 from rat_runner.engine import DuckDBEngine
+from rat_runner.failed_merge_audit import record_failed_merge
 from rat_runner.iceberg import (
     append_iceberg,
     delete_insert_iceberg,
@@ -40,10 +42,20 @@ from rat_runner.iceberg import (
     snapshot_iceberg,
     write_iceberg,
 )
-from rat_runner.log import RunLogger
+from rat_runner.json_log import clear_run_context, set_run_context
+from rat_runner.log import RunLogger, run_log_extras
 from rat_runner.maintenance import run_maintenance
 from rat_runner.models import MergeStrategy, PipelineConfig, QualityTestResult, RunState, RunStatus
-from rat_runner.nessie import create_branch, delete_branch, merge_branch
+from rat_runner.nessie import (
+    BRANCH_CREATE_MAX_RETRIES,
+    MERGE_CONFLICT_MAX_RETRIES,
+    _get_reference,
+    create_branch,
+    delete_branch,
+    merge_branch,
+)
+from rat_runner.plugin_protocols import HookContext
+from rat_runner.plugin_registry import PluginRegistry
 from rat_runner.python_exec import execute_python_pipeline
 from rat_runner.quality import has_error_failures, run_quality_tests
 from rat_runner.templating import (
@@ -77,15 +89,17 @@ class _PipelineContext:
     s3_config: S3Config
     nessie_config: NessieConfig
     log: RunLogger
+    registry: PluginRegistry = field(default_factory=PluginRegistry)
     published_versions: dict[str, str] = field(default_factory=dict)
 
-    # Set during Phase 0
+    # Set during Phase 0. The branch is created OR the run fails — there is
+    # no path where a run proceeds with branch_name still empty/main.
     branch_name: str = ""
-    branch_created: bool = False
 
     # Set during Phase 1
-    pipeline_type: Literal["python", "sql"] = "sql"
-    source: str = ""  # raw pipeline source code (.py or .sql)
+    # "python", "sql", or the name of a plugin-provided pipeline type.
+    pipeline_type: str = "sql"
+    source: str = ""  # raw pipeline source code (.py, .sql, or plugin type)
     raw_py: str | None = None
     raw_sql: str | None = None
     config: PipelineConfig | None = None
@@ -96,6 +110,13 @@ class _PipelineContext:
     location: str = ""
     result: pa.Table | None = None
     row_count: int = 0
+
+    # Set in Phase 5 when a merge attempt fails terminally. When True the
+    # finally block MUST NOT delete the ephemeral branch — it holds data
+    # that Phase 3 wrote and Phase 4 quality-tested but couldn't merge
+    # into main. An operator will recover it manually via the
+    # `failed_merges` audit row.
+    retain_branch: bool = False
 
 
 def _archive_landing_zones(
@@ -159,20 +180,28 @@ def _read_versioned(
 def _phase0_create_branch(ctx: _PipelineContext) -> None:
     """Create an ephemeral Nessie branch for isolation.
 
-    Falls back to writing directly to main if branch creation fails.
+    Branch creation is REQUIRED — failure here aborts the run. The Nessie
+    client itself retries transient errors (5xx / network / timeout) up to
+    BRANCH_CREATE_MAX_RETRIES times with exponential backoff; permanent
+    errors (4xx, invalid name) fail immediately. If we reach the except
+    clause, retries are already exhausted or the error was non-transient.
+
+    Falling back to main was the previous behaviour but caused concurrent
+    runs to race and produce duplicate rows on main, with no rollback
+    possible when quality tests later failed.
     """
     _check_cancelled(ctx.run)
     ctx.branch_name = f"run-{ctx.run.run_id}"
     ctx.log.info(f"Creating ephemeral branch '{ctx.branch_name}'")
     try:
         create_branch(ctx.nessie_config, ctx.branch_name, from_branch="main")
-        ctx.branch_created = True
-        ctx.run.branch = ctx.branch_name
-        ctx.log.info(f"Branch '{ctx.branch_name}' created")
     except Exception as e:
-        ctx.log.warn(f"Branch creation failed ({e}), writing to main")
-        ctx.branch_name = "main"
-        ctx.run.branch = "main"
+        # Re-raise with a clear, attributable error message. The Nessie
+        # client has already exhausted retries for transient errors.
+        attempts = BRANCH_CREATE_MAX_RETRIES + 1
+        raise RuntimeError(f"branch creation failed after {attempts} attempts: {e}") from e
+    ctx.run.branch = ctx.branch_name
+    ctx.log.info(f"Branch '{ctx.branch_name}' created")
 
 
 # ── Phase 1: Detect pipeline type + read config ─────────────────────
@@ -198,20 +227,45 @@ def _phase1_detect_and_load(ctx: _PipelineContext) -> None:
     ctx.raw_py = _read_versioned(ctx.s3_config, py_key, pv)
     ctx.raw_sql = _read_versioned(ctx.s3_config, sql_key, pv) if ctx.raw_py is None else None
 
-    if ctx.raw_py is None and ctx.raw_sql is None:
-        raise FileNotFoundError(f"Pipeline not found: neither {py_key} nor {sql_key} exist")
+    if ctx.raw_py is not None:
+        ctx.pipeline_type = "python"
+        source: str | None = ctx.raw_py
+    elif ctx.raw_sql is not None:
+        ctx.pipeline_type = "sql"
+        source = ctx.raw_sql
+    else:
+        # No core pipeline file — try plugin-provided pipeline types.
+        # Each plugin type owns a file extension (e.g. pipeline.prql).
+        source = None
+        for type_name in ctx.registry.pipeline_type_names():
+            plugin_type = ctx.registry.get_pipeline_type(type_name)
+            if plugin_type is None:
+                continue
+            ext_key = f"{base_prefix}/pipeline.{plugin_type.file_extension}"
+            plugin_src = _read_versioned(ctx.s3_config, ext_key, pv)
+            if plugin_src is not None:
+                ctx.pipeline_type = type_name
+                source = plugin_src
+                break
+        if source is None:
+            raise FileNotFoundError(
+                f"Pipeline not found: no pipeline.py/.sql and no registered "
+                f"plugin pipeline-type file under {base_prefix}/"
+            )
 
-    ctx.pipeline_type = "python" if ctx.raw_py is not None else "sql"
     ctx.log.info(f"Detected {ctx.pipeline_type} pipeline")
 
     # Load config: merge config.yaml base with annotation overrides
-    source = ctx.raw_py if ctx.raw_py is not None else ctx.raw_sql
     assert source is not None
     ctx.source = source
 
     annotation_meta = extract_metadata(source)
     config_yaml = _read_versioned(ctx.s3_config, config_key, pv)
-    base_config = parse_pipeline_config(config_yaml) if config_yaml else None
+    # Pass plugin-discovered strategy names so config validation accepts
+    # custom merge strategies registered via runner plugins, not just built-ins.
+    base_config = (
+        parse_pipeline_config(config_yaml, ctx.registry.strategy_names()) if config_yaml else None
+    )
     if annotation_meta or base_config:
         ctx.config = merge_configs(base_config, annotation_meta)
         if annotation_meta and base_config:
@@ -250,11 +304,31 @@ def _phase2_build_result(ctx: _PipelineContext) -> None:
             ctx.nessie_config,
             ctx.config,
         )
-    else:
+    elif ctx.pipeline_type == "sql":
         ctx.result = _execute_sql_path(ctx)
+    else:
+        ctx.result = _execute_plugin_type_path(ctx)
 
     ctx.row_count = len(ctx.result)
     ctx.log.info(f"Query returned {ctx.row_count} rows")
+
+
+def _execute_plugin_type_path(ctx: _PipelineContext) -> pa.Table:
+    """Execute a pipeline whose type is provided by a runner plugin."""
+    plugin_type = ctx.registry.get_pipeline_type(ctx.pipeline_type)
+    if plugin_type is None:
+        raise RuntimeError(f"No plugin registered for pipeline type '{ctx.pipeline_type}'")
+    ns, layer, name = ctx.run.namespace, ctx.run.layer, ctx.run.pipeline_name
+    ctx.log.info(f"Executing '{ctx.pipeline_type}' pipeline via plugin")
+    return plugin_type.execute(
+        ctx.source,
+        ns,
+        layer,
+        name,
+        ctx.s3_config,
+        ctx.nessie_config,
+        ctx.config,
+    )
 
 
 def _execute_sql_path(ctx: _PipelineContext) -> pa.Table:
@@ -281,6 +355,11 @@ def _execute_sql_path(ctx: _PipelineContext) -> pa.Table:
 
     ns, layer, name = ctx.run.namespace, ctx.run.layer, ctx.run.pipeline_name
 
+    # Collect plugin Jinja helpers from registry
+    plugin_helpers: dict[str, object] = {}
+    for helper_name, helper in ctx.registry.get_helpers().items():
+        plugin_helpers[helper_name] = helper
+
     ctx.log.info("Compiling SQL template")
     compiled_sql = compile_sql(
         ctx.raw_sql,  # type: ignore[arg-type]
@@ -291,6 +370,7 @@ def _execute_sql_path(ctx: _PipelineContext) -> pa.Table:
         ctx.nessie_config,
         config=ctx.config,
         watermark_value=watermark_value,
+        plugin_helpers=plugin_helpers or None,
     )
     ctx.log.debug(f"Compiled SQL:\n{compiled_sql}")
 
@@ -305,9 +385,9 @@ def _execute_sql_path(ctx: _PipelineContext) -> pa.Table:
 def _phase3_write_iceberg(ctx: _PipelineContext) -> None:
     """Write the result table to Iceberg using the configured merge strategy.
 
-    Dispatches to the appropriate write function based on merge strategy.
-    Falls back to full_refresh when required config (unique_key, partition_column)
-    is missing.
+    Checks the plugin registry first for a matching strategy (including built-in
+    strategies when installed as a package). Falls back to direct dispatch when
+    the registry doesn't have the strategy (e.g. development/testing).
     """
     _check_cancelled(ctx.run)
     assert ctx.result is not None
@@ -319,6 +399,26 @@ def _phase3_write_iceberg(ctx: _PipelineContext) -> None:
 
     strategy = ctx.config.merge_strategy if ctx.config else MergeStrategy.FULL_REFRESH
 
+    # Try plugin registry first (includes built-in strategies when installed as package)
+    plugin_strategy = ctx.registry.get_strategy(str(strategy))
+    if plugin_strategy:
+        ctx.log.info(f"Using strategy '{strategy}' via plugin registry")
+        _engine_conn = ctx.engine.conn if ctx.engine else None
+        rows = plugin_strategy.execute(
+            ctx.result,
+            ctx.table_name,
+            ctx.s3_config,
+            ctx.nessie_config,
+            ctx.location,
+            ctx.config,
+            branch=ctx.branch_name,
+            conn=_engine_conn,
+        )
+        ctx.run.rows_written = rows
+        ctx.log.info(f"Strategy '{strategy}' complete ({rows} rows)")
+        return
+
+    # Fall back to built-in dispatch (for development/testing without package install)
     _engine_conn = ctx.engine.conn if ctx.engine else None
     _partition_by = ctx.config.partition_by if ctx.config and ctx.config.partition_by else None
 
@@ -455,21 +555,48 @@ def _phase4_quality_tests(ctx: _PipelineContext) -> list[QualityTestResult]:
 # ── Phase 5: Branch resolution ───────────────────────────────────────
 
 
+def _classify_merge_error(exc: BaseException) -> tuple[str, str]:
+    """Return (error_kind, human_message) for an exception raised by merge_branch.
+
+    Categories:
+      * "conflict_exhausted" — 409 CONFLICT, even after internal refetch
+        retries. The target ref kept moving; another long-running pipeline
+        likely has it pinned.
+      * "transient_exhausted" — 5xx / network / timeout, after the outer
+        retry_on_transient decorator gave up.
+      * "permanent_4xx" — any other 4xx (400 bad request, 404 not found,
+        403 forbidden) — request is malformed or the branch was already
+        gone.
+      * "unknown" — anything else.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code == 409:
+            return "conflict_exhausted", (
+                f"target moved during merge window after "
+                f"{MERGE_CONFLICT_MAX_RETRIES} refetch attempts (HTTP 409)"
+            )
+        if 400 <= exc.code < 500:
+            return "permanent_4xx", f"HTTP {exc.code}: {exc.reason}"
+        if exc.code >= 500:
+            return "transient_exhausted", f"HTTP {exc.code}: {exc.reason}"
+    if isinstance(exc, urllib.error.URLError | TimeoutError):
+        return "transient_exhausted", f"{type(exc).__name__}: {exc}"
+    return "unknown", f"{type(exc).__name__}: {exc}"
+
+
 def _phase5_resolve_branch(ctx: _PipelineContext, quality_results: list[QualityTestResult]) -> None:
     """Merge or discard the ephemeral branch based on quality test results.
 
-    On quality failure with branch isolation, the branch is deleted (no data
-    reaches main). Without branch isolation, data is already on main and we
-    can only report the failure.
+    Since Phase 0 guarantees branch creation succeeded (or aborted the run),
+    there is always an ephemeral branch to resolve here: merge to main on
+    quality pass, delete on quality failure.
+
+    On terminal merge failure (transient retries exhausted, 409 refetches
+    exhausted, or permanent 4xx) the branch is RETAINED — Phase 3 wrote
+    data and Phase 4 quality-tested it, and silently dropping it would
+    erase work an operator can recover. We POST an audit record to ratd
+    so the failure shows up in the `failed_merges` table.
     """
-    if ctx.branch_created:
-        _resolve_with_branch(ctx, quality_results)
-    else:
-        _resolve_without_branch(ctx, quality_results)
-
-
-def _resolve_with_branch(ctx: _PipelineContext, quality_results: list[QualityTestResult]) -> None:
-    """Handle branch resolution when an ephemeral branch was created."""
     if has_error_failures(quality_results):
         ctx.log.error("Quality tests failed — discarding branch (no data on main)")
         try:
@@ -481,26 +608,55 @@ def _resolve_with_branch(ctx: _PipelineContext, quality_results: list[QualityTes
         return
 
     ctx.log.info(f"Merging branch '{ctx.branch_name}' to main")
+
+    # Best-effort: capture the source/target hashes BEFORE attempting the
+    # merge so the audit row has something useful even if Nessie blows up
+    # mid-call. Failures here are silenced — they're not the audit's job
+    # to surface, and the merge call below will reproduce them.
+    source_hash: str | None = None
+    target_hash: str | None = None
+    try:
+        source_hash = _get_reference(ctx.nessie_config, ctx.branch_name).get("hash")
+        target_hash = _get_reference(ctx.nessie_config, "main").get("hash")
+    except Exception:
+        pass
+
     try:
         merge_branch(ctx.nessie_config, ctx.branch_name, target="main")
         ctx.log.info("Branch merged to main")
     except Exception as e:
-        ctx.log.error(f"Branch merge failed: {e}")
+        ctx.retain_branch = True
+        error_kind, human = _classify_merge_error(e)
+        msg = f"branch merge failed: {human} — branch {ctx.branch_name} retained for recovery"
+        # Structured ERROR log with the fields a human will grep for.
+        logger.error(
+            "Phase 5 merge failed — branch retained",
+            extra={
+                "branch": ctx.branch_name,
+                "run": ctx.run.run_id,
+                "error_kind": error_kind,
+                "merge_lost_data": True,
+            },
+            exc_info=True,
+        )
+        ctx.log.error(msg)
+        try:
+            record_failed_merge(
+                ctx.run,
+                ctx.branch_name,
+                source_hash,
+                target_hash,
+                error_kind=error_kind,
+                error_message=str(e),
+            )
+        except Exception as audit_exc:  # noqa: BLE001 — never let audit kill the run
+            logger.warning(
+                "failed_merges audit POST raised: %s",
+                audit_exc,
+                extra={"branch": ctx.branch_name, "run": ctx.run.run_id},
+            )
         ctx.run.status = RunStatus.FAILED
-        ctx.run.error = f"Branch merge failed: {e}"
-        return
-
-    _post_success(ctx)
-
-
-def _resolve_without_branch(
-    ctx: _PipelineContext, quality_results: list[QualityTestResult]
-) -> None:
-    """Handle resolution when no ephemeral branch was created (direct main writes)."""
-    if has_error_failures(quality_results):
-        ctx.run.status = RunStatus.FAILED
-        ctx.run.error = _format_quality_error(quality_results)
-        ctx.log.error("Quality tests failed (data already on main — no rollback available)")
+        ctx.run.error = msg
         return
 
     _post_success(ctx)
@@ -536,6 +692,23 @@ def _post_success(ctx: _PipelineContext) -> None:
 # ── Public entry point ───────────────────────────────────────────────
 
 
+def _build_hook_context(ctx: _PipelineContext) -> HookContext:
+    """Build a HookContext from the current pipeline context."""
+    return HookContext(
+        namespace=ctx.run.namespace,
+        layer=ctx.run.layer,
+        name=ctx.run.pipeline_name,
+        run_id=ctx.run.run_id,
+        config=ctx.config,
+        logger=ctx.log,
+        branch=ctx.branch_name,
+        extra={
+            "rows_written": ctx.run.rows_written,
+            "row_count": ctx.row_count,
+        },
+    )
+
+
 def execute_pipeline(
     run: RunState,
     s3_config: S3Config,
@@ -557,26 +730,69 @@ def execute_pipeline(
     start = time.monotonic()
     run.status = RunStatus.RUNNING
 
+    # Bind the run extras into the thread-local context so subsystem modules
+    # (iceberg, nessie, maintenance, plugin_registry, state_dir) whose
+    # module-level loggers don't have a RunState in scope still emit lines
+    # tagged with run_id/request_id/namespace/layer/pipeline_name. We set
+    # the context INSIDE the worker thread (not at submit time) because
+    # ThreadPoolExecutor.submit does not copy the dispatcher's contextvars
+    # to the new thread unless wrapped with copy_context().run, and doing
+    # it here keeps every code path consistent.
+    _context_token = set_run_context(run_log_extras(run))
+
     # Per-run env overrides: apply to S3Config instead of os.environ
     # (os.environ is process-global and thread-unsafe for concurrent runs)
     if run.env:
         s3_config = s3_config.with_overrides(run.env)
+
+    # Discover plugins for this run (fresh scan each run).
+    registry = PluginRegistry()
+    registry.discover()
 
     ctx = _PipelineContext(
         run=run,
         s3_config=s3_config,
         nessie_config=nessie_config,
         log=log,
+        registry=registry,
         published_versions=published_versions or {},
     )
 
     try:
         _phase0_create_branch(ctx)
         _phase1_detect_and_load(ctx)
+
+        # Dispatch pre_execute hooks
+        hook_ctx = _build_hook_context(ctx)
+        registry.dispatch_hooks("pre_execute", hook_ctx)
+
         _phase2_build_result(ctx)
+
+        # Dispatch pre_write hooks
+        hook_ctx = _build_hook_context(ctx)
+        registry.dispatch_hooks("pre_write", hook_ctx)
+
         _phase3_write_iceberg(ctx)
+
+        # Dispatch post_write hooks
+        hook_ctx = _build_hook_context(ctx)
+        registry.dispatch_hooks("post_write", hook_ctx)
+
+        # Dispatch pre_quality hooks
+        hook_ctx = _build_hook_context(ctx)
+        registry.dispatch_hooks("pre_quality", hook_ctx)
+
         quality_results = _phase4_quality_tests(ctx)
+
+        # Dispatch post_quality hooks
+        hook_ctx = _build_hook_context(ctx)
+        registry.dispatch_hooks("post_quality", hook_ctx)
+
         _phase5_resolve_branch(ctx, quality_results)
+
+        # Dispatch post_execute hooks
+        hook_ctx = _build_hook_context(ctx)
+        registry.dispatch_hooks("post_execute", hook_ctx)
 
     except CancelledError:
         run.status = RunStatus.CANCELLED
@@ -589,19 +805,40 @@ def execute_pipeline(
         log.error(f"Pipeline failed: {e}")
 
     finally:
-        # Cleanup: delete ephemeral branch if still exists
-        if ctx.branch_created and ctx.branch_name != "main":
+        # Cleanup: delete ephemeral branch if Phase 0 created one.
+        # We use run.branch (set after create_branch succeeds) as the
+        # signal — guarantees we never try to delete "main" or an
+        # uninitialised branch name.
+        #
+        # EXCEPTION: when Phase 5 set retain_branch=True the branch holds
+        # data that Phase 3 wrote and Phase 4 quality-tested but couldn't
+        # merge into main. Deleting it would erase recoverable work, so we
+        # leave it for the operator (see `failed_merges` audit row).
+        if run.branch and run.branch != "main" and not ctx.retain_branch:
             try:
-                delete_branch(nessie_config, ctx.branch_name)
+                delete_branch(nessie_config, run.branch)
             except Exception:
                 logger.warning(
                     "Failed to delete ephemeral branch '%s'",
-                    ctx.branch_name,
+                    run.branch,
                     exc_info=True,
+                    extra=run_log_extras(run),
                 )
+        elif ctx.retain_branch:
+            logger.error(
+                "Branch '%s' retained — Phase 5 merge failed; recover via failed_merges audit",
+                run.branch,
+                extra={**run_log_extras(run), "merge_lost_data": True},
+            )
 
         if ctx.engine is not None:
             ctx.engine.close()
         elapsed_ms = int((time.monotonic() - start) * 1000)
         run.duration_ms = elapsed_ms
         log.info(f"Duration: {elapsed_ms}ms")
+
+        # Restore the prior context binding — important when the same worker
+        # thread is recycled for a different run by ThreadPoolExecutor, so the
+        # next run doesn't inherit the previous run's extras until it binds
+        # its own.
+        clear_run_context(_context_token)

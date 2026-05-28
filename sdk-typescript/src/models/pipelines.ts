@@ -1,6 +1,7 @@
 export type Layer = "bronze" | "silver" | "gold";
 
-export type MergeStrategy = "full_refresh" | "incremental" | "append_only" | "delete_insert" | "scd2" | "snapshot";
+export type BuiltinMergeStrategy = "full_refresh" | "incremental" | "append_only" | "delete_insert" | "scd2" | "snapshot";
+export type MergeStrategy = BuiltinMergeStrategy | (string & {});
 
 export interface PipelineConfig {
   description?: string;

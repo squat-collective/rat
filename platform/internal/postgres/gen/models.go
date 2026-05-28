@@ -100,14 +100,38 @@ type PlatformSetting struct {
 	UpdatedAt time.Time
 }
 
-type Plugin struct {
-	Name       string
-	Slot       string
-	Image      string
-	Status     string
-	Config     []byte
-	LastHealth *time.Time
-	CreatedAt  time.Time
+type PluginCatalog struct {
+	ID            uuid.UUID
+	Name          string
+	Kind          string
+	Version       string
+	Status        string
+	Error         pgtype.Text
+	Descriptor    []byte
+	Config        []byte
+	Addr          string
+	Healthy       bool
+	RegisteredAt  time.Time
+	EnabledAt     *time.Time
+	UpdatedAt     time.Time
+	ConfigVersion int64
+}
+
+type PluginPolicy struct {
+	ID        uuid.UUID
+	Rule      string
+	Pattern   string
+	Kind      pgtype.Text
+	CreatedAt time.Time
+}
+
+type PluginSource struct {
+	ID        uuid.UUID
+	Type      string
+	Url       string
+	Trusted   bool
+	Enabled   bool
+	CreatedAt time.Time
 }
 
 type QualityResult struct {

@@ -3,7 +3,7 @@
 import useSWR, { useSWRConfig } from "swr";
 import { useApiClient } from "@/providers/api-provider";
 import { useCallback, useMemo, useState } from "react";
-import type { UpdatePipelineRequest, CreateTriggerRequest, UpdateTriggerRequest, CreateQualityTestRequest, PreviewResponse, UpdateNamespaceRequest, UpdateLandingZoneRequest, UpdateTableMetadataRequest, PipelineConfig } from "@squat-collective/rat-client";
+import type { UpdatePipelineRequest, CreateTriggerRequest, UpdateTriggerRequest, CreateQualityTestRequest, PreviewResponse, UpdateNamespaceRequest, UpdateLandingZoneRequest, UpdateTableMetadataRequest, PipelineConfig, CreatePluginSourceRequest, CreatePluginPolicyRequest, IdentityUser, IdentityCapabilities, Grant, GroupMember } from "@squat-collective/rat-client";
 import yaml from "js-yaml";
 import { KEYS } from "@/lib/cache-keys";
 
@@ -37,7 +37,6 @@ export function useUpdatePipeline(ns: string, layer: string, name: string) {
       try {
         const result = await api.pipelines.update(ns, layer, name, req);
         await mutate(KEYS.pipeline(ns, layer, name));
-        await mutate(KEYS.match.lineage);
         return result;
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));
@@ -103,7 +102,6 @@ export function useCreateRun(ns: string, layer: string, name: string) {
         trigger: "manual",
       });
       await mutate(KEYS.match.runs);
-      await mutate(KEYS.match.lineage);
       return result;
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e));
@@ -322,7 +320,6 @@ export function useUpdateLandingZone(ns: string, name: string) {
       try {
         const result = await api.landing.update(ns, name, req);
         await mutate(KEYS.landingZone(ns, name));
-        await mutate(KEYS.match.lineage);
         return result;
       } catch (e) {
         const err = e instanceof Error ? e : new Error(String(e));
@@ -524,15 +521,10 @@ export function usePreviewQualityTest(ns: string, layer: string, name: string) {
   return { preview, loading, results, errors };
 }
 
-/** Lineage */
-export function useLineage(namespace?: string) {
-  const api = useApiClient();
-  return useSWR(
-    KEYS.lineage(namespace),
-    () => api.lineage.get(namespace ? { namespace } : undefined),
-    { refreshInterval: 30000 },
-  );
-}
+// Lineage moved to rat-plugin-lineage (the plugin fetches its own
+// graph from /api/v1/x/lineage/graph). useLineage was removed; the
+// SDK's api.lineage method still exists but points at the old
+// /api/v1/lineage endpoint that no longer ships with ratd.
 
 /** Health */
 export function useFeatures() {
@@ -598,4 +590,417 @@ export function useTriggerReaper() {
   }, [api, mutate]);
 
   return { trigger, running };
+}
+
+/** Identity — Pro feature stubs */
+export function useIdentityUsers(params?: { search?: string; limit?: number; offset?: number }) {
+  const api = useApiClient();
+  const key = params ? JSON.stringify(params) : undefined;
+  const query: Record<string, string> = {};
+  if (params?.search) query.search = params.search;
+  if (params?.limit !== undefined) query.limit = String(params.limit);
+  if (params?.offset !== undefined) query.offset = String(params.offset);
+  return useSWR(
+    KEYS.identityUsers(key),
+    async () => {
+      return api.request<{ users: IdentityUser[]; total_count: number }>("GET", "/api/v1/identity/users", {
+        params: Object.keys(query).length > 0 ? query : undefined,
+      });
+    },
+  );
+}
+
+export function useIdentityCapabilities() {
+  const api = useApiClient();
+  return useSWR(KEYS.identityCapabilities(), async () => {
+    return api.request<IdentityCapabilities>("GET", "/api/v1/identity/capabilities");
+  });
+}
+
+/** Permissions — Pro feature stubs */
+export function useGrants(filter?: { resource?: string; principal_type?: string }) {
+  const api = useApiClient();
+  const key = filter ? JSON.stringify(filter) : undefined;
+  const query: Record<string, string> = {};
+  if (filter?.resource) query.resource = filter.resource;
+  if (filter?.principal_type) query.principal_type = filter.principal_type;
+  return useSWR(KEYS.grants(key), async () => {
+    return api.request<{ grants: Grant[] }>("GET", "/api/v1/permissions/grants", {
+      params: Object.keys(query).length > 0 ? query : undefined,
+    });
+  });
+}
+
+export function useCreateGrant() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const createGrant = useCallback(
+    async (req: { principal_type: string; principal_id: string; resource: string; verb: string }) => {
+      setCreating(true);
+      setError(null);
+      try {
+        const result = await api.request("POST", "/api/v1/permissions/grants", { json: req });
+        await mutate((key: unknown) => typeof key === "string" && key.startsWith("grants"), undefined, { revalidate: true });
+        return result;
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        throw err;
+      } finally {
+        setCreating(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { createGrant, creating, error };
+}
+
+export function useRevokeGrant() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [revoking, setRevoking] = useState(false);
+
+  const revokeGrant = useCallback(
+    async (grantId: string) => {
+      setRevoking(true);
+      try {
+        await api.request("DELETE", `/api/v1/permissions/grants/${grantId}`);
+        await mutate((key: unknown) => typeof key === "string" && key.startsWith("grants"), undefined, { revalidate: true });
+      } finally {
+        setRevoking(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { revokeGrant, revoking };
+}
+
+export function useVerbs() {
+  const api = useApiClient();
+  return useSWR(KEYS.verbs(), async () => {
+    return api.request<{ verbs: Array<{ name: string; implies?: string[]; description?: string }> }>("GET", "/api/v1/permissions/verbs");
+  });
+}
+
+export function useResourceAccess(resource: string) {
+  const api = useApiClient();
+  return useSWR(
+    resource ? KEYS.resourceAccess(resource) : null,
+    async () => {
+      return api.request<{ access: Array<{ principal_type: string; principal_id: string; verb: string; source: string }> }>("GET", `/api/v1/permissions/access`, { params: { resource } });
+    },
+  );
+}
+
+export function useGroups() {
+  const api = useApiClient();
+  return useSWR(KEYS.groups(), async () => {
+    return api.request<{ groups: Array<{ group_id: string; name: string; description?: string }> }>("GET", "/api/v1/permissions/groups");
+  });
+}
+
+export function useCreateGroup() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const createGroup = useCallback(
+    async (name: string, description?: string) => {
+      setCreating(true);
+      setError(null);
+      try {
+        const result = await api.request("POST", "/api/v1/permissions/groups", { json: { name, description } });
+        await mutate(KEYS.groups());
+        return result;
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        throw err;
+      } finally {
+        setCreating(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { createGroup, creating, error };
+}
+
+export function useDeleteGroup() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [deleting, setDeleting] = useState(false);
+
+  const deleteGroup = useCallback(
+    async (groupId: string) => {
+      setDeleting(true);
+      try {
+        await api.request("DELETE", `/api/v1/permissions/groups/${groupId}`);
+        await mutate(KEYS.groups());
+      } finally {
+        setDeleting(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { deleteGroup, deleting };
+}
+
+export function useGroupMembers(groupId: string) {
+  const api = useApiClient();
+  return useSWR(
+    groupId ? KEYS.groupMembers(groupId) : null,
+    async () => {
+      return api.request<{ members: GroupMember[] }>("GET", `/api/v1/permissions/groups/${groupId}/members`);
+    },
+  );
+}
+
+export function useAddGroupMember(groupId: string) {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [adding, setAdding] = useState(false);
+
+  const addMember = useCallback(
+    async (memberType: string, memberId: string) => {
+      setAdding(true);
+      try {
+        await api.request("POST", `/api/v1/permissions/groups/${groupId}/members`, {
+          json: { member_type: memberType, member_id: memberId },
+        });
+        await mutate(KEYS.groupMembers(groupId));
+      } finally {
+        setAdding(false);
+      }
+    },
+    [api, groupId, mutate],
+  );
+
+  return { addMember, adding };
+}
+
+export function useRemoveGroupMember(groupId: string) {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [removing, setRemoving] = useState(false);
+
+  const removeMember = useCallback(
+    async (memberType: string, memberId: string) => {
+      setRemoving(true);
+      try {
+        await api.request("DELETE", `/api/v1/permissions/groups/${groupId}/members`, {
+          json: { member_type: memberType, member_id: memberId },
+        });
+        await mutate(KEYS.groupMembers(groupId));
+      } finally {
+        setRemoving(false);
+      }
+    },
+    [api, groupId, mutate],
+  );
+
+  return { removeMember, removing };
+}
+
+/** Runner Plugins (installed Python packages) */
+export function useRunnerPlugins() {
+  const api = useApiClient();
+  return useSWR(KEYS.runnerPlugins(), () => api.plugins.listRunnerPlugins());
+}
+
+/** Plugins */
+export function usePlugins(filter?: { status?: string; kind?: string }) {
+  const api = useApiClient();
+  return useSWR(
+    KEYS.plugins(filter?.status, filter?.kind),
+    () => api.plugins.list(filter),
+    { refreshInterval: 10000 },
+  );
+}
+
+export function usePlugin(name: string) {
+  const api = useApiClient();
+  return useSWR(
+    name ? KEYS.plugin(name) : null,
+    () => api.plugins.get(name),
+  );
+}
+
+export function useTogglePlugin() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const toggle = useCallback(
+    async (name: string, enable: boolean) => {
+      setLoading(true);
+      setError(null);
+      try {
+        if (enable) {
+          await api.plugins.enable(name);
+        } else {
+          await api.plugins.disable(name);
+        }
+        await mutate(KEYS.match.plugins);
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { toggle, loading, error };
+}
+
+export function useUpdatePluginConfig() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [updating, setUpdating] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const updateConfig = useCallback(
+    async (name: string, config: Record<string, unknown>) => {
+      setUpdating(true);
+      setError(null);
+      try {
+        const result = await api.plugins.updateConfig(name, config);
+        await mutate(KEYS.match.plugins);
+        return result;
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        throw err;
+      } finally {
+        setUpdating(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { updateConfig, updating, error };
+}
+
+export function useRemovePlugin() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+
+  const remove = useCallback(
+    async (name: string) => {
+      await api.plugins.remove(name);
+      await mutate(KEYS.match.plugins);
+    },
+    [api, mutate],
+  );
+
+  return { remove };
+}
+
+/** Plugin Sources */
+export function usePluginSources() {
+  const api = useApiClient();
+  return useSWR(KEYS.pluginSources(), () => api.plugins.listSources());
+}
+
+export function useCreatePluginSource() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const create = useCallback(
+    async (req: CreatePluginSourceRequest) => {
+      setCreating(true);
+      setError(null);
+      try {
+        const result = await api.plugins.createSource(req);
+        await mutate(KEYS.pluginSources());
+        return result;
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        throw err;
+      } finally {
+        setCreating(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { create, creating, error };
+}
+
+export function useDeletePluginSource() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+
+  const deleteSource = useCallback(
+    async (id: string) => {
+      await api.plugins.deleteSource(id);
+      await mutate(KEYS.pluginSources());
+    },
+    [api, mutate],
+  );
+
+  return { deleteSource };
+}
+
+/** Plugin Policies */
+export function usePluginPolicies() {
+  const api = useApiClient();
+  return useSWR(KEYS.pluginPolicies(), () => api.plugins.listPolicies());
+}
+
+export function useCreatePluginPolicy() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const create = useCallback(
+    async (req: CreatePluginPolicyRequest) => {
+      setCreating(true);
+      setError(null);
+      try {
+        const result = await api.plugins.createPolicy(req);
+        await mutate(KEYS.pluginPolicies());
+        return result;
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        setError(err);
+        throw err;
+      } finally {
+        setCreating(false);
+      }
+    },
+    [api, mutate],
+  );
+
+  return { create, creating, error };
+}
+
+export function useDeletePluginPolicy() {
+  const api = useApiClient();
+  const { mutate } = useSWRConfig();
+
+  const deletePolicy = useCallback(
+    async (id: string) => {
+      await api.plugins.deletePolicy(id);
+      await mutate(KEYS.pluginPolicies());
+    },
+    [api, mutate],
+  );
+
+  return { deletePolicy };
 }

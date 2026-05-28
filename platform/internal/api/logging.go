@@ -57,7 +57,12 @@ var healthPaths = map[string]bool{
 //   - 5xx:     slog.Error
 //
 // Health check endpoints (/health, /health/live) are skipped to reduce noise.
-// If a request ID is present in the context (from the RequestID middleware), it is included.
+//
+// The request_id is NOT appended here explicitly: the platform's slog handler
+// (api.ContextHandler, installed in main.go) already extracts request_id from
+// the request context and adds it to every record. Re-adding it here would
+// emit the key twice in the JSON output (which confuses log aggregators and
+// any parser that assumes object keys are unique).
 func RequestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Skip noisy health check endpoints.
@@ -78,7 +83,9 @@ func RequestLogger(next http.Handler) http.Handler {
 
 		duration := time.Since(start)
 
-		// Build structured log attributes.
+		// Build structured log attributes. request_id is intentionally omitted
+		// here — see the package doc comment above; ContextHandler adds it
+		// automatically from the request context.
 		attrs := []slog.Attr{
 			slog.String("method", r.Method),
 			slog.String("path", r.URL.Path),
@@ -86,11 +93,6 @@ func RequestLogger(next http.Handler) http.Handler {
 			slog.String("duration", duration.String()),
 			slog.Int64("request_size", r.ContentLength),
 			slog.Int("response_size", wrapped.bytesWritten),
-		}
-
-		// Include request ID if available (set by the RequestID middleware).
-		if reqID := RequestIDFromContext(r.Context()); reqID != "" {
-			attrs = append(attrs, slog.String("request_id", reqID))
 		}
 
 		// Log at appropriate level based on status code.

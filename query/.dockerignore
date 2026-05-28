@@ -24,3 +24,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# uv venv (created locally by `uv sync` — must not leak into image,
+# the Dockerfile rebuilds .venv from uv.lock during the build stage)
+.venv/

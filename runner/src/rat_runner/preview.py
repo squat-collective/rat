@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 from rat_runner.engine import DuckDBEngine
 from rat_runner.log import RunLogger
 from rat_runner.models import LogRecord, PipelineConfig, RunState
+from rat_runner.plugin_registry import PluginRegistry
 from rat_runner.python_exec import execute_python_pipeline
 from rat_runner.templating import (
     _resolve_landing_zone_preview,
@@ -96,12 +97,15 @@ def preview_pipeline(
         # --- Phase 1: Detect pipeline type + read config ---
         t0 = time.monotonic()
         layer_str = layer
+        registry = PluginRegistry()
+        registry.discover()
         detected_type, source, config = _detect_pipeline(
             namespace,
             layer_str,
             pipeline_name,
             s3_config,
             log,
+            registry,
             code=code,
             pipeline_type_hint=pipeline_type,
         )
@@ -128,7 +132,7 @@ def preview_pipeline(
                 result=result,
                 preview_limit=preview_limit,
             )
-        else:
+        elif pipeline_type == "python":
             _preview_python(
                 source=source,
                 namespace=namespace,
@@ -138,6 +142,21 @@ def preview_pipeline(
                 nessie_config=nessie_config,
                 config=config,
                 engine=engine,
+                log=log,
+                result=result,
+                preview_limit=preview_limit,
+            )
+        else:
+            _preview_plugin_type(
+                pipeline_type=pipeline_type,
+                source=source,
+                namespace=namespace,
+                layer=layer_str,
+                pipeline_name=pipeline_name,
+                s3_config=s3_config,
+                nessie_config=nessie_config,
+                config=config,
+                registry=registry,
                 log=log,
                 result=result,
                 preview_limit=preview_limit,
@@ -170,6 +189,7 @@ def _detect_pipeline(
     pipeline_name: str,
     s3_config: S3Config,
     log: RunLogger,
+    registry: PluginRegistry,
     code: str | None = None,
     pipeline_type_hint: str | None = None,
 ) -> tuple[str, str, PipelineConfig | None]:
@@ -183,31 +203,46 @@ def _detect_pipeline(
 
     # Inline code path — skip S3 reads for the source file
     if code is not None:
-        ptype = pipeline_type_hint if pipeline_type_hint in ("sql", "python") else "sql"
+        known = {"sql", "python", *registry.pipeline_type_names()}
+        ptype = pipeline_type_hint if pipeline_type_hint in known else "sql"
         log.info(f"Using inline {ptype} code ({len(code)} chars)")
-        config = _load_config(code, prefix, s3_config)
+        config = _load_config(code, prefix, s3_config, registry)
         return ptype, code, config
 
     # Try Python first, then SQL (same order as executor.py)
     py_source = read_s3_text(s3_config, f"{prefix}/pipeline.py")
     if py_source is not None:
         log.info("Detected Python pipeline")
-        config = _load_config(py_source, prefix, s3_config)
+        config = _load_config(py_source, prefix, s3_config, registry)
         return "python", py_source, config
 
     sql_source = read_s3_text(s3_config, f"{prefix}/pipeline.sql")
     if sql_source is not None:
         log.info("Detected SQL pipeline")
-        config = _load_config(sql_source, prefix, s3_config)
+        config = _load_config(sql_source, prefix, s3_config, registry)
         return "sql", sql_source, config
 
-    raise FileNotFoundError(f"No pipeline.py or pipeline.sql found at {prefix}/")
+    # Plugin-provided pipeline types (e.g. pipeline.prql).
+    for type_name in registry.pipeline_type_names():
+        plugin_type = registry.get_pipeline_type(type_name)
+        if plugin_type is None:
+            continue
+        ext_source = read_s3_text(s3_config, f"{prefix}/pipeline.{plugin_type.file_extension}")
+        if ext_source is not None:
+            log.info(f"Detected {type_name} pipeline")
+            config = _load_config(ext_source, prefix, s3_config, registry)
+            return type_name, ext_source, config
+
+    raise FileNotFoundError(
+        f"No pipeline.py, pipeline.sql, or plugin pipeline-type file found at {prefix}/"
+    )
 
 
 def _load_config(
     source: str,
     prefix: str,
     s3_config: S3Config,
+    registry: PluginRegistry,
 ) -> PipelineConfig | None:
     """Load config from inline annotations or config.yaml."""
     metadata = extract_metadata(source)
@@ -218,7 +253,8 @@ def _load_config(
     if config_yaml:
         from rat_runner.config import parse_pipeline_config
 
-        return parse_pipeline_config(config_yaml)
+        # Pass plugin strategy names so preview accepts custom merge strategies.
+        return parse_pipeline_config(config_yaml, registry.strategy_names())
 
     return None
 
@@ -381,4 +417,64 @@ def _preview_python(
     )
 
     # Phase 5: COUNT (already have total)
+    result.phases.append(PhaseProfile(name="count", duration_ms=0))
+
+
+def _preview_plugin_type(
+    pipeline_type: str,
+    source: str,
+    namespace: str,
+    layer: str,
+    pipeline_name: str,
+    s3_config: S3Config,
+    nessie_config: NessieConfig,
+    config: PipelineConfig | None,
+    registry: PluginRegistry,
+    log: RunLogger,
+    result: PreviewResult,
+    preview_limit: int,
+) -> None:
+    """Preview a pipeline whose type is provided by a runner plugin.
+
+    Runs the plugin's execute() and slices the result — there are no writes
+    in preview mode, and the plugin owns its own execution.
+    """
+    plugin_type = registry.get_pipeline_type(pipeline_type)
+    if plugin_type is None:
+        raise RuntimeError(f"No plugin registered for pipeline type '{pipeline_type}'")
+
+    result.phases.append(
+        PhaseProfile(name="compile", duration_ms=0, metadata={"skipped": pipeline_type})
+    )
+
+    t0 = time.monotonic()
+    table = plugin_type.execute(
+        source,
+        namespace,
+        layer,
+        pipeline_name,
+        s3_config,
+        nessie_config,
+        config,
+    )
+    result.phases.append(
+        PhaseProfile(
+            name="execute",
+            duration_ms=_time_ms(t0),
+            metadata={"limit": str(preview_limit)},
+        )
+    )
+
+    total = table.num_rows
+    if total > preview_limit:
+        table = table.slice(0, preview_limit)
+    result.arrow_table = table
+    result.columns = _extract_columns(table)
+    result.total_row_count = total
+    log.info(f"Executed '{pipeline_type}' pipeline: {table.num_rows} rows (total: {total})")
+
+    # EXPLAIN / COUNT are N/A — the plugin owns execution.
+    result.phases.append(
+        PhaseProfile(name="explain", duration_ms=0, metadata={"skipped": pipeline_type})
+    )
     result.phases.append(PhaseProfile(name="count", duration_ms=0))

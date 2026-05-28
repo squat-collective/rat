@@ -133,3 +133,49 @@ func TestPipelineStore_GetNotFound_ReturnsNil(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
+
+func TestPipelineStore_PublishPipeline_PublishesEvent(t *testing.T) {
+	pool := testPool(t)
+	store := postgres.NewPipelineStore(pool)
+	bus := postgres.NewMemoryEventBus()
+	store.EventBus = bus
+	ctx := context.Background()
+
+	require.NoError(t, store.CreatePipeline(ctx, newTestPipeline("default", "bronze", "orders")))
+
+	err := store.PublishPipeline(ctx, "default", "bronze", "orders", map[string]string{"test.sql": "v1"})
+	require.NoError(t, err)
+
+	events := bus.Published()
+	var found bool
+	for _, ev := range events {
+		if ev.Channel == "pipeline_published" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected pipeline_published event")
+}
+
+func TestPipelineStore_DeletePipeline_PublishesEvent(t *testing.T) {
+	pool := testPool(t)
+	store := postgres.NewPipelineStore(pool)
+	bus := postgres.NewMemoryEventBus()
+	store.EventBus = bus
+	ctx := context.Background()
+
+	require.NoError(t, store.CreatePipeline(ctx, newTestPipeline("default", "bronze", "orders")))
+
+	err := store.DeletePipeline(ctx, "default", "bronze", "orders")
+	require.NoError(t, err)
+
+	events := bus.Published()
+	var found bool
+	for _, ev := range events {
+		if ev.Channel == "pipeline_deleted" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected pipeline_deleted event")
+}

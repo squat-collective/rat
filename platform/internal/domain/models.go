@@ -233,6 +233,21 @@ type AuditEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// FailedMerge represents a Phase 5 branch-merge terminal failure.
+//
+// When the runner cannot merge an ephemeral branch into main and has
+// exhausted its retry budget, it leaves the branch in place (so a human
+// can recover the data) and writes a record like this so the failure is
+// visible without trawling logs.
+type FailedMerge struct {
+	RunID        string `json:"run_id"`
+	BranchName   string `json:"branch_name"`
+	SourceHash   string `json:"source_hash,omitempty"`
+	TargetHash   string `json:"target_hash,omitempty"`
+	ErrorKind    string `json:"error_kind"`
+	ErrorMessage string `json:"error_message"`
+}
+
 // RetentionConfig holds system-wide data retention settings.
 // Stored as JSONB in platform_settings under key "retention".
 type RetentionConfig struct {
@@ -359,6 +374,117 @@ func DefaultNamespaceQuota(namespace string) NamespaceQuota {
 type QuotaCheckResult struct {
 	Allowed bool   `json:"allowed"`
 	Reason  string `json:"reason,omitempty"` // human-readable denial reason
+}
+
+// RunnerPlugin describes a Python entry point discovered by the runner container.
+// Returned by the ListPlugins gRPC call and exposed via GET /api/v1/runner/plugins.
+type RunnerPlugin struct {
+	Name        string `json:"name"`         // entry point name ("soft_delete", "env_var")
+	Group       string `json:"group"`        // "rat.strategies", "rat.hooks", etc.
+	Version     string `json:"version"`      // package version
+	PackageName string `json:"package_name"` // Python package name ("rat-plugin-soft-delete")
+}
+
+// ── Plugin Catalog ─────────────────────────────────────────────
+
+// PluginStatus represents the lifecycle state of a registered plugin.
+type PluginStatus string
+
+const (
+	PluginStatusRegistered PluginStatus = "registered"
+	PluginStatusEnabled    PluginStatus = "enabled"
+	PluginStatusDisabled   PluginStatus = "disabled"
+	PluginStatusError      PluginStatus = "error"
+)
+
+// ValidPluginStatus returns true if s is a known plugin status.
+func ValidPluginStatus(s string) bool {
+	switch PluginStatus(s) {
+	case PluginStatusRegistered, PluginStatusEnabled, PluginStatusDisabled, PluginStatusError:
+		return true
+	}
+	return false
+}
+
+// PluginKind indicates the platform layer a plugin targets.
+type PluginKind string
+
+const (
+	PluginKindPlatform PluginKind = "platform"
+	PluginKindRunner   PluginKind = "runner"
+	PluginKindPortal   PluginKind = "portal"
+)
+
+// ValidPluginKind returns true if s is a known plugin kind.
+func ValidPluginKind(s string) bool {
+	switch PluginKind(s) {
+	case PluginKindPlatform, PluginKindRunner, PluginKindPortal:
+		return true
+	}
+	return false
+}
+
+// PluginEntry represents a plugin registered in the catalog.
+//
+// ConfigVersion is bumped by every successful UpdatePluginConfig and is used
+// for optimistic concurrency control on PUT /api/v1/plugins/{name}/config —
+// clients echo it back via the If-Match header to detect lost updates. It is
+// surfaced in the JSON body (config_version) and via the ETag response header.
+type PluginEntry struct {
+	ID            uuid.UUID       `json:"id"`
+	Name          string          `json:"name"`
+	Kind          PluginKind      `json:"kind"`
+	Version       string          `json:"version"`
+	Status        PluginStatus    `json:"status"`
+	Error         string          `json:"error,omitempty"`
+	Descriptor    json.RawMessage `json:"descriptor,omitempty"`
+	Config        json.RawMessage `json:"config,omitempty"`
+	ConfigVersion int64           `json:"config_version"`
+	Addr          string          `json:"addr"`
+	Healthy       bool            `json:"healthy"`
+	RegisteredAt  time.Time       `json:"registered_at"`
+	EnabledAt     *time.Time      `json:"enabled_at,omitempty"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+}
+
+// ErrConfigVersionMismatch is returned by PluginCatalog.UpdatePluginConfig when
+// the caller supplied an expectedVersion that did not match the row's current
+// config_version (optimistic concurrency conflict). The HTTP layer translates
+// this into a 409 Conflict with the current version echoed in the ETag header.
+var ErrConfigVersionMismatch = errors.New("plugin config_version mismatch")
+
+// PluginFilter constrains ListPlugins queries.
+type PluginFilter struct {
+	Status string `json:"status,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+}
+
+// PluginSource describes a repository from which plugins can be discovered.
+type PluginSource struct {
+	ID        uuid.UUID `json:"id"`
+	Type      string    `json:"type"` // "oci", "local", "git"
+	URL       string    `json:"url"`
+	Trusted   bool      `json:"trusted"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// PluginPolicy is an allow/deny rule governing which plugins may register.
+type PluginPolicy struct {
+	ID        uuid.UUID `json:"id"`
+	Rule      string    `json:"rule"` // "allow" or "deny"
+	Pattern   string    `json:"pattern"`
+	Kind      string    `json:"kind,omitempty"` // empty = all kinds
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// UserIdentity represents an authenticated user extracted from auth plugins.
+// Replaces the protobuf authv1.UserIdentity for use in domain/context code.
+type UserIdentity struct {
+	UserID      string   `json:"user_id"`
+	Email       string   `json:"email"`
+	DisplayName string   `json:"display_name"`
+	Roles       []string `json:"roles"`
 }
 
 // LicenseInfo describes the license status for display.

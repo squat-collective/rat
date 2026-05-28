@@ -85,3 +85,11 @@ else
   echo ""
   echo "Then open http://localhost:3000"
 fi
+
+echo ""
+echo "Optional plugins (compaction, secrets, pg-sync, lineage, …):"
+echo "  https://github.com/${REPO}/blob/${BRANCH}/plugins/README.md"
+echo ""
+echo "Each plugin runs as a separate container on the same network — see its"
+echo "README for the docker run line, or use the overlay at infra/docker-compose.plugins.yml"
+echo "for a declarative install."

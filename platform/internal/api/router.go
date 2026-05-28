@@ -25,9 +25,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	cloudv1 "github.com/rat-data/rat/platform/gen/cloud/v1"
 	"github.com/rat-data/rat/platform/internal/cache"
 	"github.com/rat-data/rat/platform/internal/domain"
+	"github.com/rat-data/rat/platform/internal/plugins"
 )
 
 // maxJSONBodySize is the maximum size for JSON request bodies (1MB).
@@ -253,11 +253,24 @@ type PluginRegistry interface {
 	Features() domain.Features
 }
 
+// PluginRegistryLive provides live plugin lookup for the route proxy.
+type PluginRegistryLive interface {
+	Get(name string) *plugins.Plugin
+}
+
+// RunnerPluginLister fetches the list of runner plugins from the runner service.
+type RunnerPluginLister interface {
+	ListRunnerPlugins(ctx context.Context) ([]domain.RunnerPlugin, error)
+}
+
 // CloudProvider vends scoped cloud credentials for pipeline runs.
-// Implemented by the plugins.Registry when the cloud plugin is loaded.
+// Implemented by the plugins.Registry when a plugin with capability "cloud"
+// is loaded. Mirrors the GetCredentials RPC declared in proto/cloud/v1/cloud.proto
+// while exchanging the platform domain type instead of the wire proto so
+// callers and tests stay decoupled from generated code.
 type CloudProvider interface {
 	CloudEnabled() bool
-	GetCredentials(ctx context.Context, userID, namespace string) (*cloudv1.GetCredentialsResponse, error)
+	GetCredentials(ctx context.Context, userID, namespace string) (*domain.CloudCredentials, error)
 }
 
 // securityHeaders adds standard HTTP security headers to every response.
@@ -290,11 +303,17 @@ func DefaultWebhookRateLimitConfig() WebhookRateLimitConfig {
 	}
 }
 
+// EventPublisher publishes events to the event bus (Postgres NOTIFY or in-memory for tests).
+type EventPublisher interface {
+	Publish(ctx context.Context, channel string, payload interface{}) error
+}
+
 // Server holds dependencies for all API handlers.
 type Server struct {
 	Pipelines     PipelineStore
 	Versions      VersionStore
 	Publisher     PipelinePublisher // Optional: wraps publish/rollback in a DB transaction.
+	TxRunner      TxRunner          // Optional: runs multi-step handlers atomically. See api/tx.go.
 	Runs          RunStore
 	Namespaces    NamespaceStore
 	Schedules     ScheduleStore
@@ -305,14 +324,22 @@ type Server struct {
 	LandingZones  LandingZoneStore
 	Triggers      PipelineTriggerStore
 	Audit         AuditStore
+	FailedMerges  FailedMergesStore // optional: audit log for Phase 5 merge failures from the runner.
 	Settings      SettingsStore
-	Auth          func(http.Handler) http.Handler
-	Authorizer    Authorizer
-	Executor      Executor
-	Reaper        ReaperRunner
-	Plugins       PluginRegistry
-	Cloud         CloudProvider
-	LicenseInfo   *domain.LicenseInfo
+	EventBus      EventPublisher // Optional: publishes events for plugin dispatch.
+	Auth           func(http.Handler) http.Handler
+	Authorizer     Authorizer
+	Executor       Executor
+	Reaper         ReaperRunner
+	Plugins        PluginRegistry
+	Cloud          CloudProvider
+	RunnerPlugins  RunnerPluginLister
+	LicenseInfo    *domain.LicenseInfo
+	PluginManager  PluginManager   // lifecycle operations (register, enable, disable, remove)
+	PluginCatalog  PluginLister    // read-only catalog queries
+	PluginRegistry PluginRegistryLive // live registry for proxy route lookups
+	PluginSources  PluginSourceStore  // plugin source repository management
+	PluginPolicies PluginPolicyStore  // plugin allow/deny policy management
 	CORSOrigins   []string          // Allowed CORS origins. Defaults to ["http://localhost:3000"].
 	RateLimit        *RateLimitConfig   // Per-IP rate limiting config. Nil disables rate limiting.
 	RateLimiterStop  func()            // Populated by NewRouter when rate limiting is enabled.
@@ -324,13 +351,33 @@ type Server struct {
 	RunnerHealth     HealthChecker     // Runner gRPC health check. Nil = skip.
 	QueryHealth      HealthChecker     // ratq gRPC health check. Nil = skip.
 
+	// Metrics callables — exported as Prometheus gauges by HandleMetrics.
+	// Each is optional; the corresponding metric is omitted when nil so dev
+	// or test servers without the dependency wired don't emit zeros that
+	// look like saturated pools / empty plugin fleets. Use closures over the
+	// concrete pgxpool.Pool / plugins.Registry / scheduler.Scheduler in main.go
+	// so this api package never imports those packages (avoids cycles and
+	// keeps the test helpers dependency-light).
+	DBPoolStats        func() (total, acquired int32)   // main pgxpool.Pool.Stat()
+	HeartbeatPoolStats func() (total, acquired int32)   // dedicated heartbeat pool (nil when unused)
+	PluginHealthStats  func() (total, healthy int)      // plugins.Registry.All() count + filter
+	SchedulerMetrics   func() (lastTickSeconds float64, dispatched int) // scheduler.LastTickStats()
+
 	// Caches reduce Postgres load for slow-changing data.
 	// Nil caches are safe — handlers check before using.
 	NamespaceCache *cache.Cache[string, []domain.Namespace]   // key: "all" (namespace list rarely changes)
 	PipelineCache  *cache.Cache[string, *domain.Pipeline]     // key: "ns/layer/name"
 }
 
-// NewRouter creates a configured chi router with all API routes mounted.
+// NewRouter creates the PUBLIC chi router with end-user APIs mounted.
+//
+// Internal service-to-service routes (run-status callback, plugin phone-home)
+// are NOT mounted here — they live on a separate listener built via
+// NewInternalRouter. The two routers share the same *Server, but a 404 from
+// the public router on /api/v1/internal/* or /internal/* must never leak
+// that those routes exist on the internal listener.
+//
+// See main.go for the two-listener bootstrap and the trust-boundary doc.
 func NewRouter(srv *Server) chi.Router {
 	// Ensure SSE limiter is always available.
 	if srv.SSELimiter == nil {
@@ -406,9 +453,10 @@ func NewRouter(srv *Server) chi.Router {
 		})
 	}
 
-	// Internal service-to-service routes (no JWT required).
-	// Called by runner/plugins for push-based status updates.
-	MountInternalRoutes(r, srv)
+	// NOTE: Internal routes (MountInternalRoutes, MountPluginInternalRoutes)
+	// are intentionally NOT mounted here. They live on the private listener
+	// returned by NewInternalRouter, so an attacker on the public listener
+	// cannot reach them — they get a clean 404.
 
 	// API v1
 	r.Route("/api/v1", func(r chi.Router) {
@@ -425,6 +473,7 @@ func NewRouter(srv *Server) chi.Router {
 			r.Use(AuditMiddleware(srv.Audit))
 		}
 		r.Get("/features", srv.HandleFeatures)
+		r.Get("/me", srv.HandleMe)
 
 		// ValidatePathParams needs URL params, which are only available after
 		// chi matches the specific route. r.With() creates an inline router where
@@ -439,7 +488,9 @@ func NewRouter(srv *Server) chi.Router {
 		MountQualityRoutes(vr, srv)
 		MountMetadataRoutes(vr, srv)
 		MountQueryRoutes(vr, srv)
-		MountLineageRoutes(vr, srv)
+		// Lineage moved out of core into rat-plugin-lineage. Mounted at
+		// /api/v1/x/lineage/graph by the plugin proxy; the plugin's UI
+		// bundle adds /x/lineage to the sidebar nav.
 		MountSharingRoutes(vr, srv)
 		MountLandingZoneRoutes(vr, srv)
 		if srv.Triggers != nil {
@@ -448,13 +499,87 @@ func NewRouter(srv *Server) chi.Router {
 		MountAuditRoutes(vr, srv)
 		MountPreviewRoutes(vr, srv)
 		MountPublishRoutes(vr, srv)
+		MountRunnerPluginRoutes(vr, srv)
 		if srv.Settings != nil {
 			MountRetentionRoutes(vr, srv)
 		}
 		if srv.Versions != nil {
 			MountVersionRoutes(vr, srv)
 		}
+
+		// Permission management endpoints (authenticated).
+		// Handlers check for permission provider internally.
+		MountPermissionRoutes(vr, srv)
+
+		// Identity management endpoints (authenticated).
+		// Handlers check for identity provider internally.
+		MountIdentityRoutes(vr, srv)
+
+		// Cloud credential vending (authenticated).
+		// Handler returns 501 when no plugin with capability "cloud" is registered.
+		MountCloudRoutes(vr, srv)
+
+		// Plugin management endpoints (authenticated).
+		if srv.PluginManager != nil {
+			MountPluginRoutes(vr, srv)
+		}
+		if srv.PluginSources != nil {
+			MountPluginSourceRoutes(vr, srv)
+		}
+		if srv.PluginPolicies != nil {
+			MountPluginPolicyRoutes(vr, srv)
+		}
+
+		// Plugin UI bundle proxy: /api/v1/plugins/{name}/ui/bundle.js
+		// Always mount — handler returns 503 if PluginRegistry is nil.
+		MountPluginBundleRoutes(vr, srv)
+
+		// Plugin route proxy: /api/v1/x/{plugin}/* → plugin.Addr/*
+		// Always mount — handler returns 503 if PluginRegistry is nil.
+		MountPluginProxyRoutes(vr, srv)
 	})
+
+	return r
+}
+
+// NewInternalRouter creates the PRIVATE chi router for service-to-service
+// callbacks. It hosts ONLY internal endpoints:
+//
+//   - POST /api/v1/internal/runs/{runID}/status        — runner posts terminal run status
+//   - POST /api/v1/internal/failed-merges              — runner records a Phase 5 merge failure
+//   - POST /api/v1/internal/plugins/register           — plugins phone home at boot (canonical)
+//   - POST /internal/plugins/register                  — DEPRECATED alias, logs a WARN; remove in a future release
+//
+// SECURITY MODEL: this router has NO authentication. It assumes the caller is
+// trusted because the listener it serves on must be bound to a network the
+// public can't reach (loopback, the Docker bridge, a VPC private subnet…).
+// The operator is responsible for keeping the internal listener off the
+// public network. Never expose the internal port to the host or the internet.
+//
+// See ADR-019 and the top-of-file trust-model block in internal_routes.go
+// for the full contract. The actual route wiring is centralised in
+// MountAllInternalRoutes — this function only sets up middleware.
+//
+// Health endpoints are mirrored here so a Docker/Kubernetes probe targeting
+// the internal port still works without round-tripping to 8080.
+func NewInternalRouter(srv *Server) chi.Router {
+	r := chi.NewRouter()
+
+	// Minimal middleware — no CORS, no auth, no rate limiting. The internal
+	// listener is for trusted in-cluster callers only.
+	r.Use(securityHeaders)
+	r.Use(RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(RequestLogger)
+	r.Use(middleware.Recoverer)
+
+	// Optional body-size cap so a runaway client can't blow up memory.
+	r.Use(limitJSONBody)
+
+	// Single source of truth for which endpoints live on the internal
+	// listener. See platform/internal/api/internal_routes.go for the
+	// full trust-model block + the InternalRouterConfig knobs.
+	MountAllInternalRoutes(r, DefaultInternalRouterConfig(), srv)
 
 	return r
 }

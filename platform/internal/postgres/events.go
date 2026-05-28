@@ -20,10 +20,29 @@ import (
 
 // Well-known channel names for LISTEN/NOTIFY.
 const (
-	ChannelRunCompleted    = "run_completed"
-	ChannelPipelineCreated = "pipeline_created"
-	ChannelPipelineUpdated = "pipeline_updated"
+	ChannelRunCompleted      = "run_completed"
+	ChannelPipelineCreated   = "pipeline_created"
+	ChannelPipelineUpdated   = "pipeline_updated"
+	ChannelPipelinePublished = "pipeline_published"
+	ChannelPipelineDeleted   = "pipeline_deleted"
+	ChannelFileUploaded      = "file_uploaded"
+	ChannelQualityFailed     = "quality_failed"
+	ChannelScheduleFired     = "schedule_fired"
 )
+
+// allChannels lists every channel PgEventBus listens on. They are LISTENed
+// up-front in Start(): LISTEN cannot run concurrently with the listener loop's
+// WaitForNotification on the same pgx connection (it would fail "conn busy").
+var allChannels = []string{
+	ChannelRunCompleted,
+	ChannelPipelineCreated,
+	ChannelPipelineUpdated,
+	ChannelPipelinePublished,
+	ChannelPipelineDeleted,
+	ChannelFileUploaded,
+	ChannelQualityFailed,
+	ChannelScheduleFired,
+}
 
 // Event represents a single notification received from Postgres NOTIFY.
 type Event struct {
@@ -38,12 +57,37 @@ type RunCompletedPayload struct {
 	Status     string `json:"status"`
 }
 
-// PipelineEventPayload is the JSON payload for pipeline_created/updated events.
+// PipelineEventPayload is the JSON payload for pipeline_created/updated/published/deleted events.
 type PipelineEventPayload struct {
 	PipelineID string `json:"pipeline_id"`
 	Namespace  string `json:"namespace"`
 	Layer      string `json:"layer"`
 	Name       string `json:"name"`
+}
+
+// FileUploadedPayload is the JSON payload for file_uploaded events.
+type FileUploadedPayload struct {
+	Path      string `json:"path"`
+	Namespace string `json:"namespace"`
+	Size      int64  `json:"size"`
+}
+
+// QualityFailedPayload is the JSON payload for quality_failed events.
+type QualityFailedPayload struct {
+	PipelineID string `json:"pipeline_id,omitempty"`
+	Namespace  string `json:"namespace"`
+	Layer      string `json:"layer"`
+	Name       string `json:"name"`
+	Failed     int    `json:"failed"`
+	Total      int    `json:"total"`
+}
+
+// ScheduleFiredPayload is the JSON payload for schedule_fired events.
+type ScheduleFiredPayload struct {
+	ScheduleID string `json:"schedule_id"`
+	PipelineID string `json:"pipeline_id"`
+	RunID      string `json:"run_id"`
+	CronExpr   string `json:"cron_expr"`
 }
 
 // EventBus defines the interface for publishing and subscribing to events.
@@ -98,12 +142,26 @@ func (eb *PgEventBus) Start(ctx context.Context) error {
 	}
 	eb.listenConn = conn
 
+	// LISTEN on every well-known channel now, while we have exclusive use of
+	// the connection. Once listenLoop starts, WaitForNotification holds the
+	// connection and a concurrent LISTEN from Subscribe fails with "conn busy".
+	eb.mu.Lock()
+	for _, ch := range allChannels {
+		if _, err := conn.Exec(ctx, "LISTEN "+ch); err != nil {
+			eb.mu.Unlock()
+			_ = conn.Close(context.Background())
+			return fmt.Errorf("event bus: LISTEN %s: %w", ch, err)
+		}
+		eb.listening[ch] = true
+	}
+	eb.mu.Unlock()
+
 	ctx, eb.cancel = context.WithCancel(ctx)
 	eb.done = make(chan struct{})
 
 	go eb.listenLoop(ctx)
 
-	slog.Info("event bus started")
+	slog.Info("event bus started", "channels", allChannels)
 	return nil
 }
 
@@ -153,13 +211,12 @@ func (eb *PgEventBus) Subscribe(channel string) (_ <-chan Event, _ func()) {
 	}
 	eb.subscribers[channel] = append(eb.subscribers[channel], sub)
 
-	// Issue LISTEN if this is the first subscriber for this channel.
-	if !eb.listening[channel] && eb.listenConn != nil {
-		if _, err := eb.listenConn.Exec(context.Background(), "LISTEN "+channel); err != nil {
-			slog.Error("event bus: LISTEN failed", "channel", channel, "error", err)
-		} else {
-			eb.listening[channel] = true
-		}
+	// All well-known channels are LISTENed up-front in Start(); Subscribe only
+	// registers the in-memory subscriber. A channel outside that set cannot be
+	// listened on after Start() — the listener loop holds the connection.
+	if !eb.listening[channel] {
+		slog.Warn("event bus: channel not pre-registered in Start() — "+
+			"no notifications will be delivered for it", "channel", channel)
 	}
 
 	// Return cancel function that removes this subscriber.

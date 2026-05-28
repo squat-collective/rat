@@ -31,6 +31,9 @@ interface CodeEditorProps {
   onSaveRef: React.MutableRefObject<() => void>;
   onPreviewRef?: React.MutableRefObject<() => void>;
   getSelectionRef?: React.MutableRefObject<() => string>;
+  // setContentRef is populated with an imperative "replace the whole document"
+  // function — used by the dev-assistant panel to apply AI-generated code.
+  setContentRef?: React.MutableRefObject<(content: string) => void>;
   landingZones?: string[];
   schema?: SchemaData;
 }
@@ -657,6 +660,7 @@ export function CodeEditor({
   onSaveRef,
   onPreviewRef,
   getSelectionRef,
+  setContentRef,
   landingZones,
   schema,
 }: CodeEditorProps) {
@@ -775,6 +779,16 @@ export function CodeEditor({
           if (!view) return "";
           const { from, to } = view.state.selection.main;
           return view.state.sliceDoc(from, to);
+        };
+      }
+
+      if (setContentRef) {
+        setContentRef.current = (text: string) => {
+          const view = viewRef.current;
+          if (!view) return;
+          view.dispatch({
+            changes: { from: 0, to: view.state.doc.length, insert: text },
+          });
         };
       }
     } catch (err) {

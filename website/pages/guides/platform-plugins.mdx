@@ -1,0 +1,239 @@
+import { Callout, Steps } from 'nextra/components'
+import { Mermaid } from '@/components/mermaid'
+
+# Platform Plugins
+
+Platform plugins extend RAT at the **API / logic layer**. A platform plugin is
+a separate container that speaks [ConnectRPC](https://connectrpc.com) to `ratd`.
+It can react to platform events, expose new HTTP routes, and ship a portal UI
+bundle.
+
+Unlike [runner plugins](/guides/runner-plugins) (in-process Python), a platform
+plugin is its own process with its own lifecycle — you build it, ship it as a
+container image, and run it alongside RAT.
+
+The full worked example for this guide is
+[`rat-plugin-event-notifier`](https://github.com/squat-collective/rat/tree/main/examples/rat-plugin-event-notifier).
+
+---
+
+## How it works
+
+A platform plugin implements one gRPC service — `PluginService` — and
+**phones home** to `ratd` on startup.
+
+<Mermaid chart={`
+sequenceDiagram
+    participant P as Plugin container
+    participant D as ratd
+    P->>P: start ConnectRPC server
+    P->>D: POST /internal/plugins/register {name, addr}
+    D->>P: HealthCheck RPC
+    D->>P: Describe RPC
+    Note over D: store in catalog,<br/>add to open registry
+    D-->>P: registered (enabled)
+`} />
+
+1. The plugin container starts and serves `PluginService`.
+2. It POSTs `{name, addr}` to `ratd`'s `/internal/plugins/register`.
+3. `ratd` calls the plugin's `HealthCheck`, then `Describe`.
+4. `ratd` records the plugin in the Postgres catalog and an in-memory registry,
+   subscribes it to the events it asked for, and proxies its routes.
+
+`ratd` never starts plugin containers — you run them (Docker Compose, K8s, …).
+It only connects to them.
+
+---
+
+## The PluginService contract
+
+Every platform plugin implements `PluginService`, defined in
+[`proto/plugin/v1/plugin.proto`](https://github.com/squat-collective/rat/blob/main/proto/plugin/v1/plugin.proto):
+
+| RPC | Required? | Purpose |
+|---|---|---|
+| `HealthCheck` | yes | Liveness — `ratd` polls this; return `STATUS_SERVING` |
+| `Describe` | yes | Advertise capabilities, routes, events, and UI |
+| `HandleEvent` | if you subscribe to events | Receive a platform event |
+| `Authenticate` | auth plugins only | Validate a bearer token |
+| `Authorize` | enforcement plugins only | Check an access decision |
+
+Implement only what you need — embed `UnimplementedPluginServiceHandler` and the
+RPCs you skip return `CodeUnimplemented`, which `ratd` handles gracefully.
+
+### Describe
+
+`Describe` is how `ratd` learns what your plugin does. The response carries:
+
+- `name`, `version`, `description`
+- `capabilities` — well-known slots: `auth`, `executor`, `sharing`,
+  `enforcement`, `cloud`. Leave empty for a plain plugin.
+- `routes` — HTTP routes `ratd` should proxy (see below)
+- `event_subscriptions` — event channels to deliver to `HandleEvent`
+- `ui` — a [portal UI descriptor](/guides/portal-plugins) (bundle URL, slots,
+  nav items, routes)
+- `config_schema_json` — a JSON Schema for the plugin's config
+
+### Events
+
+If `Describe` lists `event_subscriptions`, `ratd` delivers those events to your
+`HandleEvent` RPC. Delivery is asynchronous and best-effort. The channels:
+
+```
+run_completed       pipeline_created     pipeline_updated
+pipeline_published  pipeline_deleted     file_uploaded
+quality_failed      schedule_fired
+```
+
+### Routes
+
+Routes declared in `Describe` are proxied by `ratd` under a single catch-all:
+
+```
+GET /api/v1/x/{plugin}/{route}   →   {plugin.addr}/{route}
+```
+
+So a plugin named `event-notifier` declaring `GET /events` is reachable at
+`/api/v1/x/event-notifier/events`. No route-tree rebuild — dispatch is dynamic.
+
+---
+
+## Building a platform plugin
+
+Platform plugins are typically written in **Go** (matching `ratd` and the
+generated stubs), but any language with a ConnectRPC implementation works.
+
+<Steps>
+
+### Set up the module
+
+The plugin needs the generated `plugin/v1` stubs from the `platform` module.
+In the monorepo, depend on it with a `replace` directive:
+
+```go filename="go.mod"
+module github.com/your-org/rat-plugin-example
+
+go 1.24.0
+
+require (
+	connectrpc.com/connect v1.19.1
+	github.com/rat-data/rat/platform v0.0.0
+	golang.org/x/net v0.49.0
+)
+
+replace github.com/rat-data/rat/platform => ../../platform
+```
+
+### Implement PluginService
+
+Embed `UnimplementedPluginServiceHandler`, then implement the RPCs you need:
+
+```go filename="handler.go"
+type Handler struct {
+	pluginv1connect.UnimplementedPluginServiceHandler
+}
+
+func (h *Handler) HealthCheck(
+	_ context.Context, _ *connect.Request[pluginv1.HealthCheckRequest],
+) (*connect.Response[pluginv1.HealthCheckResponse], error) {
+	return connect.NewResponse(&pluginv1.HealthCheckResponse{
+		Status: pluginv1.Status_STATUS_SERVING,
+	}), nil
+}
+
+func (h *Handler) Describe(
+	_ context.Context, _ *connect.Request[pluginv1.DescribeRequest],
+) (*connect.Response[pluginv1.DescribeResponse], error) {
+	return connect.NewResponse(&pluginv1.DescribeResponse{
+		Name:               "event-notifier",
+		Version:            "0.1.0",
+		EventSubscriptions: []string{"run_completed", "quality_failed"},
+		Routes: []*pluginv1.RouteDeclaration{
+			{Method: "GET", Path: "/events"},
+		},
+	}), nil
+}
+```
+
+### Serve over h2c and phone home
+
+`ratd` dials plugins over HTTP/2 cleartext (h2c). Serve the ConnectRPC handler
+through `h2c`, and register on startup:
+
+```go filename="main.go"
+mux := http.NewServeMux()
+path, handler := pluginv1connect.NewPluginServiceHandler(&Handler{})
+mux.Handle(path, handler)
+
+go phoneHome(os.Getenv("RATD_URL"), pluginName, pluginAddr)
+
+server := &http.Server{Addr: ":50090", Handler: h2c.NewHandler(mux, &http2.Server{})}
+server.ListenAndServe()
+```
+
+`phoneHome` POSTs `{"name": ..., "addr": ...}` to
+`{RATD_URL}/internal/plugins/register` — retrying, since `ratd` may still be
+starting. `addr` is how `ratd` dials back (e.g. `event-notifier:50090`).
+
+### Build the container
+
+The plugin depends on the local `platform` module. Pass it as a **named build
+context** so the repo-root `.dockerignore` does not exclude it:
+
+```dockerfile filename="Dockerfile"
+FROM golang:1.24-alpine AS builder
+WORKDIR /build
+COPY --from=platform . /platform/
+COPY . .
+RUN go mod tidy && CGO_ENABLED=0 go build -o /plugin .
+
+FROM alpine:3.21
+COPY --from=builder /plugin /plugin
+ENTRYPOINT ["/plugin"]
+```
+
+```bash
+docker build --build-context platform=platform \
+  -f Dockerfile -t rat-plugin-example .
+```
+
+### Run it
+
+Run the container on the same Docker network as `ratd`:
+
+```bash
+docker run -d --name event-notifier --network infra_default \
+  -e RATD_URL=http://ratd:8080 \
+  rat-plugin-example
+```
+
+Within a couple of seconds it registers. Verify:
+
+```bash
+curl -s localhost:8080/api/v1/plugins | jq '.[] | select(.name=="event-notifier")'
+```
+
+</Steps>
+
+---
+
+## Lifecycle & management
+
+`ratd` exposes a plugin management API:
+
+| Endpoint | Action |
+|---|---|
+| `GET /api/v1/plugins` | list registered plugins |
+| `PUT /api/v1/plugins/{name}/disable` | stop routing to a plugin |
+| `PUT /api/v1/plugins/{name}/enable` | reconnect a disabled plugin |
+| `DELETE /api/v1/plugins/{name}` | remove from the catalog |
+
+`ratd` runs a periodic health loop; an unhealthy plugin is marked `error` (not
+removed) so it can recover. Registrations are persisted in Postgres, so plugins
+reconnect automatically when `ratd` restarts.
+
+<Callout type="info">
+A platform plugin can also serve a **portal UI bundle**. Set the `ui` field in
+its `Describe` response and serve the bundle over HTTP — see
+[Portal Plugins](/guides/portal-plugins).
+</Callout>

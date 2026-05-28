@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 	"os"
 	"os/signal"
@@ -65,6 +66,13 @@ func validateEnv() []string {
 	if addr := os.Getenv("RAT_LISTEN_ADDR"); addr != "" {
 		if _, _, err := net.SplitHostPort(addr); err != nil {
 			errs = append(errs, fmt.Sprintf("RAT_LISTEN_ADDR=%q: must be host:port (%v)", addr, err))
+		}
+	}
+
+	// Validate internal listen address format (host:port).
+	if addr := os.Getenv("INTERNAL_LISTEN_ADDR"); addr != "" {
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			errs = append(errs, fmt.Sprintf("INTERNAL_LISTEN_ADDR=%q: must be host:port (%v)", addr, err))
 		}
 	}
 
@@ -221,17 +229,38 @@ func main() {
 		slog.Info("gRPC TLS enabled", "ca", tlsCfg.CACertFile)
 	}
 
-	// Load plugins (connects to plugin containers, health-checks).
+	// Load plugins via the new open Manager.
+	// 1. Create Manager with an empty registry.
+	// 2. If Postgres is available later, create PluginStore and load from catalog.
+	// 3. For backward compat, register any plugins declared in rat.yaml config.
 	ctx := context.Background()
-	registry, err := plugins.Load(ctx, cfg, grpcClient)
-	if err != nil {
-		slog.Error("failed to load plugins", "error", err)
-		os.Exit(1)
-	}
+	mgr := plugins.NewManager(nil, cfg.Edition, grpcClient) // catalog set after Postgres init
+	registry := mgr.Registry()
 	srv.Plugins = registry
+	srv.PluginRegistry = registry
+	// Plugin fleet metrics: closure walks registry.All() per scrape — cheap
+	// (RLock + slice copy of a handful of pointers) and avoids pulling the
+	// plugins package into api/.
+	srv.PluginHealthStats = func() (int, int) {
+		all := registry.All()
+		healthy := 0
+		for _, p := range all {
+			if p.Status == domain.PluginStatusEnabled {
+				healthy++
+			}
+		}
+		return len(all), healthy
+	}
+
+	// Register any plugins declared in rat.yaml config (backward compat).
+	// These are registered immediately via health-check + describe.
+	for name, pluginCfg := range cfg.Plugins {
+		if err := mgr.Register(ctx, name, pluginCfg.Addr); err != nil {
+			slog.Warn("config plugin registration failed, disabled", "name", name, "addr", pluginCfg.Addr, "error", err)
+		}
+	}
 
 	// Auth middleware: plugin auth (Pro) takes priority over API key (Community).
-	// If an auth plugin is loaded, use it. Otherwise, check RAT_API_KEY.
 	if registry.AuthEnabled() {
 		srv.Auth = registry.AuthMiddleware()
 	} else if apiKey := os.Getenv("RAT_API_KEY"); apiKey != "" {
@@ -239,6 +268,33 @@ func main() {
 		slog.Info("API key authentication enabled")
 	} else {
 		srv.Auth = auth.Noop()
+	}
+
+	// Runtime re-wiring callbacks — fired when plugins register/unregister.
+	mgr.OnAuthChanged = func(reg *plugins.Registry) {
+		if reg.AuthEnabled() {
+			srv.Auth = reg.AuthMiddleware()
+			slog.Info("auth middleware re-wired (plugin change)")
+		} else if apiKey := os.Getenv("RAT_API_KEY"); apiKey != "" {
+			srv.Auth = auth.APIKey(apiKey)
+		} else {
+			srv.Auth = auth.Noop()
+		}
+	}
+	mgr.OnEnforcementChanged = func(reg *plugins.Registry) {
+		if reg.EnforcementEnabled() && srv.Pipelines != nil {
+			srv.Authorizer = plugins.NewPluginAuthorizer(reg, srv.Pipelines)
+			slog.Info("enforcement authorizer re-wired (plugin change)")
+		}
+	}
+	mgr.OnCloudChanged = func(reg *plugins.Registry) {
+		if reg.CloudEnabled() {
+			srv.Cloud = reg
+			slog.Info("cloud provider re-wired (plugin change)")
+		} else {
+			srv.Cloud = nil
+			slog.Info("cloud provider unregistered (no plugin with capability \"cloud\")")
+		}
 	}
 
 	// Decode license key for display (no validation — enforcement is in plugins).
@@ -266,13 +322,16 @@ func main() {
 
 	// Shutdown hooks — populated below, called in order during graceful shutdown.
 	var (
-		stopLeader    func()
-		stopScheduler func()
-		stopEvaluator func()
-		stopReaper    func()
-		stopExecutor  func()
-		stopEventBus  func()
-		closePool     func()
+		stopLeader         func()
+		stopScheduler      func()
+		stopEvaluator      func()
+		stopReaper         func()
+		stopExecutor       func()
+		stopEventBus       func()
+		stopHealthLoop     func()
+		stopDispatcher     func()
+		closePool          func()
+		closeHeartbeatPool func()
 	)
 
 	// Event bus — populated below when DATABASE_URL is set.
@@ -287,6 +346,7 @@ func main() {
 	// Wire Postgres stores when DATABASE_URL is set.
 	// If not set, stores are nil (useful for development/testing without a DB).
 	var pool *pgxpool.Pool
+	var heartbeatPool *pgxpool.Pool
 	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
 		ctx := context.Background()
 
@@ -297,6 +357,46 @@ func main() {
 			os.Exit(1)
 		}
 		closePool = func() { pool.Close() }
+
+		// Dedicated single-connection pool for the leader heartbeat ping.
+		// If RAT_HEARTBEAT_POOL_ENABLED=false, fall back to the shared pool
+		// (saves one Postgres connection in tiny single-instance setups).
+		//
+		// Resilience: retry with exponential backoff (1s, 2s, 4s, 8s) before
+		// giving up. On terminal failure, log a WARN and leave heartbeatPool
+		// nil — the downstream leader wiring (see pingPool fallback below)
+		// already handles nil by reusing the shared pool. We trade the
+		// pool-starvation guard for boot survivability so a transient
+		// Postgres slowness (Kubernetes parallel start, slow host) doesn't
+		// crash-loop ratd.
+		if os.Getenv("RAT_HEARTBEAT_POOL_ENABLED") != "false" {
+			var hbPool *pgxpool.Pool
+			var hbErr error
+			backoff := time.Second
+			for attempt := 1; attempt <= 5; attempt++ {
+				hbPool, hbErr = postgres.NewHeartbeatPool(ctx, dbURL)
+				if hbErr == nil {
+					break
+				}
+				slog.Warn("heartbeat pool connect attempt failed",
+					"attempt", attempt, "error", hbErr, "next_retry_in", backoff)
+				if attempt < 5 {
+					time.Sleep(backoff)
+					backoff *= 2
+				}
+			}
+			if hbErr != nil {
+				slog.Warn("heartbeat pool unavailable after retries — falling back to shared pool; "+
+					"pool-starvation guard disabled", "error", hbErr)
+				// heartbeatPool stays nil; downstream code already handles this.
+			} else {
+				heartbeatPool = hbPool
+				closeHeartbeatPool = func() { heartbeatPool.Close() }
+			}
+		} else {
+			slog.Info("heartbeat pool disabled — falling back to shared pool",
+				"env", "RAT_HEARTBEAT_POOL_ENABLED=false")
+		}
 
 		if err := postgres.Migrate(ctx, pool); err != nil {
 			slog.Error("failed to run migrations", "error", err)
@@ -315,15 +415,17 @@ func main() {
 		pipelineStore := postgres.NewPipelineStore(pool)
 		runStore := postgres.NewRunStore(pool)
 
-		// Wire event bus into stores for automatic NOTIFY on state changes.
+		// Wire event bus into stores and server for automatic NOTIFY on state changes.
 		if eventBus != nil {
 			pipelineStore.EventBus = eventBus
 			runStore.EventBus = eventBus
+			srv.EventBus = eventBus
 		}
 
 		srv.Pipelines = pipelineStore
 		srv.Versions = postgres.NewVersionStore(pool)
 		srv.Publisher = postgres.NewPipelinePublisher(pool)
+		srv.TxRunner = postgres.NewTxRunner(pool)
 		srv.Runs = runStore
 		srv.Namespaces = postgres.NewNamespaceStore(pool)
 		srv.Schedules = postgres.NewScheduleStore(pool)
@@ -331,10 +433,39 @@ func main() {
 		srv.TableMetadata = postgres.NewTableMetadataStore(pool)
 		srv.Triggers = postgres.NewTriggerStore(pool)
 		srv.Audit = postgres.NewAuditStore(pool)
+		srv.FailedMerges = postgres.NewFailedMergesStore(pool)
 		srv.Settings = postgres.NewSettingsStore(pool)
 
 		srv.DBHealth = postgres.NewHealthChecker(pool)
+		// Pool-saturation metrics: expose pgxpool.Stat() to /metrics via a
+		// closure so the api package never imports pgx. Returning int32
+		// (pgx's native type) avoids a per-scrape integer cast.
+		srv.DBPoolStats = func() (int32, int32) {
+			st := pool.Stat()
+			return st.TotalConns(), st.AcquiredConns()
+		}
+		if heartbeatPool != nil {
+			srv.HeartbeatPoolStats = func() (int32, int32) {
+				st := heartbeatPool.Stat()
+				return st.TotalConns(), st.AcquiredConns()
+			}
+		}
 		slog.Info("postgres stores initialized")
+
+		// Wire plugin catalog persistence now that Postgres is available.
+		pluginStore := postgres.NewPluginStore(pool)
+		srv.PluginCatalog = pluginStore
+		srv.PluginSources = pluginStore
+		srv.PluginPolicies = pluginStore
+		srv.PluginManager = mgr
+
+		// Reconnect Manager to persistent catalog and load saved plugins.
+		mgr.SetPolicies(pluginStore)
+		mgr.SetSources(pluginStore)
+		mgr.SetCatalog(pluginStore)
+		if err := mgr.LoadFromCatalog(ctx); err != nil {
+			slog.Warn("failed to load plugins from catalog", "error", err)
+		}
 
 		// Wire enforcement authorizer after Postgres stores are available.
 		if registry.EnforcementEnabled() {
@@ -407,56 +538,131 @@ func main() {
 		slog.Warn("S3_ENDPOINT not set, running without storage")
 	}
 
-	// Wire cloud provider if cloud plugin is available.
+	// Cloud provider: the registry implements api.CloudProvider directly via
+	// the cloudv1 proto. Wire it now if a cloud plugin was registered at boot;
+	// runtime registration/unregistration is handled by OnCloudChanged above.
+	// Runner integration (passing creds into pipeline execution) is deferred —
+	// see ADR-018.
 	if registry.CloudEnabled() {
 		srv.Cloud = registry
-		slog.Info("cloud provider initialized (plugin)")
+		slog.Info("cloud provider wired (capability \"cloud\")")
 	}
 
-	// Wire executor: plugin executor (Pro) takes priority over WarmPoolExecutor (Community).
-	if registry.ExecutorEnabled() {
-		addr := registry.GetExecutorAddr()
-		exec := executor.NewPluginExecutor(addr, srv.Runs, grpcClient)
-		exec.OnRunComplete = func(ctx context.Context, run *domain.Run, status domain.RunStatus) {
-			if status != domain.RunStatusSuccess || srv.Triggers == nil {
-				return
-			}
-			srv.EvaluatePipelineSuccessTriggers(ctx, run)
+	// Wire executor: AtomicExecutor provides thread-safe dynamic swapping.
+	// Plugin executor (Pro) takes priority; community executor is the fallback.
+	// When an executor plugin registers/unregisters at runtime, the OnExecutorChanged
+	// callback swaps the active executor without downtime.
+	atomicExec := executor.NewAtomicExecutor()
+	srv.Executor = atomicExec
+
+	onComplete := func(ctx context.Context, run *domain.Run, status domain.RunStatus) {
+		if status != domain.RunStatusSuccess || srv.Triggers == nil {
+			return
 		}
-		srv.Executor = exec
-		srv.RunnerHealth = transport.NewTCPHealthChecker(addr, "runner")
-		exec.Start(ctx)
-		stopExecutor = func() { exec.Stop() }
-		slog.Info("executor initialized (plugin)", "addr", addr)
-	} else if runnerAddr := os.Getenv("RUNNER_ADDR"); runnerAddr != "" {
+		srv.EvaluatePipelineSuccessTriggers(ctx, run)
+	}
+
+	// Build the community executor from RUNNER_ADDR (if set).
+	// This is kept running as a persistent fallback — never stopped.
+	type stoppable interface{ Stop() }
+	var communityExec api.Executor
+	var stopCommunityExec func()
+	if runnerAddr := os.Getenv("RUNNER_ADDR"); runnerAddr != "" {
 		addrs := executor.ParseRunnerAddrs(runnerAddr)
 		srv.RunnerHealth = transport.NewTCPHealthChecker(addrs[0], "runner")
-		onComplete := func(ctx context.Context, run *domain.Run, status domain.RunStatus) {
-			if status != domain.RunStatusSuccess || srv.Triggers == nil {
-				return
-			}
-			srv.EvaluatePipelineSuccessTriggers(ctx, run)
-		}
 
 		if len(addrs) > 1 {
-			// Multiple runner replicas — use round-robin dispatch with
-			// RESOURCE_EXHAUSTED failover across all runners.
 			rr := executor.NewRoundRobinExecutor(addrs, srv.Runs, grpcClient)
 			rr.SetLandingZones(srv.LandingZones)
 			rr.SetOnRunComplete(onComplete)
-			srv.Executor = rr
 			rr.Start(ctx)
-			stopExecutor = func() { rr.Stop() }
-			slog.Info("executor initialized (round-robin)", "runners", len(addrs), "runner_addrs", strings.Join(addrs, ","))
+			communityExec = rr
+			stopCommunityExec = func() { rr.Stop() }
+			slog.Info("community executor ready (round-robin)", "runners", len(addrs), "runner_addrs", strings.Join(addrs, ","))
 		} else {
-			// Single runner — use direct WarmPoolExecutor (original behavior).
 			exec := executor.NewWarmPoolExecutor(addrs[0], srv.Runs, grpcClient)
 			exec.LandingZones = srv.LandingZones
 			exec.OnRunComplete = onComplete
-			srv.Executor = exec
 			exec.Start(ctx)
-			stopExecutor = func() { exec.Stop() }
-			slog.Info("executor initialized (warmpool)", "runner_addr", addrs[0])
+			communityExec = exec
+			stopCommunityExec = func() { exec.Stop() }
+			slog.Info("community executor ready (warmpool)", "runner_addr", addrs[0])
+		}
+	}
+
+	// Track the currently active plugin executor so we can stop it on swap.
+	var activePluginExec stoppable
+
+	// activatePluginExecutor creates and starts a new PluginExecutor, swaps it
+	// into the AtomicExecutor, and stops the previous plugin executor (if any).
+	activatePluginExecutor := func(addr string) {
+		pluginExec := executor.NewPluginExecutor(addr, srv.Runs, grpcClient)
+		pluginExec.OnRunComplete = onComplete
+		pluginExec.Start(ctx)
+
+		old := atomicExec.Swap(pluginExec)
+		srv.RunnerHealth = transport.NewTCPHealthChecker(addr, "runner")
+
+		// Stop the previous plugin executor (not the community one — it keeps running).
+		if activePluginExec != nil {
+			activePluginExec.Stop()
+		}
+		activePluginExec = pluginExec
+
+		_ = old // community exec keeps running for in-flight fallback
+		slog.Info("executor activated (plugin)", "addr", addr)
+	}
+
+	// activateCommunityExecutor swaps in the community executor and stops the
+	// previous plugin executor.
+	activateCommunityExecutor := func() {
+		if communityExec == nil {
+			slog.Warn("no community executor available for fallback")
+			return
+		}
+		atomicExec.Swap(communityExec)
+
+		if activePluginExec != nil {
+			activePluginExec.Stop()
+			activePluginExec = nil
+		}
+		slog.Info("executor activated (community fallback)")
+	}
+
+	// Initial activation: plugin executor if already registered, else community.
+	if registry.ExecutorEnabled() {
+		addr := registry.GetExecutorAddr()
+		activatePluginExecutor(addr)
+	} else if communityExec != nil {
+		atomicExec.Swap(communityExec)
+		slog.Info("executor initialized (community)")
+	}
+
+	// Wire runner plugin lister for GET /api/v1/runner/plugins.
+	// Uses the community executor's gRPC connection to call ListPlugins on the runner.
+	if communityExec != nil {
+		if lister, ok := communityExec.(api.RunnerPluginLister); ok {
+			srv.RunnerPlugins = lister
+		}
+	}
+
+	// Dynamic re-wiring: fired when an executor plugin registers or unregisters.
+	mgr.OnExecutorChanged = func(reg *plugins.Registry) {
+		if reg.ExecutorEnabled() {
+			addr := reg.GetExecutorAddr()
+			activatePluginExecutor(addr)
+		} else {
+			activateCommunityExecutor()
+		}
+	}
+
+	// Shutdown hook: stop both plugin and community executors.
+	stopExecutor = func() {
+		if activePluginExec != nil {
+			activePluginExec.Stop()
+		}
+		if stopCommunityExec != nil {
+			stopCommunityExec()
 		}
 	}
 
@@ -474,7 +680,18 @@ func main() {
 		// Wire scheduler when executor is available.
 		if srv.Executor != nil {
 			sched := scheduler.New(srv.Schedules, srv.Pipelines, srv.Runs, srv.Executor, 30*time.Second)
+			if eventBus != nil {
+				sched.EventBus = eventBus
+			}
 			sched.Start(ctx)
+			// Scheduler tick metrics: published as Prometheus gauges by the
+			// /metrics handler. Closure captures *sched so the api package
+			// doesn't import scheduler. The first scrape before any tick
+			// has fired returns (0, 0) — fine for both gauges.
+			srv.SchedulerMetrics = func() (float64, int) {
+				dur, dispatched := sched.LastTickStats()
+				return dur.Seconds(), dispatched
+			}
 			stopScheduler = func() { sched.Stop() }
 			slog.Info("scheduler started")
 		}
@@ -502,7 +719,7 @@ func main() {
 			if nessieURL := os.Getenv("NESSIE_URL"); nessieURL != "" {
 				nessieClient = reaper.NewHTTPNessieClient(nessieURL)
 			}
-			reap := reaper.New(srv.Settings, srv.Runs, srv.Pipelines, srv.LandingZones, srv.Storage, srv.Audit, nessieClient)
+			reap := reaper.New(srv.Settings, srv.Runs, srv.Pipelines, srv.LandingZones, srv.Storage, srv.Audit, srv.FailedMerges, nessieClient)
 			reap.Start(ctx)
 			srv.Reaper = reap
 			stopReaper = func() { reap.Stop() }
@@ -537,19 +754,70 @@ func main() {
 		// Leader election via Postgres advisory lock. Only the replica that
 		// acquires the lock starts background workers. If the leader dies,
 		// Postgres releases the lock and another replica takes over.
+		//
+		// A heartbeat goroutine pings Postgres every 5s while leader; two
+		// consecutive failures force a voluntary unlock so a partitioned
+		// replica cannot indefinitely hold the lock without running workers.
 		tryLock := func(ctx context.Context) (bool, error) {
 			var acquired bool
 			err := pool.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", leader.AdvisoryLockID).Scan(&acquired)
 			return acquired, err
 		}
-		elector := leader.New(tryLock, leader.RetryInterval, startBackgroundWorkers)
+		// Heartbeat ping uses its own pool so a saturated main pool can't
+		// starve liveness checks. Falls back to the shared pool when the
+		// dedicated one is disabled via RAT_HEARTBEAT_POOL_ENABLED=false.
+		pingPool := pool
+		heartbeatSource := "shared-pool"
+		if heartbeatPool != nil {
+			pingPool = heartbeatPool
+			heartbeatSource = "dedicated-pool"
+		}
+		ping := func(ctx context.Context) error { return pingPool.Ping(ctx) }
+		unlock := func(ctx context.Context) error {
+			_, err := pool.Exec(ctx, "SELECT pg_advisory_unlock($1)", leader.AdvisoryLockID)
+			return err
+		}
+		elector := leader.New(
+			tryLock,
+			leader.RetryInterval,
+			startBackgroundWorkers,
+			leader.WithPing(ping),
+			leader.WithUnlock(unlock),
+		)
 		elector.Start(ctx)
 		stopLeader = func() { elector.Stop() }
-		slog.Info("leader election started (advisory lock)")
+		slog.Info("leader election started (advisory lock)",
+			"heartbeat_interval", leader.DefaultHeartbeatInterval,
+			"heartbeat_source", heartbeatSource)
 	default:
 		// No database — start workers directly (single-instance mode).
 		stopFn := startBackgroundWorkers(ctx)
 		stopLeader = stopFn
+	}
+
+	// Start plugin health loop (30s interval, checks all registered plugins).
+	// Catalog may be nil if Postgres is not available — health loop handles that.
+	healthLoop := plugins.NewHealthLoop(registry, mgr.Catalog())
+	healthLoop.OnTransition = func(p *plugins.Plugin, _, _ domain.PluginStatus) {
+		mgr.NotifyHealthTransition(p.Name)
+	}
+	healthLoop.Start(ctx)
+	stopHealthLoop = func() { healthLoop.Stop() }
+	slog.Info("plugin health loop started")
+
+	// Start plugin reconciler. Periodically WARNs (but does not auto-fix) on
+	// any divergence between the in-memory registry and the catalog. The
+	// goroutine self-terminates when ctx is cancelled, so no explicit stop is
+	// needed — graceful shutdown takes care of it.
+	mgr.StartReconciler(ctx, plugins.DefaultReconcilerInterval)
+	slog.Info("plugin reconciler started", "interval", plugins.DefaultReconcilerInterval)
+
+	// Start event dispatcher if event bus is available.
+	if eventBus != nil {
+		adapter := &eventBusAdapter{bus: eventBus}
+		dispatcher := plugins.NewEventDispatcher(registry, adapter)
+		dispatcher.Start(ctx)
+		stopDispatcher = func() { dispatcher.Stop() }
 	}
 
 	// Warn if S3 or Postgres credentials are still set to well-known defaults.
@@ -568,9 +836,15 @@ func main() {
 		slog.Info("rate limiting enabled", "rps", cfg.RequestsPerSecond, "burst", cfg.Burst)
 	}
 
-	router := api.NewRouter(srv)
+	publicRouter := api.NewRouter(srv)
+	// NewInternalRouter delegates route wiring to
+	// api.MountAllInternalRoutes (see platform/internal/api/internal_routes.go
+	// for the single source of truth + the trust-model block). Every
+	// internal endpoint is mounted there; this call site stays a one-liner
+	// so a future "what's on :8090?" question has a single file to read.
+	internalRouter := api.NewInternalRouter(srv)
 
-	// Listen address: RAT_LISTEN_ADDR > PORT (legacy) > default 127.0.0.1:8080.
+	// Public listen address: RAT_LISTEN_ADDR > PORT (legacy) > default 127.0.0.1:8080.
 	// Default binds to localhost only — users must explicitly set 0.0.0.0:8080
 	// for network access, which triggers a security warning if no API key is set.
 	addr := "127.0.0.1:8080"
@@ -580,14 +854,37 @@ func main() {
 		addr = ":" + port
 	}
 
+	// Internal listen address: INTERNAL_LISTEN_ADDR > default 127.0.0.1:8090.
+	//
+	// This second listener hosts service-to-service callbacks (runner run-status
+	// callback, plugin phone-home) with NO authentication. Its trust model is
+	// "the network is the perimeter" — the operator MUST keep this port off the
+	// public internet and ideally off the host network too.
+	//
+	// In a Docker compose deployment the default is overridden to 0.0.0.0:8090
+	// so other containers on the bridge can reach it, while the port stays
+	// unpublished to the host (no `ports:` mapping for 8090).
+	internalAddr := "127.0.0.1:8090"
+	if v := os.Getenv("INTERNAL_LISTEN_ADDR"); v != "" {
+		internalAddr = v
+	}
+
 	// Warn if listening on all interfaces without authentication.
 	if strings.HasPrefix(addr, "0.0.0.0") && os.Getenv("RAT_API_KEY") == "" && !registry.AuthEnabled() {
 		slog.Warn("listening on 0.0.0.0 without RAT_API_KEY — API is unauthenticated and accessible from the network")
 	}
 
-	httpServer := &http.Server{
+	// Refuse to share a port between the public and internal listeners — that
+	// would defeat the whole point of separating them.
+	if internalAddr == addr {
+		slog.Error("INTERNAL_LISTEN_ADDR must not equal RAT_LISTEN_ADDR",
+			"public", addr, "internal", internalAddr)
+		os.Exit(1)
+	}
+
+	publicServer := &http.Server{
 		Addr:              addr,
-		Handler:           router,
+		Handler:           publicRouter,
 		ReadTimeout:       60 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      120 * time.Second,
@@ -597,22 +894,73 @@ func main() {
 		},
 	}
 
+	// The internal listener intentionally does NOT inherit TLS config — it is
+	// expected to live on a trusted internal network where plaintext is fine.
+	// Operators who want TLS on the internal listener can put a sidecar in
+	// front of it; the simpler default keeps service-to-service callbacks
+	// cheap and avoids cert rotation pain inside the container.
+	internalServer := &http.Server{
+		Addr:              internalAddr,
+		Handler:           internalRouter,
+		ReadTimeout:       60 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	// Optional pprof endpoint for production diagnostics (goroutine dumps,
+	// heap, CPU profile, trace). Disabled by default; opt in by setting
+	// RAT_PPROF_ADDR (e.g. "127.0.0.1:6060"). Always bound to a SEPARATE
+	// listener — never mixed with the public or internal listeners, both
+	// to keep concerns separate and so operators can firewall it
+	// independently. The handlers expose sensitive runtime state, so the
+	// default recommendation is loopback-only access via SSH tunnel.
+	if pprofAddr := os.Getenv("RAT_PPROF_ADDR"); pprofAddr != "" {
+		pprofMux := http.NewServeMux()
+		pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
+		pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		// Plus the runtime profiles via pprof.Handler:
+		for _, p := range []string{"goroutine", "heap", "allocs", "threadcreate", "block", "mutex"} {
+			pprofMux.Handle("/debug/pprof/"+p, pprof.Handler(p))
+		}
+		go func() {
+			slog.Info("pprof endpoint enabled", "addr", pprofAddr,
+				"warning", "this exposes goroutine dumps and heap — bind to loopback only")
+			srv := &http.Server{Addr: pprofAddr, Handler: pprofMux}
+			if err := srv.ListenAndServe(); err != nil {
+				slog.Error("pprof server stopped", "error", err)
+			}
+		}()
+	}
+
 	// Start HTTP(S) server in a goroutine.
 	tlsCertFile := os.Getenv("TLS_CERT_FILE")
 	tlsKeyFile := os.Getenv("TLS_KEY_FILE")
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	if tlsCertFile != "" && tlsKeyFile != "" {
 		go func() {
-			errCh <- httpServer.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
+			errCh <- publicServer.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
 		}()
-		slog.Info("starting ratd (HTTPS)", "addr", addr, "version", "2.0.0-dev")
+		slog.Info("starting ratd public listener (HTTPS)", "addr", addr, "version", api.Version)
 	} else {
 		go func() {
-			errCh <- httpServer.ListenAndServe()
+			errCh <- publicServer.ListenAndServe()
 		}()
-		slog.Info("starting ratd", "addr", addr, "version", "2.0.0-dev")
+		slog.Info("starting ratd public listener", "addr", addr, "version", api.Version)
 	}
+
+	// The internal listener is always plaintext HTTP — see comment on
+	// internalServer above for rationale.
+	go func() {
+		errCh <- internalServer.ListenAndServe()
+	}()
+	slog.Info("starting ratd internal listener (service-to-service callbacks)",
+		"addr", internalAddr,
+		"warning", "do NOT expose this port to the public network")
 
 	// Wait for shutdown signal or server error.
 	sigCh := make(chan os.Signal, 1)
@@ -628,23 +976,35 @@ func main() {
 		}
 	}
 
-	// Graceful shutdown: drain HTTP connections (15s timeout).
+	// Graceful shutdown: drain HTTP connections on both listeners (15s timeout).
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		slog.Error("http shutdown error", "error", err)
+	if err := publicServer.Shutdown(shutdownCtx); err != nil {
+		slog.Error("public http shutdown error", "error", err)
+	}
+	if err := internalServer.Shutdown(shutdownCtx); err != nil {
+		slog.Error("internal http shutdown error", "error", err)
 	}
 
-	// Ordered cleanup: leader (stops scheduler/evaluator/reaper) → executor → event bus → database pool.
+	// Ordered cleanup: health loop → dispatcher → leader → executor → event bus → heartbeat pool → database pool.
+	// Heartbeat pool closes before the main pool so any final leader.Stop()
+	// unlock attempt (which uses the main pool) still has a connection.
+	// stopHealthLoop and stopExecutor are assigned unconditionally during
+	// startup, so they're always non-nil here (no guard — unlike the
+	// conditional stops, which are only set when their feature is enabled).
+	stopHealthLoop()
+	slog.Info("plugin health loop stopped")
+	if stopDispatcher != nil {
+		stopDispatcher()
+		slog.Info("event dispatcher stopped")
+	}
 	if stopLeader != nil {
 		stopLeader()
 		slog.Info("leader elector stopped")
 	}
-	if stopExecutor != nil {
-		stopExecutor()
-		slog.Info("executor stopped")
-	}
+	stopExecutor()
+	slog.Info("executor stopped")
 	if stopEventBus != nil {
 		stopEventBus()
 		slog.Info("event bus stopped")
@@ -657,10 +1017,35 @@ func main() {
 		srv.WebhookRateLimiterStop()
 		slog.Info("webhook rate limiter stopped")
 	}
+	if closeHeartbeatPool != nil {
+		closeHeartbeatPool()
+		slog.Info("heartbeat pool closed")
+	}
 	if closePool != nil {
 		closePool()
 		slog.Info("database pool closed")
 	}
 
 	slog.Info("ratd shutdown complete")
+}
+
+// eventBusAdapter bridges postgres.EventBus (returns <-chan postgres.Event) to
+// plugins.DispatchEventBus (returns <-chan plugins.DispatchEvent).
+type eventBusAdapter struct {
+	bus *postgres.PgEventBus
+}
+
+func (a *eventBusAdapter) Subscribe(channel string) (<-chan plugins.DispatchEvent, func()) {
+	pgCh, cancel := a.bus.Subscribe(channel)
+	out := make(chan plugins.DispatchEvent, cap(pgCh))
+	go func() {
+		defer close(out)
+		for ev := range pgCh {
+			out <- plugins.DispatchEvent{
+				Channel: ev.Channel,
+				Payload: ev.Payload,
+			}
+		}
+	}()
+	return out, cancel
 }

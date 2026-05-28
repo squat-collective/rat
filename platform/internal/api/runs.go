@@ -34,6 +34,7 @@ type RunStore interface {
 	DeleteRunsBeyondLimit(ctx context.Context, pipelineID uuid.UUID, keepCount int) (int, error)
 	DeleteRunsOlderThan(ctx context.Context, olderThan time.Time) (int, error)
 	ListStuckRuns(ctx context.Context, olderThan time.Time) ([]domain.Run, error)
+	ListStuckPendingRuns(ctx context.Context, olderThan time.Time) ([]domain.Run, error)
 
 	// LatestRunPerPipeline returns the most recent run for each of the given pipeline IDs
 	// in a single batch query, avoiding N+1 queries when building the lineage graph.
@@ -87,6 +88,10 @@ func MountRunRoutes(r chi.Router, srv *Server) {
 // Pagination is pushed to SQL via LIMIT/OFFSET for efficiency.
 // Date range filters: ?started_after=RFC3339 and ?started_before=RFC3339.
 // Sorting: ?sort=field or ?sort=-field (descending).
+//
+// When an Authorizer is configured (Pro), the page is post-filtered to only
+// runs whose parent pipeline the caller can read. Same pagination caveat as
+// HandleListPipelines applies.
 func (s *Server) HandleListRuns(w http.ResponseWriter, r *http.Request) {
 	limit, offset := parsePagination(r)
 	filter := RunFilter{
@@ -123,16 +128,54 @@ func (s *Server) HandleListRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	runs = filterRunsByPipelineAccess(r.Context(), s, runs, "read")
+
 	total, err := s.Runs.CountRuns(r.Context(), filter)
 	if err != nil {
 		internalError(w, "internal error", err)
 		return
+	}
+	if plugins.UserFromContext(r.Context()) != nil {
+		total = len(runs)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"runs":  runs,
 		"total": total,
 	})
+}
+
+// filterRunsByPipelineAccess restricts runs to those whose parent pipeline
+// the caller can access. Dedups pipeline IDs to keep the per-page Filter
+// cost proportional to the number of distinct pipelines, not runs.
+func filterRunsByPipelineAccess(ctx context.Context, s *Server, runs []domain.Run, action string) []domain.Run {
+	if len(runs) == 0 {
+		return runs
+	}
+	seen := make(map[string]bool)
+	uniqueIDs := make([]string, 0, len(runs))
+	for _, run := range runs {
+		id := run.PipelineID.String()
+		if !seen[id] {
+			seen[id] = true
+			uniqueIDs = append(uniqueIDs, id)
+		}
+	}
+	allowed := s.filterAccess(ctx, "pipeline", action, uniqueIDs)
+	if len(allowed) == len(uniqueIDs) {
+		return runs
+	}
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, id := range allowed {
+		allowedSet[id] = true
+	}
+	out := make([]domain.Run, 0, len(runs))
+	for _, run := range runs {
+		if allowedSet[run.PipelineID.String()] {
+			out = append(out, run)
+		}
+	}
+	return out
 }
 
 // HandleGetRun returns a single run by ID.
@@ -146,6 +189,10 @@ func (s *Server) HandleGetRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if run == nil {
 		errorJSON(w, "run not found", "NOT_FOUND", http.StatusNotFound)
+		return
+	}
+
+	if !s.requireAccess(w, r, "pipeline", run.PipelineID.String(), "read") {
 		return
 	}
 
@@ -205,20 +252,35 @@ func (s *Server) HandleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Inject cloud credentials if cloud plugin is available
+	// Inject cloud credentials if a cloud provider plugin is available and the
+	// caller is authenticated. The runner-side integration (closing the loop
+	// from ADR-018) consumes `run.S3Overrides` as the per-run S3Credentials in
+	// the SubmitRequest proto — see executor.s3OverridesToProto and the runner
+	// server's _s3_credentials_to_dict.
+	//
+	// Failure to fetch credentials is logged but never blocks the run — pipelines
+	// that don't need cloud credentials (the no-cloud-plugin path) must keep
+	// working. The Expiry field is checked by the HTTP handler (cloud.go) but is
+	// NOT propagated to the runner: it's a freshness gate for ratd only.
+	//
+	// The cloud plugin call is OUTSIDE any DB transaction (per ADR-022).
 	if s.Cloud != nil && s.Cloud.CloudEnabled() {
 		user := plugins.UserFromContext(r.Context())
 		if user != nil {
-			creds, err := s.Cloud.GetCredentials(r.Context(), user.UserId, req.Namespace)
+			creds, err := s.Cloud.GetCredentials(r.Context(), user.UserID, req.Namespace)
 			if err != nil {
-				slog.Warn("cloud credentials unavailable, using defaults", "error", err)
-			} else {
+				// Don't fail the run — non-cloud-aware pipelines still work.
+				slog.Warn("cloud credentials unavailable, proceeding without overrides",
+					"run_id", run.ID, "namespace", req.Namespace, "error", err)
+			} else if creds != nil {
+				// Keys MUST match the lowercase proto field names consumed by
+				// s3OverridesToProto (executor/plugin.go and warmpool.go) and by
+				// the runner's _s3_credentials_to_dict.
 				run.S3Overrides = map[string]string{
-					"ACCESS_KEY":     creds.AccessKey,
-					"SECRET_KEY":     creds.SecretKey,
-					"SESSION_TOKEN":  creds.SessionToken,
-					"ENDPOINT":       creds.Endpoint,
-					"BUCKET":         creds.Bucket,
+					"access_key_id":     creds.AccessKey,
+					"secret_access_key": creds.SecretKey,
+					"session_token":     creds.SessionToken,
+					"region":            creds.Region,
 				}
 			}
 		}

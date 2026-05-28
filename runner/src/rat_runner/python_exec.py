@@ -5,6 +5,11 @@ Security: The sandbox uses multiple layers of defense:
 2. Blocked module imports (os, sys, subprocess, etc.)
 3. AST validation rejecting dunder attribute access (__class__, __subclasses__, etc.)
 4. Restricted DuckDB connection wrapper blocking dangerous commands
+
+These layers are defense-in-depth on top of the container-level trust boundary
+(read-only fs, dropped capabilities, no-new-privileges); they MUST NOT be relied
+upon for new threat models — see docs/adr/017-python-pipeline-trust-model.md for
+the trust contract.
 """
 
 from __future__ import annotations
@@ -155,14 +160,14 @@ class _DunderAccessChecker(ast.NodeVisitor):
     - x.__globals__
     """
 
-    def visit_Attribute(self, node: ast.Attribute) -> None:
+    def visit_Attribute(self, node: ast.Attribute) -> None:  # noqa: N802 — ast.NodeVisitor API mandates the CamelCase node name
         if node.attr in _BLOCKED_DUNDERS:
             raise _SandboxViolationError(
                 f"Access to '{node.attr}' is not allowed in pipelines (line {node.lineno})"
             )
         self.generic_visit(node)
 
-    def visit_Subscript(self, node: ast.Subscript) -> None:
+    def visit_Subscript(self, node: ast.Subscript) -> None:  # noqa: N802 — ast.NodeVisitor API mandates the CamelCase node name
         # Block dict-style access like obj["__class__"]
         if (
             isinstance(node.slice, ast.Constant)

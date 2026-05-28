@@ -376,7 +376,7 @@ class TestPreviewErrors:
             nessie_config=nessie_config,
         )
 
-        assert "No pipeline.py or pipeline.sql found" in result.error
+        assert "No pipeline.py, pipeline.sql, or plugin pipeline-type file" in result.error
 
     @patch(f"{_MOD}.DuckDBEngine")
     @patch(f"{_MOD}.read_s3_text")
@@ -422,3 +422,46 @@ class TestPreviewErrors:
         # Even on error, logs should be captured
         assert len(result.logs) > 0
         assert any("Preview failed" in log.message for log in result.logs)
+
+
+class TestPreviewPluginType:
+    """Preview of a pipeline whose type is provided by a runner plugin."""
+
+    @patch(f"{_MOD}.DuckDBEngine")
+    @patch(f"{_MOD}.read_s3_text")
+    @patch(f"{_MOD}.PluginRegistry")
+    def test_plugin_pipeline_type_preview(
+        self, mock_registry_cls, mock_read, mock_engine_cls, s3_config, nessie_config
+    ):
+        """A pipeline.<ext> file is detected and previewed via the plugin type."""
+        # Only a pipeline.prql file exists — no pipeline.py / pipeline.sql.
+        mock_read.side_effect = lambda cfg, key: (
+            "from data" if key.endswith("pipeline.prql") else None
+        )
+        mock_engine_cls.return_value = MagicMock()
+
+        # A fake plugin pipeline type that owns the .prql extension.
+        fake_type = MagicMock()
+        fake_type.file_extension = "prql"
+        fake_type.execute.return_value = pa.table({"value": list(range(120))})
+
+        registry = MagicMock()
+        registry.pipeline_type_names.return_value = ["prql"]
+        registry.get_pipeline_type.return_value = fake_type
+        registry.strategy_names.return_value = []
+        mock_registry_cls.return_value = registry
+
+        result = preview_pipeline(
+            namespace="default",
+            layer="bronze",
+            pipeline_name="prql_orders",
+            s3_config=s3_config,
+            nessie_config=nessie_config,
+            preview_limit=50,
+        )
+
+        assert result.error == ""
+        fake_type.execute.assert_called_once()
+        assert result.arrow_table is not None
+        assert result.arrow_table.num_rows == 50  # sliced to preview_limit
+        assert result.total_row_count == 120

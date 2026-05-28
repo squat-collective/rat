@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
+import logging
+import threading
+
 import duckdb
 import pyarrow as pa
 
 from rat_runner.config import DuckDBConfig, S3Config
+
+logger = logging.getLogger(__name__)
+
+
+class QueryTimeoutError(RuntimeError):
+    """Raised when a SQL execution exceeds its per-call watchdog timeout.
+
+    Mirrors rat_query.engine.QueryTimeoutError — duplicated rather than shared
+    because the runner and query packages have no common sibling and a new
+    shared package would force a coordinated Dockerfile/pyproject change in
+    both services (see config.py task P6-01 note).
+    """
 
 
 def _to_arrow_table(arrow_result: pa.Table | pa.RecordBatchReader) -> pa.Table:
@@ -57,10 +72,51 @@ class DuckDBEngine:
             self._conn = self._create_connection()
         return self._conn
 
-    def query_arrow(self, sql: str) -> pa.Table:
-        """Execute SQL and return result as a PyArrow Table."""
-        result = self.conn.execute(sql)
-        return _to_arrow_table(result.arrow())
+    def query_arrow(self, sql: str, timeout_seconds: int | None = None) -> pa.Table:
+        """Execute SQL and return result as a PyArrow Table.
+
+        Per-call timeout:
+            When ``timeout_seconds`` is provided (or
+            DuckDBConfig.quality_test_timeout_seconds when not), a
+            threading.Timer fires self.conn.interrupt() once the deadline
+            passes. DuckDB surfaces the interrupt as duckdb.InterruptException
+            which we re-raise as QueryTimeoutError so callers (notably the
+            quality-test runner) can record the timeout cleanly rather than
+            letting it propagate as an unhandled exception that crashes the
+            run.
+
+            Pipeline SQL itself still calls this without a timeout argument
+            today; the wiring is opt-in so we don't accidentally interrupt
+            legitimately long-running materializations.
+        """
+        if timeout_seconds is None:
+            result = self.conn.execute(sql)
+            return _to_arrow_table(result.arrow())
+
+        timed_out = threading.Event()
+
+        def _on_deadline() -> None:
+            # Mark the timeout BEFORE calling interrupt so the except branch
+            # can reliably distinguish "user pressed cancel later" from
+            # "watchdog fired".
+            timed_out.set()
+            try:
+                self.conn.interrupt()
+            except Exception:
+                logger.exception("conn.interrupt() failed inside watchdog")
+
+        timer = threading.Timer(timeout_seconds, _on_deadline)
+        timer.daemon = True
+        timer.start()
+        try:
+            result = self.conn.execute(sql)
+            return _to_arrow_table(result.arrow())
+        except duckdb.InterruptException as e:
+            if timed_out.is_set():
+                raise QueryTimeoutError(f"query exceeded {timeout_seconds}s timeout") from e
+            raise
+        finally:
+            timer.cancel()
 
     def execute(self, sql: str) -> None:
         """Execute SQL without returning results."""

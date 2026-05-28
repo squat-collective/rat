@@ -2,9 +2,13 @@ package postgres_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
+	"github.com/google/uuid"
+	"github.com/rat-data/rat/platform/internal/api"
 	"github.com/rat-data/rat/platform/internal/domain"
 	"github.com/rat-data/rat/platform/internal/postgres"
 	"github.com/stretchr/testify/assert"
@@ -144,4 +148,134 @@ func TestRollbackPipelineTx_AtomicRollback(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "old-vid", got.PublishedVersions["pipeline.sql"])
+}
+
+// ---------------------------------------------------------------------------
+// InTx + TxRunner — generic transactional helper
+// ---------------------------------------------------------------------------
+
+// TestTxRunner_CreateRunAndUpdateTriggerFired_Commits is the success case for
+// the "fire a webhook trigger" path: a run is created AND the trigger's
+// last_run_id is updated, both inside a single transaction. After commit
+// both rows are present and consistent.
+func TestTxRunner_CreateRunAndUpdateTriggerFired_Commits(t *testing.T) {
+	pool := testPool(t)
+	pipelineStore := postgres.NewPipelineStore(pool)
+	runStore := postgres.NewRunStore(pool)
+	triggerStore := postgres.NewTriggerStore(pool)
+	runner := postgres.NewTxRunner(pool)
+	ctx := context.Background()
+
+	pipeline := createTestPipeline(t, pipelineStore, "default", "bronze", "tx-fire-ok")
+	trigger := createTestTrigger(t, triggerStore, pipeline.ID, domain.TriggerTypeWebhook,
+		json.RawMessage(`{"token_hash": "abc"}`))
+
+	run := &domain.Run{
+		PipelineID: pipeline.ID,
+		Status:     domain.RunStatusPending,
+		Trigger:    "trigger:webhook:test",
+	}
+
+	err := runner.InTx(ctx, func(t api.TxStores) error {
+		if err := t.Runs.CreateRun(ctx, run); err != nil {
+			return err
+		}
+		return t.Triggers.UpdateTriggerFired(ctx, trigger.ID.String(), run.ID)
+	})
+	require.NoError(t, err)
+
+	// Run exists (via the original non-tx store).
+	gotRun, err := runStore.GetRun(ctx, run.ID.String())
+	require.NoError(t, err)
+	require.NotNil(t, gotRun)
+	assert.Equal(t, domain.RunStatusPending, gotRun.Status)
+
+	// Trigger updated.
+	gotTrig, err := triggerStore.GetTrigger(ctx, trigger.ID.String())
+	require.NoError(t, err)
+	require.NotNil(t, gotTrig)
+	require.NotNil(t, gotTrig.LastRunID)
+	assert.Equal(t, run.ID, *gotTrig.LastRunID)
+	assert.NotNil(t, gotTrig.LastTriggeredAt)
+}
+
+// TestTxRunner_CreateRunAndUpdateTriggerFired_RollsBack is the failure case:
+// the second step errors (we force it by referencing a trigger that does not
+// exist via an invalid UUID lookup that returns "no rows"). After rollback,
+// NO partial state remains — neither the run row nor any trigger update.
+//
+// We force the rollback by returning an error from the callback after the
+// first DB write. The bug the new InTx fixes is exactly this: previously,
+// CreateRun would have committed independently and the failed second step
+// would leave an orphan pending run.
+func TestTxRunner_CreateRunAndUpdateTriggerFired_RollsBack(t *testing.T) {
+	pool := testPool(t)
+	pipelineStore := postgres.NewPipelineStore(pool)
+	runStore := postgres.NewRunStore(pool)
+	runner := postgres.NewTxRunner(pool)
+	ctx := context.Background()
+
+	pipeline := createTestPipeline(t, pipelineStore, "default", "bronze", "tx-fire-fail")
+
+	run := &domain.Run{
+		PipelineID: pipeline.ID,
+		Status:     domain.RunStatusPending,
+		Trigger:    "trigger:webhook:test",
+	}
+
+	sentinel := errors.New("simulated second-step failure")
+
+	err := runner.InTx(ctx, func(t api.TxStores) error {
+		if err := t.Runs.CreateRun(ctx, run); err != nil {
+			return err
+		}
+		// Force a failure AFTER the run was created so we can prove the
+		// run row never lands in the DB.
+		return sentinel
+	})
+	require.ErrorIs(t, err, sentinel)
+	require.NotEqual(t, uuid.Nil, run.ID, "CreateRun should still populate the ID in memory")
+
+	// The hallmark of the fix: the run row must NOT be visible after rollback.
+	gotRun, err := runStore.GetRun(ctx, run.ID.String())
+	require.NoError(t, err)
+	assert.Nil(t, gotRun, "run row should not exist after tx rollback")
+}
+
+// TestTxRunner_PanicInsideCallback_RollsBackAndRepanics proves the defer-
+// recover discipline in InTx: a panic inside the callback rolls the tx back
+// AND re-panics so the original stack still reaches the process-level
+// handler (we never silently swallow panics for "atomicity").
+func TestTxRunner_PanicInsideCallback_RollsBackAndRepanics(t *testing.T) {
+	pool := testPool(t)
+	pipelineStore := postgres.NewPipelineStore(pool)
+	runStore := postgres.NewRunStore(pool)
+	runner := postgres.NewTxRunner(pool)
+	ctx := context.Background()
+
+	pipeline := createTestPipeline(t, pipelineStore, "default", "bronze", "tx-fire-panic")
+
+	run := &domain.Run{
+		PipelineID: pipeline.ID,
+		Status:     domain.RunStatusPending,
+		Trigger:    "trigger:webhook:test",
+	}
+
+	// We expect a panic; capture it so the test does not fail.
+	var got interface{}
+	func() {
+		defer func() { got = recover() }()
+		_ = runner.InTx(ctx, func(t api.TxStores) error {
+			_ = t.Runs.CreateRun(ctx, run)
+			panic("boom inside tx")
+		})
+	}()
+	require.Equal(t, "boom inside tx", got)
+
+	// And the run row must not be present.
+	if run.ID != uuid.Nil {
+		gotRun, err := runStore.GetRun(ctx, run.ID.String())
+		require.NoError(t, err)
+		assert.Nil(t, gotRun, "run row should not exist after panic rollback")
+	}
 }

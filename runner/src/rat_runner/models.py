@@ -59,6 +59,10 @@ class RunState:
     layer: str
     pipeline_name: str
     trigger: str
+    # X-Request-ID propagated from the gRPC caller (ratd). Empty when the
+    # caller didn't supply one. Carried so log lines / outbound callbacks can
+    # echo it back for cross-service tracing.
+    request_id: str = ""
     status: RunStatus = RunStatus.PENDING
     rows_written: int = 0
     duration_ms: int = 0
@@ -157,7 +161,8 @@ class PipelineConfig:
     description: str = ""
     materialized: str = "table"  # "table" or "view"
     unique_key: tuple[str, ...] = ()
-    merge_strategy: MergeStrategy = MergeStrategy.FULL_REFRESH
+    # A built-in MergeStrategy value or a plugin-provided strategy name.
+    merge_strategy: str = MergeStrategy.FULL_REFRESH
     watermark_column: str = ""  # column for max() watermark reads (incremental)
     archive_landing_zones: bool = False  # move landing zone files to _processed/ after run
     partition_column: str = ""  # column for snapshot partitioning

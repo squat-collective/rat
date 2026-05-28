@@ -3,6 +3,14 @@
 > Package: `@squat-collective/rat-client` v2.0.0
 > Source: `sdk-typescript/src/`
 > Build: `make sdk-build` | Test: `make sdk-test` (27 tests)
+>
+> **Looking for the Go SDK?** That's `sdk-go/` in this repo — used by
+> Go-based plugins (rat-plugin-secrets, rat-plugin-compaction, etc.) to
+> handle phone-home, ConnectRPC plumbing, platform-token auth, and the
+> `Describe` builder. See [`sdk-go/README.md`](../sdk-go/README.md) for
+> the Go-side reference. The TypeScript SDK below targets the portal's
+> browser code; the two SDKs cover different layers and don't share
+> code.
 
 ---
 
