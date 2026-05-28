@@ -38,7 +38,7 @@
 | `golang.org/x/crypto` | BSD-3-Clause | https://cs.opensource.google/go/x/crypto/+/v0.47.0:LICENSE |
 | `golang.org/x/exp/constraints` | BSD-3-Clause | https://cs.opensource.google/go/x/exp/+/7e4ce0ab:LICENSE |
 | `golang.org/x/net` | BSD-3-Clause | https://cs.opensource.google/go/x/net/+/v0.49.0:LICENSE |
-| `golang.org/x/sync/semaphore` | BSD-3-Clause | https://cs.opensource.google/go/x/sync/+/v0.19.0:LICENSE |
+| `golang.org/x/sync` | BSD-3-Clause | https://cs.opensource.google/go/x/sync/+/v0.19.0:LICENSE |
 | `golang.org/x/sys/cpu` | BSD-3-Clause | https://cs.opensource.google/go/x/sys/+/v0.40.0:LICENSE |
 | `golang.org/x/text` | BSD-3-Clause | https://cs.opensource.google/go/x/text/+/v0.33.0:LICENSE |
 | `golang.org/x/xerrors` | BSD-3-Clause | https://cs.opensource.google/go/x/xerrors/+/7835f813:LICENSE |

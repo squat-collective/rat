@@ -6,7 +6,7 @@
 
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
-| `@squat-collective/rat-client` | 0.1.0-alpha.1 | Apache-2.0 | https://github.com/squat-collective/rat |
+| `@squat-collective/rat-client` | 0.2.0-beta.1 | Apache-2.0 | https://github.com/squat-collective/rat |
 
 ## Development Dependencies
 
