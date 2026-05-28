@@ -11,6 +11,7 @@ GO_TEST_IMAGE := golang:1.24
 GO_LINT_IMAGE := golangci/golangci-lint:v1.64.8
 RUFF_VERSION := 0.6.9
 GITLEAKS_IMAGE := zricethezav/gitleaks:v8.18.4
+LYCHEE_IMAGE := lycheeverse/lychee:0.15.1
 PY_IMAGE := python:3.12-slim
 PY_TEST_RUNNER_IMAGE := rat-runner-test
 PY_TEST_QUERY_IMAGE := rat-query-test
@@ -78,6 +79,7 @@ ci: ## Full local CI mirror — lint + golangci + security + all unit tests. Run
 	@$(MAKE) lint
 	@$(MAKE) lint-go-strict
 	@$(MAKE) security
+	@$(MAKE) docs-check
 	@$(MAKE) test-go test-py test-ts
 	@echo "✅ make ci passed — safe to push/merge"
 
@@ -111,6 +113,16 @@ security: security-secrets ## Full security scan — secrets (blocking) + depend
 			|| echo "  ⚠️  pip-audit ($$svc) reported advisories (above) — triage in an issue"; \
 	done
 	@echo "✅ security: secret scan clean (dependency advisories above are informational for now)"
+
+docs-check: ## Docs guardrails — broken local doc links + undocumented env vars (BLOCKING).
+	@echo "🔗 lychee — local doc link check…"
+	@docker run --rm -v $$(pwd):/d -w /d $(LYCHEE_IMAGE) --offline --no-progress 'docs/**/*.md' 'README.md' 'CLAUDE.md'
+	@echo "📋 env-var coverage — every platform os.Getenv must appear in docs/config.md…"
+	@missing=""; for v in $$(grep -rohE 'os\.Getenv\("[A-Z_0-9]+"\)' platform/ 2>/dev/null | grep -oE '"[A-Z_0-9]+"' | tr -d '"' | sort -u); do \
+		grep -q "$$v" docs/config.md || missing="$$missing $$v"; \
+	done; \
+	if [ -n "$$missing" ]; then echo "❌ undocumented env vars (add to docs/config.md):$$missing"; exit 1; fi
+	@echo "✅ docs-check passed"
 
 test: test-go test-py test-ts ## Run ALL tests (Go + Python + TS — use `make -j3 test` for parallel)
 

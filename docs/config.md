@@ -51,6 +51,8 @@ Migrations run automatically on startup when `DATABASE_URL` is set.
 | `S3_SECRET_KEY` | When `S3_ENDPOINT` set | — | Secret key (MinIO root password or IAM secret). |
 | `S3_BUCKET` | No | `rat` | Bucket name. Auto-created on startup if missing. |
 | `S3_USE_SSL` | No | `false` | Set to `"true"` for HTTPS (production/AWS S3). |
+| `S3_METADATA_TIMEOUT` | No | (SDK default) | Per-request timeout for small metadata ops (stat/list). Accepts a Go duration, e.g. `15s`. Raise on slow/remote S3. |
+| `S3_DATA_TIMEOUT` | No | (SDK default) | Per-request timeout for data transfers (get/put object). Go duration, e.g. `120s`. Raise for large objects over slow links. |
 
 **Example**:
 ```
@@ -352,7 +354,10 @@ NESSIE_URL=http://nessie:19120/api/v1
 | `RAT_API_KEY` | No | — | When set, every request to the public listener must carry `Authorization: Bearer <key>` or `X-API-Key: <key>`. The internal listener is unaffected (its auth model is network isolation). Use for single-tenant CE deployments behind a reverse proxy where you want a simple shared secret. Pro deployments use the auth plugin instead. |
 | `CORS_ORIGINS` | No | — | Comma-separated list of allowed origins for CORS. Defaults to no CORS (same-origin only). Set to `http://localhost:3000` for portal-on-different-port dev setups, or your portal's public URL in production. |
 | `RATE_LIMIT` | No | `100` | Requests per minute per client IP on the public listener. Set to `0` to disable. Applied after auth so authenticated requests share the per-IP budget. |
-| `SCHEDULER_ENABLED` | No | `true` | When `false`, ratd starts without the cron scheduler — useful for multi-replica deployments where only one instance should fire schedules. Pair with manual leader election (or rely on Postgres advisory lock — see [ADR-022](adr/022-leader-election.md)). |
+| `SCHEDULER_ENABLED` | No | `true` | When `false`, ratd starts without the cron scheduler — useful for multi-replica deployments where only one instance should fire schedules. Pair with leader election (the `internal/leader` advisory-lock + heartbeat — see [ADR-023](adr/023-leader-heartbeat-dedicated-pool.md)). |
+| `GRPC_TLS_CA` | No | — | CA cert file for verifying ratd's gRPC sidecars (ratq/runner/plugins). Set all three `GRPC_TLS_*` to enable mTLS on the gRPC transport; unset = plaintext h2c (fine inside a private network). |
+| `GRPC_TLS_CERT` | No | — | Client cert file for mTLS to the gRPC sidecars. |
+| `GRPC_TLS_KEY` | No | — | Client key file for mTLS to the gRPC sidecars. |
 | `TLS_CERT_FILE`, `TLS_KEY_FILE` | No | — | When both are set, the public listener serves HTTPS instead of HTTP. Mutually inclusive (only one set → startup error). For typical deployments, prefer terminating TLS at a reverse proxy and leaving ratd on plain HTTP. |
 | `RAT_HEARTBEAT_POOL_ENABLED` | No | `true` | When `true`, the leader heartbeat uses a dedicated 1-connection pgx pool so handler load can't starve it. Set to `false` for tiny deployments where one extra Postgres connection isn't worth it (falls back to the shared pool, loses the saturation guard). See [ADR-023](adr/023-leader-heartbeat-dedicated-pool.md). |
 | `RAT_PPROF_ADDR` | No | — | Enables Go pprof endpoints (goroutine, heap, allocs, CPU profile, trace) on a dedicated listener. Disabled by default. **SECURITY**: pprof exposes sensitive runtime state — NEVER bind to a public interface. Use `127.0.0.1:6060` in production and access via SSH tunnel. |
