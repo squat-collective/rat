@@ -148,7 +148,10 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # Pinned (not "latest") so a new golangci release can't silently
+          # turn a green build red — matches GO_LINT_IMAGE in the Makefile so
+          # `make ci` locally == this job.
+          version: v1.64.8
           working-directory: platform
           args: --timeout=3m
 

@@ -8,7 +8,8 @@ PROTO_IMAGE := bufbuild/buf:1.35.0
 SQLC_IMAGE := sqlc/sqlc:1.27.0
 GO_IMAGE := golang:1.24-alpine
 GO_TEST_IMAGE := golang:1.24
-GO_LINT_IMAGE := golangci/golangci-lint:v1.60.0
+GO_LINT_IMAGE := golangci/golangci-lint:v1.64.8
+RUFF_VERSION := 0.6.9
 PY_IMAGE := python:3.12-slim
 PY_TEST_RUNNER_IMAGE := rat-runner-test
 PY_TEST_QUERY_IMAGE := rat-query-test
@@ -71,6 +72,20 @@ status: ## Show service status
 	$(COMPOSE) ps
 
 # ── Testing ─────────────────────────────────────────────────────
+ci: ## Full local CI mirror — lint + golangci + all unit tests. Run before merging.
+	@echo "🔁 make ci — mirroring CI gates locally (pinned tools)"
+	@$(MAKE) lint
+	@$(MAKE) lint-go-strict
+	@$(MAKE) test-go test-py test-ts
+	@echo "✅ make ci passed — safe to push/merge"
+
+ci-quick: ## Fast pre-push gate — all linters + Go unit tests (no Python/TS test suites).
+	@echo "⚡ make ci-quick — lint + Go tests (the cheap, high-frequency failures)"
+	@$(MAKE) lint
+	@$(MAKE) lint-go-strict
+	@$(MAKE) test-go
+	@echo "✅ make ci-quick passed"
+
 test: test-go test-py test-ts ## Run ALL tests (Go + Python + TS — use `make -j3 test` for parallel)
 
 test-all-parallel: ## Run ALL tests in parallel (Go + Python + TS)
@@ -149,9 +164,9 @@ lint: ## Lint all code (Go + Python + Proto)
 		sh -c "go mod tidy && go vet ./..."
 	@echo "🔍 Linting Python..."
 	@docker run --rm -v $$(pwd)/runner:/app -w /app $(PY_IMAGE) \
-		sh -c "pip install -q ruff 2>/dev/null && ruff check . && ruff format --check ."
+		sh -c "pip install -q ruff==$(RUFF_VERSION) 2>/dev/null && ruff check . && ruff format --check ."
 	@docker run --rm -v $$(pwd)/query:/app -w /app $(PY_IMAGE) \
-		sh -c "pip install -q ruff 2>/dev/null && ruff check . && ruff format --check ."
+		sh -c "pip install -q ruff==$(RUFF_VERSION) 2>/dev/null && ruff check . && ruff format --check ."
 	@echo "🔍 Linting Proto..."
 	@docker run --rm -v $$(pwd)/proto:/workspace -w /workspace $(PROTO_IMAGE) lint
 	@echo "✅ All clean"
@@ -166,9 +181,9 @@ fmt: ## Format all code (Go + Python)
 	@docker run --rm -v $$(pwd)/platform:/app -w /app $(GO_IMAGE) \
 		sh -c "go install golang.org/x/tools/cmd/goimports@latest 2>/dev/null && goimports -w ."
 	@docker run --rm -v $$(pwd)/runner:/app -w /app $(PY_IMAGE) \
-		sh -c "pip install -q ruff 2>/dev/null && ruff format ."
+		sh -c "pip install -q ruff==$(RUFF_VERSION) 2>/dev/null && ruff format ."
 	@docker run --rm -v $$(pwd)/query:/app -w /app $(PY_IMAGE) \
-		sh -c "pip install -q ruff 2>/dev/null && ruff format ."
+		sh -c "pip install -q ruff==$(RUFF_VERSION) 2>/dev/null && ruff format ."
 	@echo "✅ Formatted"
 
 # ── Code Generation ────────────────────────────────────────────

@@ -41,7 +41,11 @@ packages = ["src/rat_runner"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-exclude = ["src/rat_runner/gen"]
+# extend-exclude (not exclude) so ruff's built-in excludes (.venv, .git,
+# __pycache__, .ruff_cache, …) still apply on top of ours. Plain `exclude`
+# REPLACES the defaults, which made `ruff check .` scan a local .venv and
+# report thousands of phantom errors that never exist in CI.
+extend-exclude = ["src/rat_runner/gen"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "TCH"]
