@@ -7,4 +7,6 @@ export default {
   "plugin-ui": "Plugin UI Development",
   "---": { type: "separator", title: "Internals" },
   architecture: "Architecture",
+  "----": { type: "separator" },
+  acknowledgments: "Acknowledgments",
 };

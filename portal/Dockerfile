@@ -25,7 +25,7 @@ FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb836
 LABEL org.opencontainers.image.title="rat-portal"
 LABEL org.opencontainers.image.description="RAT portal (Next.js web IDE)"
 LABEL org.opencontainers.image.source="https://github.com/squat-collective/rat"
-LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.vendor="RAT Data"
 WORKDIR /app
 

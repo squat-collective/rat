@@ -22,7 +22,7 @@ FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dc
 LABEL org.opencontainers.image.title="rat-query"
 LABEL org.opencontainers.image.description="RAT query service (DuckDB read-only sidecar)"
 LABEL org.opencontainers.image.source="https://github.com/squat-collective/rat"
-LABEL org.opencontainers.image.licenses="AGPL-3.0-only"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.vendor="RAT Data"
 RUN useradd --create-home query
 WORKDIR /app
