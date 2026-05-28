@@ -1,14 +1,8 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, cleanup } from "@testing-library/react";
 import { ErrorAlert } from "../error-alert";
-
-const mockSignOut = vi.fn();
-
-vi.mock("@/lib/auth/client", () => ({
-  signOut: (...args: unknown[]) => mockSignOut(...args),
-}));
 
 // Mock lucide-react to avoid SVG rendering issues in jsdom
 vi.mock("lucide-react", () => ({
@@ -21,27 +15,9 @@ describe("ErrorAlert", () => {
     vi.clearAllMocks();
   });
 
-  it("shows SIGN IN button for auth errors", () => {
-    const authError = Object.assign(new Error("invalid token"), {
-      statusCode: 401,
-    });
-
-    render(<ErrorAlert error={authError} />);
-
-    expect(screen.getByText("Session expired")).toBeDefined();
-    expect(screen.getByText("SIGN IN")).toBeDefined();
-  });
-
-  it("calls signOut when SIGN IN is clicked", () => {
-    const authError = Object.assign(new Error("invalid token"), {
-      name: "AuthenticationError",
-    });
-
-    render(<ErrorAlert error={authError} />);
-
-    fireEvent.click(screen.getByText("SIGN IN"));
-    expect(mockSignOut).toHaveBeenCalledWith({ callbackUrl: "/login" });
-  });
+  // NOTE: the auth-aware "Session expired / SIGN IN" behaviour was removed
+  // when auth moved to the adapter layer. ErrorAlert is now a pure display
+  // component; auth-error handling lives in @/lib/auth/client.
 
   it("shows normal error message for non-auth errors", () => {
     render(<ErrorAlert error={new Error("Something broke")} />);

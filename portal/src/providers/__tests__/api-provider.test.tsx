@@ -86,7 +86,10 @@ describe("ApiProvider", () => {
     expect(mockSignOut).not.toHaveBeenCalled();
   });
 
-  it("triggers signOut when session.error is RefreshTokenError", () => {
+  it("does not signOut on RefreshTokenError (handled by the auth adapter, not here)", () => {
+    // Auto-signOut + token-refresh handling moved out of ApiProvider into
+    // the auth adapter (@/lib/auth/client). ApiProvider no longer reacts to
+    // session.error — it just stops injecting a Bearer header.
     mockUseAuthSession.mockReturnValue({
       data: { error: "RefreshTokenError" },
       status: "authenticated",
@@ -98,62 +101,22 @@ describe("ApiProvider", () => {
       </ApiProvider>,
     );
 
-    expect(mockSignOut).toHaveBeenCalledWith({ callbackUrl: "/login" });
-  });
-
-  it("does not signOut on RefreshTokenError when unauthenticated", () => {
-    mockUseAuthSession.mockReturnValue({
-      data: { error: "RefreshTokenError" },
-      status: "unauthenticated",
-    });
-
-    render(
-      <ApiProvider>
-        <div>child</div>
-      </ApiProvider>,
-    );
-
     expect(mockSignOut).not.toHaveBeenCalled();
   });
 
-  it("skips retry on auth errors via onErrorRetry", () => {
-    render(
-      <ApiProvider>
-        <div>child</div>
-      </ApiProvider>,
-    );
-
-    const onErrorRetry = capturedSwrConfig.onErrorRetry as (
-      err: unknown,
-      key: string,
-      config: unknown,
-      revalidate: (opts: { retryCount: number }) => void,
-      opts: { retryCount: number },
-    ) => void;
-
-    const revalidate = vi.fn();
-    const authError = Object.assign(new Error("unauthorized"), {
-      statusCode: 401,
-    });
-
-    onErrorRetry(authError, "/api/test", {}, revalidate, { retryCount: 0 });
-
-    // Should NOT retry for auth errors
-    expect(revalidate).not.toHaveBeenCalled();
-  });
-
-  it("renders nothing while auth session is loading", () => {
+  it("renders children immediately (no session-loading gate)", () => {
+    // ApiProvider used to render nothing while the session loaded; that gate
+    // was removed when auth became an adapter, so children render right away
+    // and SWRConfig is always mounted.
     mockUseAuthSession.mockReturnValue({ data: null, status: "loading" });
 
-    const { container } = render(
+    const { getByTestId } = render(
       <ApiProvider>
         <div data-testid="child">child</div>
       </ApiProvider>,
     );
 
-    // Children should not be rendered during loading
-    expect(container.innerHTML).toBe("");
-    // SWR config should not have been set (no SWRConfig rendered)
-    expect(capturedSwrConfig).toEqual({});
+    expect(getByTestId("child")).toBeTruthy();
+    expect(typeof capturedSwrConfig.onError).toBe("function");
   });
 });
