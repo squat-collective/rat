@@ -186,6 +186,27 @@ jobs:
         working-directory: proto
         run: buf breaking --against "https://github.com/${{ github.repository }}.git#branch=${{ github.base_ref }},subdir=proto"
 
+  # ── Security (secret scan — blocking) ─────────────────────────
+  # Just the fast, deterministic secret scan here. The slower dependency
+  # vuln scanners (govulncheck / npm audit / pip-audit) are report-only in
+  # `make security` and run locally + via Dependabot, to keep CI minutes down.
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: gitleaks secret scan
+        run: make security-secrets
+
+  # ── Docs (broken links + env-var coverage — blocking) ─────────
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docs-check
+        run: make docs-check
+
   # ── Docker Build (verify all images compile) ──────────────────
   docker-build:
     name: Docker Build
