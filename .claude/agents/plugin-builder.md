@@ -3,6 +3,7 @@ name: plugin-builder
 description: Build a new RAT platform plugin end-to-end (scaffold + implement) in an isolated git worktree. Use when asked to create a new plugin.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
+effort: high
 isolation: worktree
 ---
 
