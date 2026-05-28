@@ -1,0 +1,95 @@
+# Dependabot version updates for the RAT monorepo.
+# Covers every ecosystem across the repo. `directories` (plural) globs let one
+# entry cover all plugins; Dependabot skips any matched dir that lacks a
+# manifest for that ecosystem. Minor/patch updates are grouped into a single
+# PR per module to keep the noise down; majors come as individual PRs so they
+# get proper review.
+#
+# Note: Dependabot opens these PRs through its own identity (dependabot[bot]),
+# which is NOT governed by the "Allow GitHub Actions to create and approve
+# pull requests" setting — so this works even though that setting is off here.
+version: 2
+
+updates:
+  # ── Go modules: ratd, the Go SDK, and all Go plugins ──
+  - package-ecosystem: gomod
+    directories:
+      - "/platform"
+      - "/sdk-go"
+      - "/plugins/*"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      go-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ── npm: portal, the TS SDK, the docs website, and plugin UIs ──
+  - package-ecosystem: npm
+    directories:
+      - "/portal"
+      - "/sdk-typescript"
+      - "/website"
+      - "/plugins/*/ui"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ── Python (PEP 621 pyproject): runner, query, and Python plugins ──
+  - package-ecosystem: pip
+    directories:
+      - "/runner"
+      - "/query"
+      - "/plugins/*"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      python-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ── Docker base images: core services + every plugin ──
+  - package-ecosystem: docker
+    directories:
+      - "/platform"
+      - "/runner"
+      - "/query"
+      - "/portal"
+      - "/website"
+      - "/plugins/*"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      docker-images:
+        patterns: ["*"]
+
+  # ── GitHub Actions used across all workflows ──
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns: ["*"]
