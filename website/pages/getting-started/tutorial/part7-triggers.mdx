@@ -23,11 +23,11 @@ RAT supports **6 trigger types**. Here is the full reference:
 | Type | Fires When | Config Fields | Best For |
 |---|---|---|---|
 | `cron` | A cron schedule is due | `cron_expr` (5-field) | Periodic batch processing |
-| `landing_zone_upload` | A file is uploaded to a landing zone | `zone_namespace`, `zone_name` | Event-driven ingestion |
-| `pipeline_success` | Another pipeline completes successfully | `pipeline_namespace`, `pipeline_layer`, `pipeline_name` | Chaining layers together |
-| `webhook` | An HTTP POST hits the trigger URL | *(auto-generated URL + token)* | External system integration |
-| `file_pattern` | An uploaded filename matches a glob | `zone_namespace`, `zone_name`, `pattern` | Selective file ingestion |
-| `cron_dependency` | Cron is due **and** dependencies have new data | `cron_expr`, `dependencies[]` | Conditional batch processing |
+| `landing_zone_upload` | A file is uploaded to a landing zone | `namespace`, `zone_name` | Event-driven ingestion |
+| `pipeline_success` | Another pipeline completes successfully | `namespace`, `layer`, `pipeline` | Chaining layers together |
+| `webhook` | An HTTP POST hits the shared webhook endpoint | *(auto-generated token)* | External system integration |
+| `file_pattern` | An uploaded filename matches a glob | `namespace`, `zone_name`, `pattern` | Selective file ingestion |
+| `cron_dependency` | Cron is due **and** dependencies have new data | `cron_expr`, `dependencies[]` (list of `"ns.layer.pipeline"` strings) | Conditional batch processing |
 
 Every trigger also has these common fields:
 
@@ -207,8 +207,8 @@ bearer token.
 
 After saving, the trigger panel shows:
 
-- **Webhook URL**: `http://localhost:8080/api/v1/triggers/{trigger-id}/fire`
-- **Bearer Token**: `rat_wh_...` (shown **only once** — copy it now!)
+- **Webhook URL**: `http://localhost:8080/api/v1/webhooks` (one shared endpoint for all webhook triggers)
+- **Token**: a bare hex string, e.g. `9f2c1ab7d4e8...` (shown **only once** — copy it now!)
 
 <Callout type="error">
 The webhook token is displayed only at creation time. RAT stores only the SHA-256 hash,
@@ -218,14 +218,15 @@ a new one.
 
 ### Fire the webhook with curl
 
-Open a terminal and run:
+Open a terminal and run. The token goes in the `X-Webhook-Token` header — the endpoint
+finds the trigger by token, so there is no trigger ID in the URL:
 
 ```bash filename="Terminal"
-curl -X POST http://localhost:8080/api/v1/triggers/{trigger-id}/fire \
-  -H "Authorization: Bearer rat_wh_your_token_here"
+curl -X POST http://localhost:8080/api/v1/webhooks \
+  -H "X-Webhook-Token: your_token_here"
 ```
 
-Replace `{trigger-id}` and the token with the values from the Portal.
+Replace the token with the value from the Portal.
 
 ### Verify the run
 
@@ -269,7 +270,7 @@ matches a glob pattern.
 {
   "type": "file_pattern",
   "config": {
-    "zone_namespace": "default",
+    "namespace": "default",
     "zone_name": "raw_events",
     "pattern": "launches_*.csv"
   },
@@ -294,13 +295,7 @@ the trigger fires only when **both** conditions are met:
   "type": "cron_dependency",
   "config": {
     "cron_expr": "0 * * * *",
-    "dependencies": [
-      {
-        "namespace": "default",
-        "layer": "silver",
-        "name": "enriched_launches"
-      }
-    ]
+    "dependencies": ["default.silver.enriched_launches"]
   },
   "enabled": true
 }

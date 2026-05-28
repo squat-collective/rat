@@ -27,23 +27,23 @@ A few endpoints live outside the `/api/v1` prefix:
 
 ## Authentication
 
-RAT supports three authentication modes depending on the edition and configuration:
+RAT is a single, free, open platform. It supports the following authentication modes:
 
-### No Authentication (Community Default)
+### No Authentication (default)
 
-By default, the Community Edition requires no authentication. All endpoints are open.
+By default, RAT requires no authentication. All endpoints are open — suitable for single-user, local, or trusted-network deployments.
 
-### API Key (Community)
+### API Key
 
-When the `RAT_API_KEY` environment variable is set, all API requests must include the key:
+When the `RAT_API_KEY` environment variable is set, every request must carry the key as a Bearer token in the `Authorization` header:
 
 ```bash
-curl -H "X-Api-Key: your-api-key" http://localhost:8080/api/v1/pipelines
+curl -H "Authorization: Bearer your-api-key" http://localhost:8080/api/v1/pipelines
 ```
 
-### Bearer Token (Pro Edition)
+### Bearer Token via an auth plugin
 
-When the auth plugin is enabled (Pro Edition with Keycloak or another identity provider), all requests must include a JWT bearer token:
+When an optional authentication plugin is enabled (for example a Keycloak-based OIDC integration), all requests must include a valid JWT bearer token:
 
 ```bash
 curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..." http://localhost:8080/api/v1/pipelines
@@ -126,7 +126,7 @@ All API errors return a structured JSON envelope:
 | `422` | `VALIDATION` | Request is well-formed but semantically invalid (e.g., template validation failure) |
 | `429` | `RATE_LIMIT` | Too many requests — retry after the indicated delay |
 | `500` | `INTERNAL` | Unexpected server error |
-| `501` | `UNAVAILABLE` | Feature not available (e.g., sharing in Community Edition) |
+| `501` | `UNAVAILABLE` | Feature not available (e.g., sharing when the sharing plugin is not installed) |
 | `503` | `UNAVAILABLE` | Service dependency unavailable (e.g., runner or ratq not connected) |
 
 ### Common Error Codes
@@ -142,7 +142,7 @@ All API errors return a structured JSON envelope:
 
 ## Pagination
 
-List endpoints support cursor-based pagination using `limit` and `offset` query parameters:
+List endpoints support offset/limit pagination using `limit` and `offset` query parameters:
 
 | Parameter | Type | Default | Maximum | Description |
 |---|---|---|---|---|
@@ -176,20 +176,23 @@ Use `total` to calculate the number of pages: `Math.ceil(total / limit)`.
 
 ## Sorting
 
-Some list endpoints support sorting via query parameters:
+Some list endpoints support sorting via a single `sort` query parameter. Prefix the field name with `-` for descending order:
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `sort` | `string` | `created_at` | Field to sort by |
-| `order` | `string` | `desc` | Sort direction: `asc` or `desc` |
+| `sort` | `string` | `created_at` | Field to sort by. Ascending by default; prefix with `-` for descending (e.g. `-created_at`) |
 
 ### Example
 
 ```bash
-curl "http://localhost:8080/api/v1/pipelines?sort=name&order=asc"
+# Ascending by name
+curl "http://localhost:8080/api/v1/pipelines?sort=name"
+
+# Descending by created_at
+curl "http://localhost:8080/api/v1/pipelines?sort=-created_at"
 ```
 
-Available sort fields vary by endpoint — refer to each endpoint's documentation for details.
+Available sort fields vary by endpoint — refer to each endpoint's documentation for details. Unknown sort fields are ignored.
 
 ---
 
@@ -233,7 +236,7 @@ Content-Type: application/json
 
 {
   "error": {
-    "code": "RATE_LIMITED",
+    "code": "RESOURCE_EXHAUSTED",
     "type": "RATE_LIMIT",
     "message": "Too many requests. Retry after 30 seconds."
   }
@@ -341,7 +344,9 @@ Files exceeding 32 MB receive a `413` response:
 | Schedules | 5 | [Schedules](/reference/api/schedules) |
 | Namespaces | 4 | [Namespaces](/reference/api/namespaces) |
 | Retention | 6 | [Retention](/reference/api/retention) |
-| Lineage | 1 | [Lineage](/reference/api/lineage) |
 | Webhooks | 1 | [Webhooks](/reference/api/webhooks) |
-| Sharing | 4 | [Sharing](/reference/api/sharing) |
 | Audit | 1 | [Audit](/reference/api/audit) |
+| Lineage (plugin) | 1 | [Lineage](/reference/api/lineage) |
+| Sharing (plugin) | 4 | [Sharing](/reference/api/sharing) |
+
+In addition to the core families above, optional plugins expose further endpoint families under `/api/v1/x/<plugin>/...` (lineage, permissions, identity, cloud credential vending, plugin management, metadata, and the generic plugin proxy). The current-user endpoint `GET /api/v1/me` is available when an auth/identity plugin is active.

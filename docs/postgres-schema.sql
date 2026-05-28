@@ -10,15 +10,15 @@
 
 -- ============================================================
 -- Namespaces
--- Community: single "default" namespace, auto-created on startup
--- Pro: multiple namespaces, admin-managed
+-- Default: single "default" namespace, auto-created on startup
+-- With the multi-namespace plugin: multiple namespaces, admin-managed
 -- ============================================================
 
 CREATE TABLE namespaces (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name        VARCHAR(63) UNIQUE NOT NULL,          -- "default", "ecommerce", etc.
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    created_by  VARCHAR(255)                           -- NULL for Community (single user)
+    created_by  VARCHAR(255)                           -- NULL in single-user mode (no auth plugin)
 );
 
 -- Seed the default namespace on first startup
@@ -38,7 +38,7 @@ CREATE TABLE pipelines (
     type        VARCHAR(10) NOT NULL DEFAULT 'sql' CHECK (type IN ('sql', 'python')),
     s3_path     VARCHAR(1024) NOT NULL,                -- full S3 key prefix
     description TEXT DEFAULT '',
-    owner       VARCHAR(255),                          -- NULL for Community
+    owner       VARCHAR(255),                          -- NULL in single-user mode (no auth plugin)
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     deleted_at  TIMESTAMPTZ,                           -- soft delete
@@ -127,7 +127,7 @@ CREATE TABLE quality_results (
 CREATE INDEX idx_quality_results_test ON quality_results(test_id, ran_at DESC);
 
 -- ============================================================
--- Ownership (Pro only — unused in Community)
+-- Ownership (used by the optional sharing/enforcement plugin)
 -- Per-object ownership. Every pipeline/table has an owner.
 -- ============================================================
 
@@ -143,7 +143,7 @@ CREATE TABLE ownership (
 CREATE INDEX idx_ownership_owner ON ownership(owner);
 
 -- ============================================================
--- Shares (Pro only — unused in Community)
+-- Shares (used by the optional sharing/enforcement plugin)
 -- Per-object access grants. Owner shares with users or roles.
 -- ============================================================
 
@@ -161,7 +161,7 @@ CREATE TABLE shares (
 CREATE INDEX idx_shares_shared_with ON shares(shared_with);
 
 -- ============================================================
--- Projects (Pro only — soft grouping)
+-- Projects (used by the optional sharing plugin — soft grouping)
 -- Labels for organizing pipelines/tables. No isolation.
 -- ============================================================
 
@@ -231,7 +231,7 @@ CREATE TABLE plugins (
 );
 
 -- ============================================================
--- Audit Log (Pro only — written by audit plugin)
+-- Audit Log (written by the optional audit plugin)
 -- ============================================================
 
 CREATE TABLE audit_log (

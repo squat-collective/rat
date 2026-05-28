@@ -152,32 +152,53 @@ ADR review focuses on:
 
 RAT has the following accepted ADRs:
 
-### Foundation (v2.0 - v2.3)
+### Foundation
 
 | ADR | Title | Status | Summary |
 |---|---|---|---|
 | **001** | S3 Storage via MinIO Go SDK | Accepted | All data stored in S3 (MinIO). Go SDK for server-side operations, presigned URLs for browser uploads |
-| **002** | No-Op Auth with Plugin Slot | Accepted | Community Edition has no authentication. Auth is a plugin slot that Pro plugins can fill |
+| **002** | No-Op Auth with Plugin Slot | Accepted | The core has no authentication by default. Auth is a plugin slot that an optional auth plugin can fill |
 | **003** | WarmPoolExecutor + ConnectRPC Dispatch | Accepted | Pipeline execution dispatched to runner via ConnectRPC. 5-second polling for status updates |
 | **004** | Background Cron Scheduler | Accepted | 30-second tick interval, catch-up-once policy, Postgres advisory lock for leader election |
 | **005** | Runner Service Architecture | Accepted | Python runner with DuckDB, PyArrow, PyIceberg. 5-phase execution (branch, write, test, merge) |
 | **006** | Query Service (ratq) Architecture | Accepted | Separate read-only DuckDB sidecar for interactive queries. Isolates query workload from pipeline execution |
 
-### Platform Evolution (v2.4 - v2.6)
+### Platform Evolution
 
 | ADR | Title | Status | Summary |
 |---|---|---|---|
 | **007** | Plugin System Foundation | Accepted | Go plugins loaded via gRPC. Registry pattern with health checks. Base `PluginService` proto |
-| **008** | Auth-Keycloak: First Pro Plugin | Accepted | JWT validation against Keycloak. Bearer token extraction, JWKS verification, user context injection |
-| **009** | ContainerExecutor Pro Plugin | Accepted | Run pipelines in isolated containers instead of the shared runner process. Resource limits per pipeline |
+| **008** | Auth-Keycloak Plugin | Accepted | JWT validation against Keycloak. Bearer token extraction, JWKS verification, user context injection |
+| **009** | ContainerExecutor Plugin | Accepted | Run pipelines in isolated containers instead of the shared runner process. Resource limits per pipeline |
 
-### Multi-User and Sharing (v2.7 - v2.9)
+### Multi-User and Sharing
 
 | ADR | Title | Status | Summary |
 |---|---|---|---|
-| **010** | ACL Sharing + Enforcement Plugin | Accepted | Resource-level access control. Owner, editor, viewer roles. Enforcement middleware intercepts all requests |
-| **011** | Cloud AWS Plugin | Accepted | Native AWS integration: S3 (not MinIO), IAM roles, CloudWatch logging, ECS deployment |
-| **012** | License Gating for Pro Plugins | Accepted | License key verification. Plugins check license validity on startup. Grace period for expired licenses |
+| **010** | ACL Sharing + Permission Plugin | Accepted | Resource-level access control. Owner, editor, viewer roles. Permission middleware intercepts all requests |
+| **011** | Cloud Plugin — AWS STS + ECS Fargate | Accepted | Native AWS integration: S3 (not MinIO), STS credential vending, ECS Fargate execution |
+| **012** | License Gating for Optional Plugins | Accepted | Signed RSA-256 JWT license keys validate optional closed-source plugin containers distributed via ghcr.io |
+| **018** | Cloud Credential Vending via Plugin | Accepted | Platform-side HTTP entry point for `CloudService.GetCredentials`, vending short-lived cloud credentials through the cloud plugin |
+
+### Features
+
+| ADR | Title | Status | Summary |
+|---|---|---|---|
+| **013** | Landing Zones — Standalone File Drop Areas | Accepted | First-class file drop areas for raw uploads (CSV/JSON/Parquet/Excel) with metadata tracking and a management UI |
+| **014** | Merge Strategies | Accepted | Six write strategies (full_refresh, incremental, append_only, delete_insert, scd2, snapshot) for Iceberg tables |
+| **015** | Data Retention & Landing Zone Cleanup | Accepted | Hybrid retention system that bounds run history, logs, snapshots, and processed landing-zone files |
+| **016** | Portal Plugin Slot System | Accepted | Plugin slot system letting external packages contribute React components at predefined portal locations |
+| **017** | Python Pipeline Trust Model | Accepted | Python pipelines are second-party trusted; the runner container is the trust boundary, the `exec()` blocklist is defense-in-depth only |
+
+### Platform Hardening
+
+| ADR | Title | Status | Summary |
+|---|---|---|---|
+| **019** | Internal Listener Split | Accepted | Separate unauthenticated `:8090` HTTP listener for service-to-service callbacks and plugin phone-home; never published to the host |
+| **020** | Platform Token (X-RAT-Plugin-Token) | Accepted | Per-startup random shared secret injected by ratd's reverse proxy so plugins can distinguish proxied requests from direct peer calls |
+| **021** | SDK Extraction (`sdk-go`) | Accepted | Shared Go plugin boilerplate (token handling, SRI, phone-home) extracted into a vendored `sdk-go/` module |
+| **022** | InTx Helper for Cross-Statement Atomicity | Accepted | `postgres.InTx` helper wraps multi-step DB writes in a single transaction for atomicity |
+| **023** | Leader Heartbeat with Dedicated Pool | Accepted | Leader election uses a dedicated Postgres pool with heartbeat so the advisory lock survives connection churn |
 
 ---
 
@@ -235,8 +256,19 @@ docs/adr/
 ├── 008-auth-keycloak.md
 ├── 009-container-executor.md
 ├── 010-acl-plugin.md
-├── 011-cloud-aws.md
-└── 012-license-gating.md
+├── 011-cloud-aws-plugin.md
+├── 012-license-gating.md
+├── 013-landing-zones.md
+├── 014-merge-strategies.md
+├── 015-data-retention.md
+├── 016-portal-plugin-ui.md
+├── 017-python-pipeline-trust-model.md
+├── 018-cloud-credential-vending.md
+├── 019-internal-listener-split.md
+├── 020-platform-token.md
+├── 021-sdk-go-extraction.md
+├── 022-intx-helper.md
+└── 023-leader-heartbeat-dedicated-pool.md
 ```
 
 ---
@@ -246,6 +278,6 @@ docs/adr/
 ADRs are the best way to understand why RAT is built the way it is. When you are:
 
 - **New to the project**: Read ADRs 001-006 to understand the foundational decisions
-- **Working on plugins**: Read ADRs 007-012 to understand the plugin architecture
+- **Working on plugins**: Read ADRs 007-011 to understand the plugin architecture
 - **Proposing a change**: Check if an existing ADR covers the topic. If it does, your proposal should supersede it with a new ADR explaining why the decision changed
-- **Debugging unexpected behavior**: An ADR may explain why a component behaves a certain way (e.g., the 5-second polling interval in ADR-003)
+- **Debugging unexpected behavior**: An ADR may explain why a component behaves a certain way (e.g., the 5-second polling interval in ADR-003, or the internal `:8090` listener in ADR-019)

@@ -54,8 +54,8 @@ curl -X POST http://localhost:8080/api/v1/query \
     { "name": "created_at", "type": "TIMESTAMP" }
   ],
   "rows": [
-    ["ORD-001", 129.99, "completed", "2026-02-12T10:00:00Z"],
-    ["ORD-002", 245.50, "completed", "2026-02-12T11:30:00Z"]
+    { "id": "ORD-001", "amount": 129.99, "status": "completed", "created_at": "2026-02-12T10:00:00Z" },
+    { "id": "ORD-002", "amount": 245.50, "status": "completed", "created_at": "2026-02-12T11:30:00Z" }
   ],
   "total_rows": 10,
   "duration_ms": 45
@@ -69,7 +69,7 @@ curl -X POST http://localhost:8080/api/v1/query \
 | `columns` | `array` | Column definitions |
 | `columns[].name` | `string` | Column name |
 | `columns[].type` | `string` | DuckDB type (e.g., `VARCHAR`, `INTEGER`, `DECIMAL(14,2)`, `TIMESTAMP`) |
-| `rows` | `array` | Result rows as arrays of values |
+| `rows` | `array` | Result rows as objects keyed by column name |
 | `total_rows` | `integer` | Number of rows returned |
 | `duration_ms` | `integer` | Query execution time in milliseconds |
 

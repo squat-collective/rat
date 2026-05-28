@@ -30,14 +30,20 @@ make lint     # includes buf lint
 proto/
 ├── buf.yaml                          # buf workspace configuration
 ├── buf.gen.yaml                      # code generation targets
-├── runner/v1/runner.proto            # Runner service (4 RPCs)
+├── runner/v1/runner.proto            # Runner service (7 RPCs)
 ├── query/v1/query.proto              # Query service (4 RPCs)
-├── plugin/v1/plugin.proto            # Base PluginService (HealthCheck)
-├── auth/v1/auth.proto                # Auth plugin (Authenticate, Authorize)
-├── sharing/v1/sharing.proto          # Sharing plugin (4 RPCs)
-├── enforcement/v1/enforcement.proto  # Enforcement plugin (2 RPCs)
-└── common/v1/common.proto            # Shared types (Timestamp, Layer, RunStatus)
+├── plugin/v1/plugin.proto            # Base PluginService (HealthCheck, Describe)
+├── identity/v1/identity.proto        # Identity / auth plugin contract
+├── permission/v1/permission.proto    # Access enforcement (ACL) plugin contract
+├── sharing/v1/sharing.proto          # Sharing plugin contract
+├── cloud/v1/cloud.proto              # Cloud credential vending plugin contract
+├── executor/v1/executor.proto        # Container executor plugin contract
+└── common/v1/common.proto            # Shared types (Layer, RunStatus, log/status messages)
 ```
+
+<Callout type="warning">
+The old `auth/v1` and `enforcement/v1` protos have been **removed**. Their responsibilities now live in `identity/v1` (authentication) and `permission/v1` (enforcement). The five typed plugin protos (`identity`, `permission`, `sharing`, `cloud`, `executor`) are the live plugin contract — do not delete them.
+</Callout>
 
 ### Generated Code Output
 
@@ -68,9 +74,13 @@ package ratatouille.runner.v1;
 
 **Rules:**
 - Root namespace: `ratatouille`
-- Service name: `runner`, `query`, `plugin`, `auth`, `sharing`, `enforcement`, `common`
+- Service name: `runner`, `query`, `plugin`, `identity`, `permission`, `sharing`, `cloud`, `executor`, `common`
 - Version: `v1`, `v2`, etc.
 - Full pattern: `ratatouille.{service}.{version}`
+
+<Callout type="info">
+Wire-protocol package names are **frozen** as `ratatouille.*` even though the product is now called RAT. Renaming them breaks the wire protocol with deployed plugins.
+</Callout>
 
 ### Service Naming
 
@@ -154,21 +164,30 @@ message Pipeline {
 
 ## Service Definitions
 
-### RunnerService (4 RPCs)
+### RunnerService (7 RPCs)
 
 ```protobuf filename="proto/runner/v1/runner.proto"
 service RunnerService {
   // Submit a pipeline for execution. Returns a run handle immediately.
   rpc SubmitPipeline(SubmitPipelineRequest) returns (SubmitPipelineResponse);
 
-  // Get the current status of a run (pending, running, completed, failed).
+  // Get the current status of a run (pending, running, success, failed).
   rpc GetRunStatus(GetRunStatusRequest) returns (GetRunStatusResponse);
 
   // Stream real-time log entries for a run. Server-side streaming.
   rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry);
 
-  // Cancel a running pipeline. No-op if already completed.
+  // Cancel a running pipeline. No-op if already finished.
   rpc CancelRun(CancelRunRequest) returns (CancelRunResponse);
+
+  // Preview a pipeline without writing to the data lake (LIMIT + profiling).
+  rpc PreviewPipeline(PreviewPipelineRequest) returns (PreviewPipelineResponse);
+
+  // Validate pipeline templates (Jinja syntax, anti-patterns) without executing.
+  rpc ValidatePipeline(ValidatePipelineRequest) returns (ValidatePipelineResponse);
+
+  // List runner plugins (Python entry points) discovered in the runner container.
+  rpc ListPlugins(ListPluginsRequest) returns (ListPluginsResponse);
 }
 ```
 
@@ -182,22 +201,35 @@ service QueryService {
   // Get the schema (columns, types) of an Iceberg table.
   rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
 
-  // Preview a pipeline's output using _samples data.
-  rpc PreviewPipeline(PreviewPipelineRequest) returns (PreviewPipelineResponse);
+  // Preview the first N rows of a table.
+  rpc PreviewTable(PreviewTableRequest) returns (PreviewTableResponse);
 
-  // Cancel a running query.
-  rpc CancelQuery(CancelQueryRequest) returns (CancelQueryResponse);
+  // List all tables accessible in a namespace.
+  rpc ListTables(ListTablesRequest) returns (ListTablesResponse);
 }
 ```
 
 ### PluginService (Base)
 
-Every plugin implements this base service for health checking:
+Every plugin implements this base service:
 
 ```protobuf filename="proto/plugin/v1/plugin.proto"
 service PluginService {
   // Health check — returns plugin status and version.
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+
+  // Describe — returns the plugin's capabilities, routes, event
+  // subscriptions, UI descriptors, and config schema.
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+
+  // HandleEvent — delivers a platform event (e.g., run_completed).
+  rpc HandleEvent(HandleEventRequest) returns (HandleEventResponse);
+
+  // Authenticate — validate a bearer token (plugins declaring the "auth" capability).
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+
+  // Authorize — check an action on a resource (plugins declaring the "enforcement" capability).
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse);
 }
 ```
 
@@ -217,11 +249,15 @@ enum RunStatus {
   RUN_STATUS_UNSPECIFIED = 0;
   RUN_STATUS_PENDING = 1;
   RUN_STATUS_RUNNING = 2;
-  RUN_STATUS_COMPLETED = 3;
+  RUN_STATUS_SUCCESS = 3;
   RUN_STATUS_FAILED = 4;
   RUN_STATUS_CANCELLED = 5;
 }
 ```
+
+<Callout type="info">
+The success terminal state is `RUN_STATUS_SUCCESS` (value `3`) — not `COMPLETED`. The corresponding REST/SDK run status string is `success`.
+</Callout>
 
 ---
 
@@ -289,7 +325,7 @@ managed:
   enabled: true
   override:
     - file_option: go_package_prefix
-      value: github.com/squat-collective/rat/platform/gen
+      value: github.com/rat-data/rat/platform/gen
 plugins:
   # Go
   - remote: buf.build/protocolbuffers/go
@@ -299,12 +335,16 @@ plugins:
     out: ../platform/gen
     opt: paths=source_relative
 
-  # Python
-  - remote: buf.build/protocolbuffers/python
+  # Python (runner + query) — pinned to v33 for protobuf 6.33.x runtime compatibility
+  - remote: buf.build/protocolbuffers/python:v33.0
     out: ../runner/src/rat_runner/gen
   - remote: buf.build/grpc/python
     out: ../runner/src/rat_runner/gen
 ```
+
+<Callout type="info">
+The Go managed `go_package_prefix` is `github.com/rat-data/rat/platform/gen`. The Python codegen plugin is pinned to `v33` so generated `*_pb2.py` target the protobuf 6.33.x runtime installable from PyPI.
+</Callout>
 
 ---
 

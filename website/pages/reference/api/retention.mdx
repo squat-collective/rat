@@ -50,10 +50,10 @@ curl http://localhost:8080/api/v1/admin/retention/config
     "logs_max_age_days": 30,
     "quality_results_max_per_test": 100,
     "soft_delete_purge_days": 30,
-    "stuck_run_timeout_minutes": 120,
+    "stuck_run_timeout_minutes": 30,
     "audit_log_max_age_days": 365,
     "nessie_orphan_branch_max_age_hours": 6,
-    "reaper_interval_minutes": 60,
+    "reaper_interval_minutes": 15,
     "iceberg_snapshot_max_age_days": 7,
     "iceberg_orphan_file_max_age_days": 3
   }
@@ -69,10 +69,10 @@ curl http://localhost:8080/api/v1/admin/retention/config
 | `logs_max_age_days` | `integer` | `30` | Delete run logs older than this many days |
 | `quality_results_max_per_test` | `integer` | `100` | Maximum quality test results to keep per test |
 | `soft_delete_purge_days` | `integer` | `30` | Permanently delete soft-deleted pipelines after this many days |
-| `stuck_run_timeout_minutes` | `integer` | `120` | Mark runs as failed if stuck in `running` state for this long |
+| `stuck_run_timeout_minutes` | `integer` | `30` | Mark runs as failed if stuck in `running` state for this long |
 | `audit_log_max_age_days` | `integer` | `365` | Delete audit log entries older than this many days |
 | `nessie_orphan_branch_max_age_hours` | `integer` | `6` | Clean up orphan Nessie branches older than this many hours |
-| `reaper_interval_minutes` | `integer` | `60` | How often the reaper runs (in minutes) |
+| `reaper_interval_minutes` | `integer` | `15` | How often the reaper runs (in minutes) |
 | `iceberg_snapshot_max_age_days` | `integer` | `7` | Expire Iceberg snapshots older than this many days |
 | `iceberg_orphan_file_max_age_days` | `integer` | `3` | Delete orphan Iceberg data files older than this many days |
 
@@ -225,10 +225,10 @@ curl http://localhost:8080/api/v1/pipelines/default/silver/orders/retention
     "logs_max_age_days": 30,
     "quality_results_max_per_test": 100,
     "soft_delete_purge_days": 30,
-    "stuck_run_timeout_minutes": 120,
+    "stuck_run_timeout_minutes": 30,
     "audit_log_max_age_days": 365,
     "nessie_orphan_branch_max_age_hours": 6,
-    "reaper_interval_minutes": 60,
+    "reaper_interval_minutes": 15,
     "iceberg_snapshot_max_age_days": 7,
     "iceberg_orphan_file_max_age_days": 3
   },
@@ -242,10 +242,10 @@ curl http://localhost:8080/api/v1/pipelines/default/silver/orders/retention
     "logs_max_age_days": 7,
     "quality_results_max_per_test": 100,
     "soft_delete_purge_days": 30,
-    "stuck_run_timeout_minutes": 120,
+    "stuck_run_timeout_minutes": 30,
     "audit_log_max_age_days": 365,
     "nessie_orphan_branch_max_age_hours": 6,
-    "reaper_interval_minutes": 60,
+    "reaper_interval_minutes": 15,
     "iceberg_snapshot_max_age_days": 7,
     "iceberg_orphan_file_max_age_days": 3
   }

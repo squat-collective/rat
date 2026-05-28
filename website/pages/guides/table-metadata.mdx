@@ -2,7 +2,7 @@ import { Callout, Steps } from 'nextra/components'
 
 # Table Metadata
 
-RAT lets you document your tables with descriptions, owners, and per-column descriptions. This metadata is stored in Postgres (separate from the Iceberg table data) and is displayed throughout the Portal — in the Explorer, Query Console schema browser, and Lineage graph.
+RAT lets you document your tables with descriptions, owners, and per-column descriptions. This metadata is stored in Postgres (separate from the Iceberg table data) and is displayed throughout the Portal — in the Explorer and the Query Console schema browser (and in the lineage graph when the optional `rat-plugin-lineage` plugin is installed).
 
 ---
 
@@ -57,7 +57,7 @@ Contains: order details, amounts in USD (decimal), status enum
 ### Setting via API
 
 ```bash filename="Terminal"
-curl -X PUT http://localhost:8080/api/v1/metadata/{namespace}/{layer}/{table_name} \
+curl -X PUT http://localhost:8080/api/v1/tables/{namespace}/{layer}/{table_name}/metadata \
   -H "Content-Type: application/json" \
   -d '{
     "description": "Customer orders after deduplication and type casting.",
@@ -76,7 +76,7 @@ Individual columns can be annotated with descriptions that explain their meaning
 In the table detail view within the Explorer, each column row has a description field. Click the description cell to edit inline.
 
 ```bash filename="API"
-curl -X PUT http://localhost:8080/api/v1/metadata/{namespace}/{layer}/{table_name} \
+curl -X PUT http://localhost:8080/api/v1/tables/{namespace}/{layer}/{table_name}/metadata \
   -H "Content-Type: application/json" \
   -d '{
     "column_descriptions": {
@@ -97,7 +97,7 @@ Column descriptions appear in multiple places:
 |---|---|
 | **Explorer** table detail | Description column next to each field |
 | **Query Console** schema browser | Tooltip when hovering over a column name |
-| **Lineage** node detail | Shown when clicking a table node |
+| **Lineage** node detail | Shown when clicking a table node (requires the `rat-plugin-lineage` plugin) |
 
 ---
 
@@ -106,7 +106,7 @@ Column descriptions appear in multiple places:
 Each table can have an `owner` field indicating the person or team responsible for the table's data quality and maintenance.
 
 ```bash filename="Terminal"
-curl -X PUT http://localhost:8080/api/v1/metadata/{namespace}/{layer}/{table_name} \
+curl -X PUT http://localhost:8080/api/v1/tables/{namespace}/{layer}/{table_name}/metadata \
   -H "Content-Type: application/json" \
   -d '{
     "owner": "analytics-team"
@@ -114,7 +114,11 @@ curl -X PUT http://localhost:8080/api/v1/metadata/{namespace}/{layer}/{table_nam
 ```
 
 <Callout type="info">
-In the Community Edition (single-user), the owner field is informational only. In the Pro Edition with multi-user support, table ownership integrates with the access control system.
+The `owner` field is informational by default. With the optional multi-user/sharing plugins installed, table ownership integrates with the access control system. RAT is 100% free and open-source — there are no editions or tiers.
+</Callout>
+
+<Callout type="warning">
+A `PUT .../metadata` call replaces the **whole** metadata document. Include every field you want to keep (`description`, `owner`, `column_descriptions`) in each request — fields you omit are not preserved.
 </Callout>
 
 ---
@@ -143,64 +147,25 @@ Key design decisions:
 - **Separate from Iceberg** — Iceberg tables are ephemeral (created/replaced by pipeline runs). Metadata is persistent documentation that survives table recreation.
 - **JSONB for column descriptions** — allows adding/removing column descriptions without schema migrations. The key is the column name, the value is the description string.
 - **No cascading delete** — if a table is dropped and recreated, the metadata is preserved. This prevents accidental loss of documentation.
-
----
-
-## `.meta.yaml` Files
-
-In addition to the Postgres-stored metadata, RAT supports `.meta.yaml` files that can be placed alongside pipeline source files in S3:
-
-```
-{namespace}/pipelines/{layer}/{name}/
-├── pipeline.sql
-├── config.yaml
-└── .meta.yaml          ← table metadata file
-```
-
-### Format
-
-```yaml filename=".meta.yaml"
-description: |
-  Customer orders after deduplication and type casting.
-  Source: bronze.ingest_orders
-  Grain: one row per order_id
-owner: data-team
-columns:
-  order_id: "Unique order identifier from the source system"
-  customer_id: "FK to clean_customers.customer_id"
-  total_amount: "Order total in USD as DECIMAL(10,2)"
-  status: "Order status: pending, confirmed, shipped, delivered, cancelled"
-  updated_at: "Last modification timestamp, used as watermark"
-```
-
-### How `.meta.yaml` works
-
-1. When you view a table in the Explorer, RAT reads the `.meta.yaml` file from S3 (if it exists)
-2. If the Postgres `table_metadata` record also exists, values are **merged** with Postgres taking priority
-3. Editing metadata in the Portal always writes to Postgres, not to `.meta.yaml`
-
-This allows you to commit `.meta.yaml` files to version control as part of your pipeline code, while the Portal provides a convenient editing interface.
-
-### Reading `.meta.yaml` via API
-
-```bash filename="Terminal"
-# Get metadata for a table (combines Postgres + .meta.yaml)
-curl http://localhost:8080/api/v1/metadata/{namespace}/{layer}/{table_name}
-
-# Get raw .meta.yaml content
-curl http://localhost:8080/api/v1/pipelines/{namespace}/{layer}/{name}/meta
-```
+- **API-only writes** — metadata is created and updated exclusively through the `PUT .../metadata` API (which the Portal calls for you). There is no writable `.meta.yaml` file for table column metadata.
 
 ---
 
 ## Metadata API Reference
 
+Table metadata is written with a single `PUT .../metadata` call (it replaces the whole
+document). The other `/metadata` endpoints are read-only.
+
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/v1/metadata/{ns}/{layer}/{name}` | Get table metadata (merged Postgres + .meta.yaml) |
-| `PUT` | `/api/v1/metadata/{ns}/{layer}/{name}` | Create or update table metadata |
-| `GET` | `/api/v1/pipelines/{ns}/{layer}/{name}/meta` | Read raw .meta.yaml file |
-| `PUT` | `/api/v1/pipelines/{ns}/{layer}/{name}/meta` | Write .meta.yaml file |
+| `GET` | `/api/v1/tables/{ns}/{layer}/{name}` | Get table info enriched with description, owner, and column descriptions |
+| `PUT` | `/api/v1/tables/{ns}/{layer}/{name}/metadata` | Create or replace the whole metadata document (description, owner, `column_descriptions`) |
+| `GET` | `/api/v1/pipelines/{ns}/{layer}/{name}/metadata` | Read the pipeline's read-only `pipeline.meta.yaml` sidecar (if present) |
+| `GET` | `/api/v1/pipelines/{ns}/{layer}/{name}/metadata/quality` | Read the read-only quality-test metadata sidecar |
+
+<Callout type="info">
+To update column descriptions, include them under `column_descriptions` in the `PUT .../metadata` body — there is no separate write endpoint for columns. RAT does **not** support writing table column metadata via a `.meta.yaml` file; the pipeline `*.meta.yaml` sidecars exposed under `/pipelines/.../metadata` are read-only.
+</Callout>
 
 ---
 
@@ -232,19 +197,20 @@ total_amount: "Amount in USD, DECIMAL(10,2), includes tax"
 status: "Enum: pending | confirmed | shipped | delivered | cancelled"
 ```
 
-### Keep `.meta.yaml` in sync
+### Send the whole document on every update
 
-If you use `.meta.yaml` files alongside Postgres metadata, keep them reasonably in sync. The Portal always shows the merged view, but discrepancies can be confusing when reading the raw files.
+Because `PUT .../metadata` replaces the entire metadata document, always include the fields you want to keep (`description`, `owner`, and the full `column_descriptions` map) in each request. Fetch the current metadata via `GET /api/v1/tables/{ns}/{layer}/{name}` first if you need to merge in a single new column.
 
 ### Use descriptions to document assumptions
 
 Column descriptions are the right place to document business rules, edge cases, and assumptions:
 
-```yaml filename=".meta.yaml"
-columns:
-  total_amount: |
-    Order total in USD as DECIMAL(10,2).
-    Includes sales tax. Excludes shipping and handling.
-    Negative values indicate refunds.
-    NULL means the order was created but not yet priced.
+```bash filename="API"
+curl -X PUT http://localhost:8080/api/v1/tables/{ns}/{layer}/{table}/metadata \
+  -H "Content-Type: application/json" \
+  -d '{
+    "column_descriptions": {
+      "total_amount": "Order total in USD as DECIMAL(10,2). Includes sales tax. Excludes shipping and handling. Negative values indicate refunds. NULL means the order was created but not yet priced."
+    }
+  }'
 ```

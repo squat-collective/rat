@@ -1,5 +1,7 @@
 # ADR-012: License Gating for Pro Plugins
 
+> **Superseded (2026-05-28):** RAT is now **100% free and open-source**. License gating has been **retired** — there are no Pro plugins to license, and `EDITION` / `RAT_LICENSE_KEY` gate nothing. This record is kept for historical context only.
+
 ## Status: Accepted
 
 ## Context

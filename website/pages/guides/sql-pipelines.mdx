@@ -103,7 +103,7 @@ RAT pipelines use Jinja2 templating to inject dynamic values and references. Jin
 | `{{ this }}` | String | Current pipeline's own Iceberg table (for self-referencing) |
 | `{{ run_started_at }}` | String | ISO 8601 UTC timestamp of when the run started |
 | `{{ watermark_value }}` | String | MAX value of `watermark_column` from the existing table |
-| `{{ is_incremental() }}` | Boolean | `true` if strategy is `incremental` and table already exists |
+| `{{ is_incremental() }}` | Boolean | `true` whenever the merge strategy is `incremental` |
 | `{{ is_scd2() }}` | Boolean | `true` if strategy is `scd2` |
 
 ### The `ref()` Function
@@ -156,7 +156,7 @@ WHERE last_login_at > '{{ watermark_value }}'
 {% endif %}
 ```
 
-On the **first run**, `is_incremental()` returns `false` (the target table does not exist yet), so RAT loads all data. On **subsequent runs**, it returns `true`, and only rows newer than the watermark are processed.
+`is_incremental()` returns `true` on every run when the strategy is `incremental`. On the **first run**, `watermark_value` is empty, so the `WHERE col > watermark` filter matches everything and RAT loads all data. On **subsequent runs**, `watermark_value` holds the previous `MAX(watermark_column)`, so only rows newer than the watermark are processed.
 
 You can also use Jinja for other conditional patterns:
 
@@ -330,5 +330,5 @@ WHERE o.updated_at > '{{ watermark_value }}'
 </Cards>
 
 <Callout type="warning">
-**Common mistake**: Forgetting `{% if is_incremental() %}` in an incremental pipeline. Without the watermark filter, every run reprocesses all data — defeating the purpose of incremental processing. On the first run, the filter is skipped automatically (the table does not exist yet).
+**Common mistake**: Forgetting `{% if is_incremental() %}` in an incremental pipeline. Without the watermark filter, every run reprocesses all data — defeating the purpose of incremental processing. On the first run, `watermark_value` is empty, so the filter selects everything automatically.
 </Callout>

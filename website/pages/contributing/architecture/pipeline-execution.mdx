@@ -463,12 +463,12 @@ Cancellation is **cooperative** --- the runner checks a cancel flag between phas
 
 If the runner crashes mid-execution, the run is left in `running` state with an orphaned Nessie branch. The **reaper** daemon in ratd handles recovery:
 
-1. **Stuck run detection** --- the reaper queries for runs with `status=running` and `started_at` older than 30 minutes (configurable via `stuck_run_timeout_minutes`). These runs are marked as `failed` with an error message indicating the timeout.
+1. **Stuck run detection** --- the reaper queries for runs with `status=running` and `started_at` older than 30 minutes (`stuck_run_timeout_minutes`, default 30). These runs are marked as `failed` with an error message indicating the timeout.
 
 2. **Orphan branch cleanup** --- the reaper queries Nessie for branches matching `run-*` that are older than 6 hours (configurable via `nessie_orphan_branch_max_age_hours`). These branches are deleted.
 
 <Callout type="info">
-The reaper runs every 60 minutes (configurable) and performs 6 cleanup tasks. See the [Reaper section](/contributing/architecture/services#ratd--platform-api-server) for all tasks.
+The reaper runs every 15 minutes by default (`reaper_interval_minutes`) and performs several cleanup tasks. See the [Reaper section](/contributing/architecture/services#ratd--platform-api-server) for all tasks.
 </Callout>
 
 ---

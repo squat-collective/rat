@@ -140,7 +140,7 @@ WHERE updated_at > '{{ watermark_value }}'
 
 ### Dedup Behavior
 
-When multiple rows in the pipeline output share the same `unique_key`, RAT keeps only **the last row** using `ROW_NUMBER() OVER (PARTITION BY unique_key ORDER BY unique_key)`. This means the row that appears last in the result set wins.
+When multiple rows in the pipeline output share the same `unique_key`, RAT keeps only **the last row**. It tags each incoming row with its insertion order and applies `ROW_NUMBER() OVER (PARTITION BY unique_key ORDER BY _rowid DESC)`, so the row that appears last in the result set (highest insertion order) wins.
 
 For composite keys, separate column names with commas:
 
@@ -390,7 +390,7 @@ WHERE region IN ('US', 'EU')
 ### Properties
 
 - **Idempotent**: Yes. Re-running with the same data for the same partitions produces the same result.
-- **Required annotations**: `partition_column`
+- **Recommended annotations**: `partition_column` — without it, `snapshot` falls back to `full_refresh` (no error)
 - **Performance**: Only rewrites affected partitions, leaving others untouched.
 
 <Callout type="warning">
@@ -439,12 +439,12 @@ This is **correct** but **slow**. The merge is still idempotent, but every run r
 -- WRONG: snapshot without partition_column
 -- @merge_strategy: snapshot
 
--- RIGHT: snapshot requires a partition column
+-- RIGHT: give snapshot a partition column
 -- @merge_strategy: snapshot
 -- @partition_column: region
 ```
 
-Without `partition_column`, RAT does not know which partitions to overwrite and the pipeline will fail.
+Without `partition_column`, RAT has no partitions to overwrite, so `snapshot` quietly falls back to `full_refresh` (it does not fail) — usually not what you intended.
 
 ### 5. SCD2 columns in SELECT
 

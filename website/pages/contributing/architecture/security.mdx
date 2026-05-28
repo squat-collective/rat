@@ -24,13 +24,13 @@ flowchart TD
     end
 
     subgraph Auth ["Authentication Layer"]
-        AuthPlugin["Plugin Auth (JWT)"]
+        AuthPlugin["Auth Plugin (JWT, optional)"]
         APIKey["API Key Auth"]
         Noop["Noop Auth"]
     end
 
     subgraph Authz ["Authorization Layer"]
-        Enforce["Enforcement Plugin"]
+        Enforce["Permission Plugin (optional)"]
         Audit["Audit Logging"]
     end
 
@@ -62,50 +62,51 @@ flowchart TD
 
 RAT supports three authentication modes, selected based on configuration:
 
-### Mode 1: Plugin Auth (Pro)
+### Mode 1: Plugin Auth (optional auth plugin)
 
-When the `auth` plugin is configured in `rat.yaml`, all incoming requests are authenticated via the plugin's `Authenticate` gRPC call.
+When an `auth` plugin is configured in `rat.yaml`, all incoming requests are authenticated via the plugin's `Authenticate` gRPC call.
 
 <Mermaid chart={`
 sequenceDiagram
     actor User
     participant Portal
     participant ratd
-    participant AuthPlugin as auth-keycloak
+    participant IdentityPlugin as Identity plugin
 
-    User->>Portal: Login via Keycloak
+    User->>Portal: Login via identity provider
     Portal-->>User: Bearer token (JWT)
 
     User->>Portal: Click "Run Pipeline"
     Portal->>ratd: POST /api/v1/runs<br/>Authorization: Bearer eyJhbG...
-    ratd->>AuthPlugin: gRPC Authenticate(token)
-    AuthPlugin->>AuthPlugin: Validate JWT signature (JWKS)
-    AuthPlugin->>AuthPlugin: Check token expiry
-    AuthPlugin->>AuthPlugin: Extract claims (user, roles)
-    AuthPlugin-->>ratd: AuthenticateResponse(user_id, email, roles)
+    ratd->>IdentityPlugin: gRPC Authenticate(token)
+    IdentityPlugin->>IdentityPlugin: Validate JWT signature (JWKS)
+    IdentityPlugin->>IdentityPlugin: Check token expiry
+    IdentityPlugin->>IdentityPlugin: Extract claims (user, roles)
+    IdentityPlugin-->>ratd: AuthenticateResponse(user_id, email, roles)
     ratd->>ratd: Inject user into context
     ratd->>ratd: Continue to handler
 `} />
 
-**JWT validation details**:
-- Signature verified against Keycloak's JWKS endpoint
-- Token expiry checked (clock skew tolerance: 30 seconds)
-- Required claims: `sub` (user ID), `email`, `realm_access.roles`
-- Invalid or expired tokens return `401 Unauthorized`
+The flow above is an *example* of an identity plugin that validates OIDC-style JWTs — the slot accepts any authentication scheme. A typical JWT-based plugin would:
+
+- Verify the signature against the provider's JWKS endpoint
+- Check token expiry (with a small clock-skew tolerance)
+- Read the user, email, and roles claims it cares about
+- Return `401 Unauthorized` for invalid or expired tokens
 
 ### Mode 2: API Key Auth
 
-When `RAT_API_KEY` environment variable is set, ratd validates the `X-API-Key` header against it:
+When the `RAT_API_KEY` environment variable is set, ratd validates the `Authorization` header against it as a Bearer token:
 
 ```
-X-API-Key: {RAT_API_KEY value}
+Authorization: Bearer {RAT_API_KEY value}
 ```
 
-This is a simple shared-secret model suitable for single-user or CI/CD integrations. The API key is compared using constant-time comparison to prevent timing attacks.
+This is a simple shared-secret model suitable for single-user or CI/CD integrations. The token is compared using constant-time comparison (`crypto/subtle.ConstantTimeCompare`) to prevent timing attacks.
 
-### Mode 3: Noop Auth (Community Default)
+### Mode 3: Noop Auth (default)
 
-When no auth plugin is configured and no API key is set, all requests pass through without authentication. This is the default for the Community Edition --- a single-user, self-hosted platform.
+When no auth plugin is configured and no API key is set, all requests pass through without authentication. This is the default --- a single-user, self-hosted platform.
 
 ### Auth Mode Resolution
 
@@ -148,13 +149,12 @@ Certain endpoints have custom rate limits:
 
 ### Rate Limit Headers
 
-Rate-limited responses include standard headers:
+Rate-limited responses include standard headers (no `X-` prefix):
 
 ```http
 HTTP/1.1 429 Too Many Requests
-X-RateLimit-Limit: 50
-X-RateLimit-Remaining: 0
-X-RateLimit-Reset: 1708099200
+RateLimit-Limit: 50
+RateLimit-Remaining: 0
 Retry-After: 1
 ```
 
@@ -310,7 +310,7 @@ Before execution, the Python code is parsed into an Abstract Syntax Tree (AST) a
 Any SQL strings constructed inside the Python pipeline are filtered through the same safety checks used by the query service. This prevents a Python pipeline from executing dangerous SQL via DuckDB.
 
 <Callout type="warning">
-The Python sandbox is designed for defense-in-depth, not as a complete security boundary. In multi-tenant environments, use the Pro container-executor plugin, which runs each pipeline in an isolated container with its own network namespace and filesystem.
+The Python sandbox is designed for defense-in-depth, not as a complete security boundary. In multi-tenant environments, fill the **executor** slot with a plugin that runs each pipeline in an isolated container with its own network namespace and filesystem.
 </Callout>
 
 ---
@@ -361,7 +361,7 @@ install_extension, load_extension
 | Limit | Value | Purpose |
 |-------|-------|---------|
 | Max query size | 100 KB | Prevent memory exhaustion from huge queries |
-| Query timeout | 30 seconds | Prevent long-running queries from blocking |
+| Query timeout | `QUERY_TIMEOUT_SECS` (default 60s) | Prevent long-running queries from blocking |
 | Result set limit | Configurable | Cap the number of returned rows |
 
 ### Enforcement Order
@@ -370,7 +370,7 @@ install_extension, load_extension
 1. Size check (< 100 KB)
 2. Statement blocklist scan
 3. Function blocklist scan
-4. Execute with 30s timeout
+4. Execute with 60s timeout
 5. Return results
 ```
 
@@ -483,6 +483,7 @@ flowchart TB
         Postgres["Postgres :5432"]
         MinIO["MinIO :9000"]
         Nessie["Nessie :19120"]
+        ratd_internal["ratd internal :8090"]
     end
 
     Browser -->|HTTP| Portal
@@ -502,12 +503,12 @@ flowchart TB
 | Browser/External | Portal (3000), ratd (8080) | runner, ratq, postgres, minio, nessie |
 | Portal | ratd (internal) | runner, ratq (goes through ratd) |
 | ratd | All backend services | N/A (has full access) |
-| runner | MinIO, Nessie, ratd (callback) | Postgres, ratq, portal |
+| runner | MinIO, Nessie, ratd internal listener (`:8090` callback) | Postgres, ratq, portal |
 | ratq | MinIO, Nessie | Postgres, runner, portal, ratd |
 | postgres | None (accepts connections only) | All outbound |
 
 <Callout type="warning">
-In development mode, Postgres (5432), MinIO (9000, 9001), and Nessie (19120) bind to **localhost only** (`127.0.0.1:port:port`). These ports are accessible from the host machine for debugging but not from external networks. In production, remove these localhost port bindings entirely.
+In development mode, Postgres (host `5433`), MinIO (host `9002`/`9003`), and Nessie (`19120`) bind to **localhost only** (`127.0.0.1:port:port`). These ports are accessible from the host machine for debugging but not from external networks. ratd's internal listener (`:8090`) is never published to the host. In production, remove these localhost port bindings entirely.
 </Callout>
 
 ---
@@ -520,7 +521,7 @@ ratd sets the following security headers on all responses:
 |--------|-------|---------|
 | `X-Content-Type-Options` | `nosniff` | Prevents MIME type sniffing |
 | `X-Frame-Options` | `DENY` | Prevents clickjacking |
-| `X-XSS-Protection` | `1; mode=block` | Enables browser XSS filter |
+| `X-XSS-Protection` | `0` | Disables the legacy browser XSS auditor (per OWASP guidance; CSP is the modern defense) |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | Controls referrer information |
 | `X-Request-Id` | `{uuid}` | Unique request identifier for tracing |
 
@@ -532,30 +533,30 @@ All state-changing operations (POST, PUT, DELETE) are logged to the `audit_log` 
 
 ```sql filename="audit_log schema"
 CREATE TABLE audit_log (
-    id          UUID PRIMARY KEY,
-    actor       VARCHAR(255) NOT NULL,  -- username or "anonymous"
-    action      VARCHAR(100) NOT NULL,  -- "pipeline.create", "run.trigger"
-    object_type VARCHAR(20),            -- "pipeline", "run", "schedule"
-    object_id   UUID,
-    details     JSONB,                  -- request body, response code, etc.
-    timestamp   TIMESTAMPTZ NOT NULL
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     VARCHAR(255) NOT NULL DEFAULT 'anonymous', -- username or "anonymous"
+    action      VARCHAR(50)  NOT NULL,  -- HTTP method: "post", "put", "delete"
+    resource    VARCHAR(100) NOT NULL,  -- request path, e.g. /api/v1/runs
+    detail      TEXT DEFAULT '',        -- reserved for future use
+    ip          VARCHAR(45),            -- client IP
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
 ### Audit Events
 
-| Action | Trigger |
-|--------|---------|
-| `pipeline.create` | New pipeline created |
-| `pipeline.update` | Pipeline code or config modified |
-| `pipeline.delete` | Pipeline soft-deleted |
-| `run.trigger` | Pipeline run started (manual, scheduled, triggered) |
-| `run.cancel` | Pipeline run cancelled |
-| `schedule.create` | New schedule created |
-| `schedule.update` | Schedule modified |
-| `schedule.delete` | Schedule deleted |
-| `namespace.create` | New namespace created |
-| `storage.upload` | File uploaded to landing zone |
+The audit middleware logs every mutating HTTP request (`POST`, `PUT`, `DELETE`). The `action` column is the lowercase HTTP method and `resource` is the request path. Examples:
+
+| `action` | `resource` | Trigger |
+|--------|---------|---------|
+| `post` | `/api/v1/pipelines` | New pipeline created |
+| `put` | `/api/v1/pipelines/{ns}/{layer}/{name}` | Pipeline code or config modified |
+| `delete` | `/api/v1/pipelines/{ns}/{layer}/{name}` | Pipeline soft-deleted |
+| `post` | `/api/v1/runs` | Pipeline run started |
+| `post` | `/api/v1/runs/{id}/cancel` | Pipeline run cancelled |
+| `post` | `/api/v1/schedules` | New schedule created |
+| `post` | `/api/v1/namespaces` | New namespace created |
+| `post` | `/api/v1/files/upload` | File uploaded |
 
 ### Audit Log Retention
 

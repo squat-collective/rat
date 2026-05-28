@@ -14,7 +14,7 @@ Health endpoints provide liveness checks, readiness checks, version information,
 | `GET` | `/health/live` | Version and build info |
 | `GET` | `/health/ready` | Dependency health checks |
 | `GET` | `/metrics` | Prometheus metrics |
-| `GET` | `/api/v1/features` | Platform features and edition |
+| `GET` | `/api/v1/features` | Active platform features and plugins |
 
 ---
 
@@ -36,12 +36,16 @@ curl http://localhost:8080/health
 
 ```json
 {
-  "status": "healthy"
+  "status": "ok",
+  "version": "0.2.0",
+  "git_commit": "a1b2c3d",
+  "build_time": "2026-02-15T10:00:00Z",
+  "go_version": "go1.24.0"
 }
 ```
 
 <Callout type="info">
-This endpoint is intentionally simple and has no dependencies. If the HTTP server can respond, the service is alive. For dependency-aware health checking, use `GET /health/ready`.
+This endpoint is intentionally simple and has no dependencies. If the HTTP server can respond, the service is alive (`status` is always `"ok"`). It also reports build/version metadata. For dependency-aware health checking, use `GET /health/ready`.
 </Callout>
 
 ---
@@ -64,20 +68,24 @@ curl http://localhost:8080/health/live
 
 ```json
 {
-  "status": "healthy",
-  "version": "2.1.0",
-  "go_version": "go1.22.4",
+  "status": "ok",
+  "version": "0.2.0",
+  "go_version": "go1.24.0",
   "build_time": "2026-02-15T10:00:00Z",
   "git_commit": "a1b2c3d"
 }
 ```
 
+<Callout type="info">
+`/health/live` and `/health` (the backward-compatible alias) return the same payload. Version, commit, and build time are injected at release build time; local/unstamped builds report `"dev"` / `"unknown"`.
+</Callout>
+
 ### Response Fields
 
 | Field | Type | Description |
 |---|---|---|
-| `status` | `string` | Always `healthy` |
-| `version` | `string` | RAT platform version (semver) |
+| `status` | `string` | Always `ok` |
+| `version` | `string` | RAT platform version (semver; `dev` for local builds) |
 | `go_version` | `string` | Go compiler version |
 | `build_time` | `string` | ISO 8601 build timestamp |
 | `git_commit` | `string` | Short git commit hash |
@@ -90,7 +98,7 @@ curl http://localhost:8080/health/live
 GET /health/ready
 ```
 
-Checks the health of all dependencies (Postgres, S3/MinIO, runner, query service). Returns `200 OK` only when all required dependencies are healthy. Returns `503 Service Unavailable` if any required dependency is down.
+Checks the health of all configured dependencies (Postgres, S3, runner, query service). Each dependency is checked concurrently with a 2-second timeout. Returns `200 OK` only when every check passes. Returns `503 Service Unavailable` if any dependency is down.
 
 ### Request
 
@@ -102,12 +110,12 @@ curl http://localhost:8080/health/ready
 
 ```json
 {
-  "status": "ok",
-  "services": {
-    "postgres": "healthy",
-    "s3": "healthy",
-    "runner": "healthy",
-    "query": "healthy"
+  "status": "ready",
+  "checks": {
+    "postgres": { "status": "ok" },
+    "s3": { "status": "ok" },
+    "runner": { "status": "ok" },
+    "query": { "status": "ok" }
   }
 }
 ```
@@ -116,12 +124,12 @@ curl http://localhost:8080/health/ready
 
 ```json
 {
-  "status": "degraded",
-  "services": {
-    "postgres": "healthy",
-    "s3": "healthy",
-    "runner": "unhealthy",
-    "query": "healthy"
+  "status": "not_ready",
+  "checks": {
+    "postgres": { "status": "ok" },
+    "s3": { "status": "ok" },
+    "runner": { "status": "error", "error": "dial tcp: connection refused" },
+    "query": { "status": "ok" }
   }
 }
 ```
@@ -130,12 +138,14 @@ curl http://localhost:8080/health/ready
 
 | Field | Type | Description |
 |---|---|---|
-| `status` | `string` | Overall status: `ok` or `degraded` |
-| `services` | `object` | Health status of each dependency |
-| `services.postgres` | `string` | Postgres connection status |
-| `services.s3` | `string` | S3/MinIO connection status |
-| `services.runner` | `string` | Runner gRPC connection status |
-| `services.query` | `string` | Query service (ratq) gRPC connection status |
+| `status` | `string` | Overall status: `ready` or `not_ready` |
+| `checks` | `object` | Map of dependency name → check result. Only configured dependencies appear |
+| `checks.<dep>.status` | `string` | Per-dependency status: `ok` or `error` |
+| `checks.<dep>.error` | `string` | Error message, present only when `status` is `error` |
+
+<Callout type="info">
+Dependency keys are `postgres`, `s3`, `runner`, and `query`. A dev server with no dependencies configured returns an empty `checks` map and is still `ready`.
+</Callout>
 
 ### Dependency Health
 
@@ -168,26 +178,42 @@ curl http://localhost:8080/metrics
 
 ### Response — `200 OK`
 
-Returns metrics in Prometheus text exposition format:
+Returns metrics in Prometheus text exposition format. `ratd` exposes a lightweight, hand-rolled metric set (no `prometheus/client_golang` histograms — there are no per-request latency or HTTP counters):
 
 ```
-# HELP ratd_http_requests_total Total number of HTTP requests
-# TYPE ratd_http_requests_total counter
-ratd_http_requests_total{method="GET",path="/api/v1/pipelines",status="200"} 142
+# HELP ratd_info Build information about ratd.
+# TYPE ratd_info gauge
+ratd_info{version="0.2.0",git_commit="a1b2c3d",go_version="go1.24.0"} 1
 
-# HELP ratd_http_request_duration_seconds HTTP request duration in seconds
-# TYPE ratd_http_request_duration_seconds histogram
-ratd_http_request_duration_seconds_bucket{method="GET",path="/api/v1/pipelines",le="0.1"} 140
+# HELP ratd_goroutines Number of goroutines.
+# TYPE ratd_goroutines gauge
+ratd_goroutines 42
 
-# HELP ratd_runs_total Total pipeline runs
-# TYPE ratd_runs_total counter
-ratd_runs_total{status="success"} 1234
-ratd_runs_total{status="failed"} 56
-
-# HELP ratd_active_runs Current number of active runs
-# TYPE ratd_active_runs gauge
-ratd_active_runs 3
+# HELP ratd_plugins_total Total number of registered plugins (any status).
+# TYPE ratd_plugins_total gauge
+ratd_plugins_total 3
 ```
+
+### Exposed Metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `ratd_info` | gauge | Build info (labels `version`, `git_commit`, `go_version`); value always `1` |
+| `ratd_goroutines` | gauge | Number of goroutines |
+| `ratd_memory_alloc_bytes` | gauge | Current heap allocation in bytes |
+| `ratd_memory_sys_bytes` | gauge | Total memory obtained from the OS in bytes |
+| `ratd_gc_completed_total` | counter | Completed GC cycles |
+| `ratd_sse_connections_active` | gauge | Active SSE connections (when the SSE limiter is enabled) |
+| `ratd_postgres_pool_total` | gauge | Configured size of the main Postgres pool |
+| `ratd_postgres_pool_acquired` | gauge | Currently-acquired connections from the main pool |
+| `ratd_postgres_heartbeat_pool_total` | gauge | Configured size of the dedicated heartbeat pool (when enabled) |
+| `ratd_postgres_heartbeat_pool_acquired` | gauge | Currently-acquired connections from the heartbeat pool |
+| `ratd_plugins_total` | gauge | Registered plugins (any status) |
+| `ratd_plugins_healthy` | gauge | Plugins currently enabled (passing health-loop probes) |
+| `ratd_scheduler_last_tick_duration_seconds` | gauge | Duration of the most recent scheduler tick |
+| `ratd_scheduler_last_tick_dispatched_total` | gauge | Schedules dispatched in the most recent scheduler tick |
+
+Pool, heartbeat-pool, SSE, plugin, and scheduler metrics are only emitted when the corresponding subsystem is active.
 
 <Callout type="info">
 Configure your Prometheus instance to scrape `http://ratd:8080/metrics` at your desired interval. The metrics endpoint is unauthenticated and does not require API keys.
@@ -201,7 +227,7 @@ Configure your Prometheus instance to scrape `http://ratd:8080/metrics` at your 
 GET /api/v1/features
 ```
 
-Returns the active platform capabilities, edition, and loaded plugins. The portal uses this endpoint to show or hide UI elements based on available features.
+Returns the active platform capabilities and loaded plugins. The portal uses this endpoint to show or hide UI elements based on available features.
 
 <Callout type="info">
 Unlike other health endpoints, this endpoint is under `/api/v1` and respects the auth middleware when authentication is enabled.
@@ -213,44 +239,30 @@ Unlike other health endpoints, this endpoint is under `/api/v1` and respects the
 curl http://localhost:8080/api/v1/features
 ```
 
-### Response — `200 OK` (Community Edition)
+### Response — `200 OK` (default, no optional plugins)
 
 ```json
 {
   "edition": "community",
-  "plugins": {
-    "auth": { "enabled": false },
-    "sharing": { "enabled": false },
-    "executor": { "enabled": true, "type": "warmpool" },
-    "audit": { "enabled": false },
-    "enforcement": { "enabled": false }
-  },
   "namespaces": false,
   "multi_user": false,
   "landing_zones": true,
-  "license": null
+  "plugins": {}
 }
 ```
 
-### Response — `200 OK` (Pro Edition)
+### Response — `200 OK` (with optional plugins enabled)
 
 ```json
 {
-  "edition": "pro",
-  "plugins": {
-    "auth": { "enabled": true, "type": "keycloak" },
-    "sharing": { "enabled": true },
-    "executor": { "enabled": true, "type": "warmpool" },
-    "audit": { "enabled": true },
-    "enforcement": { "enabled": true }
-  },
+  "edition": "community",
   "namespaces": true,
   "multi_user": true,
   "landing_zones": true,
-  "license": {
-    "type": "pro",
-    "expires_at": "2027-02-15T00:00:00Z",
-    "max_users": 50
+  "plugins": {
+    "auth": { "enabled": true, "type": "keycloak" },
+    "sharing": { "enabled": true },
+    "executor": { "enabled": true, "type": "warmpool" }
   }
 }
 ```
@@ -259,17 +271,12 @@ curl http://localhost:8080/api/v1/features
 
 | Field | Type | Description |
 |---|---|---|
-| `edition` | `string` | Platform edition: `community` or `pro` |
-| `plugins` | `object` | Status of each plugin slot |
-| `plugins.auth` | `object` | Authentication plugin status |
-| `plugins.sharing` | `object` | Resource sharing plugin status |
-| `plugins.executor` | `object` | Pipeline executor plugin status and type |
-| `plugins.audit` | `object` | Audit logging plugin status |
-| `plugins.enforcement` | `object` | Access enforcement plugin status |
+| `edition` | `string` | Build edition identifier returned by ratd (currently `community`) |
+| `plugins` | `object` | Status of each active plugin, keyed by plugin/slot name |
 | `namespaces` | `boolean` | Whether multi-namespace support is active |
-| `multi_user` | `boolean` | Whether multi-user mode is active |
+| `multi_user` | `boolean` | Whether multi-user mode is active (provided by an auth plugin) |
 | `landing_zones` | `boolean` | Whether landing zones are available |
-| `license` | `object\|null` | License information (Pro only, `null` for Community) |
-| `license.type` | `string` | License type |
-| `license.expires_at` | `string` | ISO 8601 license expiration date |
-| `license.max_users` | `integer` | Maximum number of users allowed |
+
+<Callout type="info">
+The exact shape of `plugins` depends on which optional plugins you have installed. Features such as multi-user, sharing, and a container executor are all delivered as free optional plugins.
+</Callout>

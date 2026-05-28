@@ -152,7 +152,7 @@ In summary:
 
 ### Automatically During Pipeline Runs
 
-Quality tests run automatically as part of every pipeline execution. You do not need to do anything — RAT discovers all `.sql` files in `tests/quality/` and runs them.
+Quality tests run automatically when a **published** pipeline executes. (Unpublished pipelines can't run at all, so there's nothing to test until you publish.) RAT runs the `.sql` files captured in the pipeline's pinned published version — each test is read from its published snapshot, not from a live listing of the `tests/quality/` directory.
 
 ### Manually from the Portal
 

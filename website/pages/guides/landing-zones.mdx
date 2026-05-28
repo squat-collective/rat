@@ -69,9 +69,9 @@ Click "New Landing Zone", enter a name (e.g., `orders`), and confirm. The name s
 You can also create landing zones via the RAT API:
 
 ```bash filename="Terminal"
-curl -X POST http://localhost:8080/api/v1/namespaces/ecommerce/storage/landing-zones \
+curl -X POST http://localhost:8080/api/v1/landing-zones \
   -H "Content-Type: application/json" \
-  -d '{"name": "orders"}'
+  -d '{"namespace": "ecommerce", "name": "orders", "description": "Order CSV drops"}'
 ```
 
 ## Uploading Files
@@ -99,10 +99,9 @@ Uploaded files appear in the file list with their size and upload timestamp.
 Upload files via the storage API:
 
 ```bash filename="Terminal"
-# Upload a single file
-curl -X PUT http://localhost:8080/api/v1/namespaces/ecommerce/storage/upload \
-  -F "file=@orders_2024_03.csv" \
-  -F "path=landing/orders/orders_2024_03.csv"
+# Upload a single file (multipart form field: file)
+curl -X POST http://localhost:8080/api/v1/landing-zones/ecommerce/orders/files \
+  -F "file=@orders_2024_03.csv"
 ```
 
 ### Programmatically via S3
@@ -330,17 +329,20 @@ When a file is uploaded to a landing zone (via portal, API, or S3), RAT fires a 
 
 ### Configuring Triggers
 
-Set up the trigger in your pipeline's `config.yaml`:
+Triggers are **not** defined in `config.yaml`. Create a `landing_zone_upload` trigger on the
+pipeline via the triggers API (or the pipeline's **Settings → Triggers** panel in the portal):
 
-```yaml filename="config.yaml"
-merge_strategy: append_only
-archive_landing_zones: true
-triggers:
-  - type: landing_zone_upload
-    zone: orders
+```bash filename="Terminal"
+curl -X POST http://localhost:8080/api/v1/pipelines/ecommerce/bronze/raw_orders/triggers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "landing_zone_upload",
+    "config": { "namespace": "ecommerce", "zone_name": "orders" }
+  }'
 ```
 
 Now whenever files are uploaded to the `orders` landing zone, this pipeline runs automatically.
+See the [Pipeline Triggers](/guides/pipeline-triggers) guide for all trigger types.
 
 <Callout type="info">
 Triggers are debounced — if multiple files are uploaded in quick succession, RAT waits briefly before triggering to batch them into a single run.
@@ -434,12 +436,22 @@ WHERE (SELECT COUNT(*) FROM {{ this }}) = 0
 
 ### Step 5: Configure Trigger (Optional)
 
+Keep `config.yaml` for merge/archive settings only — triggers are created separately via the
+triggers API (or the portal's **Settings → Triggers** panel):
+
 ```yaml filename="ecommerce/pipelines/bronze/raw_orders/config.yaml"
 merge_strategy: append_only
 archive_landing_zones: true
-triggers:
-  - type: landing_zone_upload
-    zone: orders
+```
+
+```bash filename="Terminal"
+# Create the landing_zone_upload trigger on the pipeline
+curl -X POST http://localhost:8080/api/v1/pipelines/ecommerce/bronze/raw_orders/triggers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "landing_zone_upload",
+    "config": { "namespace": "ecommerce", "zone_name": "orders" }
+  }'
 ```
 
 ### Step 6: Upload Data and Run

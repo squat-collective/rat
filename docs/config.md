@@ -351,7 +351,7 @@ NESSIE_URL=http://nessie:19120/api/v1
 | `RAT_LISTEN_ADDR` | No | `127.0.0.1:8080` | Public listener address (`host:port`) for end-user APIs. Bind to `0.0.0.0:8080` in compose / k8s. Default binds to localhost only — opening it to the network without `RAT_API_KEY` set logs a warning. |
 | `PORT` | No | `8080` | Legacy single-port form. Used as `:${PORT}` when `RAT_LISTEN_ADDR` is unset. Prefer `RAT_LISTEN_ADDR` for new deployments. |
 | `INTERNAL_LISTEN_ADDR` | No | `127.0.0.1:8090` | Private listener for service-to-service callbacks (`POST /api/v1/internal/runs/{id}/status`, `POST /api/v1/internal/plugins/register`). MUST NOT be exposed beyond the container network. Compose binds it to `0.0.0.0:8090` inside the network and `127.0.0.1:8090` on the host. Refuses to start if equal to `RAT_LISTEN_ADDR`. See [ADR-019](adr/019-internal-listener-split.md). |
-| `RAT_API_KEY` | No | — | When set, every request to the public listener must carry `Authorization: Bearer <key>` or `X-API-Key: <key>`. The internal listener is unaffected (its auth model is network isolation). Use for single-tenant CE deployments behind a reverse proxy where you want a simple shared secret. Pro deployments use the auth plugin instead. |
+| `RAT_API_KEY` | No | — | When set, every request to the public listener must carry `Authorization: Bearer <key>` or `X-API-Key: <key>`. The internal listener is unaffected (its auth model is network isolation). Use for single-tenant deployments behind a reverse proxy where you want a simple shared secret. For multi-user auth, install the auth plugin instead. |
 | `CORS_ORIGINS` | No | — | Comma-separated list of allowed origins for CORS. Defaults to no CORS (same-origin only). Set to `http://localhost:3000` for portal-on-different-port dev setups, or your portal's public URL in production. |
 | `RATE_LIMIT` | No | `100` | Requests per minute per client IP on the public listener. Set to `0` to disable. Applied after auth so authenticated requests share the per-IP budget. |
 | `SCHEDULER_ENABLED` | No | `true` | When `false`, ratd starts without the cron scheduler — useful for multi-replica deployments where only one instance should fire schedules. Pair with leader election (the `internal/leader` advisory-lock + heartbeat — see [ADR-023](adr/023-leader-heartbeat-dedicated-pool.md)). |
@@ -361,46 +361,14 @@ NESSIE_URL=http://nessie:19120/api/v1
 | `TLS_CERT_FILE`, `TLS_KEY_FILE` | No | — | When both are set, the public listener serves HTTPS instead of HTTP. Mutually inclusive (only one set → startup error). For typical deployments, prefer terminating TLS at a reverse proxy and leaving ratd on plain HTTP. |
 | `RAT_HEARTBEAT_POOL_ENABLED` | No | `true` | When `true`, the leader heartbeat uses a dedicated 1-connection pgx pool so handler load can't starve it. Set to `false` for tiny deployments where one extra Postgres connection isn't worth it (falls back to the shared pool, loses the saturation guard). See [ADR-023](adr/023-leader-heartbeat-dedicated-pool.md). |
 | `RAT_PPROF_ADDR` | No | — | Enables Go pprof endpoints (goroutine, heap, allocs, CPU profile, trace) on a dedicated listener. Disabled by default. **SECURITY**: pprof exposes sensitive runtime state — NEVER bind to a public interface. Use `127.0.0.1:6060` in production and access via SSH tunnel. |
-| `EDITION` | No | `community` | Edition identifier. Returned in `GET /health` and `GET /api/v1/features`. |
 
 ---
 
-## License (Pro Edition)
+## Licensing
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `RAT_LICENSE_KEY` | No | — | Signed JWT license key for Pro plugins. If set, ratd decodes the JWT payload (no signature validation) for display in `GET /api/v1/features`. Each Pro plugin validates the signature against its embedded RSA public key. |
+RAT is **100% free and open-source** — there are no editions, tiers, or license keys. Every capability ships in this monorepo; the auth, executor, sharing, and cloud features below are free, optional plugins you install when you need them.
 
-**Example**:
-```
-RAT_LICENSE_KEY=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
-```
-
-### How It Works
-
-- **ratd (community)**: Decodes the JWT payload (base64 only, no crypto) and exposes license info in the `/api/v1/features` response. No signature validation — no crypto dependencies in community code.
-- **Pro plugins**: Each plugin validates the JWT signature against an embedded RSA public key at startup. If valid and the plugin name is in the `plugins` claim, the plugin serves normally (`STATUS_SERVING`). If invalid or missing, the plugin returns `STATUS_NOT_SERVING` and ratd gracefully disables it.
-- **Offline**: Validation is entirely offline — no phone-home to a license server.
-
-### JWT Claims
-
-```json
-{
-  "tier": "pro",
-  "org_id": "acme-corp",
-  "plugins": ["auth-keycloak", "acl", "executor-container"],
-  "seat_limit": 50,
-  "iss": "rat",
-  "iat": 1707840000,
-  "exp": 1739376000
-}
-```
-
-### Plugin Name Reference
-
-Must match exactly what plugins check: `auth-keycloak`, `executor-container`, `acl`, `cloud-aws`.
-
-See ADR-012 (license gating) for architecture details.
+> **Legacy:** `EDITION` and `RAT_LICENSE_KEY` are retained only for backward compatibility with older deployments. They gate nothing and can be omitted. `GET /api/v1/features` no longer reports an edition. See ADR-012 (historical) for the retired license-gating design.
 
 ---
 
@@ -429,25 +397,23 @@ See ADR-012 (license gating) for architecture details.
 1. Logger (slog JSON)
 2. Load rat.yaml (if RAT_CONFIG set)
    └── Plugin registry: health-check each plugin
-3. License decode (if RAT_LICENSE_KEY set)
-   └── Decode JWT payload (base64 only, no crypto) → LicenseInfo for /features
-4. Auth middleware (Plugin → AuthMiddleware, or Noop for Community)
-5. Postgres stores (if DATABASE_URL set)
+3. Auth middleware (Plugin → AuthMiddleware, or Noop when no auth plugin)
+4. Postgres stores (if DATABASE_URL set)
    └── PipelineStore, RunStore, NamespaceStore, ScheduleStore
-6. S3 storage (if S3_ENDPOINT set)
+5. S3 storage (if S3_ENDPOINT set)
    └── StorageStore
-7. Executor:
-   └── If executor plugin healthy → PluginExecutor (Pro)
-   └── Else if RUNNER_ADDR set → WarmPoolExecutor (Community)
+6. Executor:
+   └── If executor plugin healthy → PluginExecutor
+   └── Else if RUNNER_ADDR set → WarmPoolExecutor (local warm runner)
    └── Else → no executor (runs stay pending)
-8. Query (if RATQ_ADDR set)
+7. Query (if RATQ_ADDR set)
    └── query.Client → connects to ratq via ConnectRPC
-9. Scheduler (if Executor available)
+8. Scheduler (if Executor available)
    └── Starts 30s ticker goroutine
-10. HTTP server (chi router on PORT)
+9. HTTP server (chi router on PORT)
 ```
 
-Each component is optional — ratd degrades gracefully when env vars are missing. This allows running a minimal ratd for development/testing without the full infrastructure stack. When no `rat.yaml` is present (Community Edition), steps 2-3 use defaults (no plugins, no-op auth).
+Each component is optional — ratd degrades gracefully when env vars are missing. This allows running a minimal ratd for development/testing without the full infrastructure stack. When no `rat.yaml` is present, steps 2-3 use defaults (no plugins, no-op auth).
 
 ---
 
@@ -471,18 +437,17 @@ NODE_ENV=production
 PORT=3000
 ```
 
-The portal is a **static Next.js standalone build** — no server-side API calls, no session management, no auth (Community Edition). All API calls are made from the browser via the TypeScript SDK (`@squat-collective/rat-client`).
+The portal is a **static Next.js standalone build** — no server-side API calls, no session management, and no auth by default. All API calls are made from the browser via the TypeScript SDK (`@squat-collective/rat-client`). (Auth is added by installing the auth plugin.)
 
 ---
 
-## Auth Plugin: Keycloak (Pro Edition)
+## Auth Plugin: Keycloak
 
-> Configuration for the `auth-keycloak` plugin container (`rat-pro/plugins/auth-keycloak`).
+> Configuration for the optional `auth-keycloak` plugin container.
 > These env vars are read by the plugin container, not ratd.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `RAT_LICENSE_KEY` | Yes | — | Signed JWT license key. Plugin validates signature at startup. |
 | `KEYCLOAK_URL` | Yes | — | Keycloak base URL (e.g., `http://keycloak:8180`). |
 | `KEYCLOAK_REALM` | Yes | — | Keycloak realm name (e.g., `rat`). |
 | `GRPC_PORT` | No | `50060` | ConnectRPC listen port. |
@@ -503,7 +468,6 @@ caches JWKS RSA public keys, and validates JWTs locally (no per-request Keycloak
 ratd discovers the auth plugin via `rat.yaml` (set `RAT_CONFIG` env var to the file path):
 
 ```yaml
-edition: pro
 plugins:
   auth:
     addr: "http://auth-keycloak:50060"
@@ -513,14 +477,13 @@ See ADR-007 (plugin system) and ADR-008 (auth-keycloak) for architecture details
 
 ---
 
-## Executor Plugin: ContainerExecutor (Pro Edition)
+## Executor Plugin: ContainerExecutor
 
-> Configuration for the `executor-container` plugin container (`rat-pro/plugins/executor-container`).
+> Configuration for the optional `executor-container` plugin container.
 > These env vars are read by the plugin container, not ratd.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `RAT_LICENSE_KEY` | Yes | — | Signed JWT license key. Plugin validates signature at startup. |
 | `GRPC_PORT` | No | `50070` | ConnectRPC listen port. |
 | `RUNNER_IMAGE` | **Yes** | — | Docker/Podman image for spawned runner containers (e.g., `infra-runner:latest`). |
 | `PODMAN_SOCKET` | No | `/run/podman/podman.sock` | Path to the Podman API Unix socket. |
@@ -583,7 +546,6 @@ the runner skips gRPC server startup and instead:
 ratd discovers the executor plugin via `rat.yaml`:
 
 ```yaml
-edition: pro
 plugins:
   executor:
     addr: "http://executor-container:50070"
@@ -599,7 +561,7 @@ See ADR-009 (container executor) for architecture details.
 
 ## Docker Compose
 
-### Community (Default)
+### Default stack
 
 See `infra/docker-compose.yml` for the full 7-service setup with all env vars pre-configured. `docker compose up` starts everything with sensible defaults.
 
@@ -613,9 +575,9 @@ See `infra/docker-compose.yml` for the full 7-service setup with all env vars pr
 | minio | 9000 (S3 API), 9001 (Console) |
 | nessie | 19120 (REST) |
 
-### Pro (Overlay)
+### Optional plugin overlay
 
-The Pro stack is an overlay on the community compose:
+The auth, executor, sharing, and cloud plugins run as an overlay on the default compose:
 
 ```bash
 docker compose \
@@ -654,14 +616,13 @@ This disables `executor-container` and adds:
 
 ---
 
-## ACL Plugin: Sharing + Enforcement (Pro Edition)
+## ACL Plugin: Sharing + Enforcement
 
-> Configuration for the `acl` plugin container (`rat-pro/plugins/acl`).
+> Configuration for the optional `acl` plugin container.
 > These env vars are read by the plugin container, not ratd.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `RAT_LICENSE_KEY` | Yes | — | Signed JWT license key. Plugin validates signature at startup. |
 | `GRPC_PORT` | No | `50080` | ConnectRPC listen port. |
 | `DB_PATH` | No | `/data/acl.db` | Path to the SQLite database for access grants. |
 
@@ -687,7 +648,6 @@ ratd discovers the ACL plugin via `rat.yaml`. Both `sharing` and `enforcement`
 point to the same container:
 
 ```yaml
-edition: pro
 plugins:
   sharing:
     addr: "http://acl:50080"
@@ -704,15 +664,14 @@ See ADR-010 (ACL plugin) for architecture details.
 
 ---
 
-## Cloud Plugin: AWS (Pro Edition)
+## Cloud Plugin: AWS
 
-> Configuration for the `cloud-aws` plugin container (`rat-pro/plugins/cloud-aws`).
+> Configuration for the optional `cloud-aws` plugin container.
 > This plugin provides both `CloudService` (STS credential vending) and `ExecutorService` (ECS Fargate execution).
 > Both services run on the same port — ConnectRPC routes by service path.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `RAT_LICENSE_KEY` | Yes | — | Signed JWT license key. Plugin validates signature at startup. |
 | `GRPC_PORT` | No | `50090` | ConnectRPC listen port. |
 | `AWS_REGION` | **Yes** | — | AWS region (e.g., `us-east-1`). |
 | `STS_ROLE_ARN` | **Yes** | — | IAM role ARN to assume for per-namespace scoped credentials. |
@@ -784,7 +743,6 @@ ratd discovers the cloud-aws plugin via `rat.yaml`. Both `cloud` and
 `executor` point to the same container:
 
 ```yaml
-edition: pro
 plugins:
   cloud:
     addr: "http://cloud-aws:50090"

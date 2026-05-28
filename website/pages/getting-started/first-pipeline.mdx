@@ -110,9 +110,10 @@ The preview panel will open below the editor, showing a table with your three ro
 | 3 | Charlie | 75.00 | 2026-02-16 12:00:00 |
 
 <Callout type="info">
-Preview executes the SQL in a read-only DuckDB session (via ratq). It shows you the
-output shape and data without actually writing anything to the Iceberg catalog. Use it
-to iterate quickly on your SQL.
+Preview executes the SQL in the **runner** — it compiles the Jinja and runs the query
+through DuckDB with a `LIMIT`, using the same compilation path as a real run (not the
+ratq query service). It shows you the output shape and data without writing anything to
+the Iceberg catalog. Use it to iterate quickly on your SQL.
 </Callout>
 
 ### Publish the pipeline
@@ -249,7 +250,7 @@ Let's trace what RAT did behind the scenes when you clicked **Run**:
 Now that you have a working pipeline, here are some things to try:
 
 <Cards>
-  <Card title="Add a Silver pipeline" href="/guides/silver-pipeline">
+  <Card title="Add a Silver pipeline" href="/guides/sql-pipelines">
     Create a Silver layer pipeline that reads from your Bronze table using ref()
   </Card>
   <Card title="Add quality tests" href="/guides/quality-tests">

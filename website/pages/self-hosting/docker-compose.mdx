@@ -4,7 +4,7 @@ import { Mermaid } from '@/components/mermaid'
 
 # Docker Compose
 
-RAT runs as a set of 7 interconnected services managed by Docker Compose. This page covers the production-ready configuration, resource tuning, networking, and persistence.
+RAT runs as a set of 7 interconnected services managed by Docker Compose, plus two short-lived bootstrap containers (`minio-init` and `nessie-init`). This page covers the production-ready configuration, resource tuning, networking, and persistence.
 
 ---
 
@@ -20,10 +20,11 @@ flowchart TB
     subgraph backend["Backend Network (infra_default)"]
         ratq["ratq\n(Python)\ngRPC 50051"]
         runner["runner\n(Python)\ngRPC 50052"]
-        postgres["postgres\nPort 5432"]
-        minio["minio\nPort 9000/9001"]
+        postgres["postgres\nhost 5433 → 5432"]
+        minio["minio\nhost 9002/9003 → 9000/9001"]
         nessie["nessie\nPort 19120"]
         minio_init["minio-init\n(bootstrap)"]
+        nessie_init["nessie-init\n(bootstrap)"]
     end
 
     portal --> ratd
@@ -36,26 +37,32 @@ flowchart TB
     ratq --> nessie
     runner --> minio
     runner --> nessie
-    runner -.->|callback| ratd
+    runner -.->|callback :8090| ratd
     minio_init --> minio
+    nessie_init --> nessie
 `} />
 
 ---
 
 ## Services
 
-The compose file defines 7 long-running services plus 1 bootstrap container:
+The compose file defines 7 long-running services plus 2 bootstrap containers:
 
 | Service | Image | Role | Exposed Ports |
 |---|---|---|---|
-| **ratd** | Custom (Go) | API server, scheduler, plugin host | `8080` (HTTP) |
+| **ratd** | Custom (Go) | API server, scheduler, plugin host | `8080` (public HTTP); internal `8090` (not published) |
 | **ratq** | Custom (Python) | Interactive DuckDB queries (read-only) | Internal only |
 | **runner** | Custom (Python) | Pipeline execution, Iceberg writes | Internal only |
 | **portal** | Custom (Next.js) | Web IDE | `3000` (HTTP) |
-| **postgres** | `postgres:16.4-alpine` | Platform state database | `127.0.0.1:5432` |
-| **minio** | `minio/minio` | S3-compatible object storage | `127.0.0.1:9000`, `127.0.0.1:9001` |
-| **nessie** | `ghcr.io/projectnessie/nessie:0.79.0` | Iceberg REST catalog | `127.0.0.1:19120` |
-| **minio-init** | `minio/mc` | Bootstrap (bucket creation, exits after) | None |
+| **postgres** | `postgres:16.4-alpine` | Platform state database | `127.0.0.1:5433` → 5432 |
+| **minio** | `minio/minio:RELEASE.2024-06-13T22-53-53Z` | S3-compatible object storage | `127.0.0.1:9002` → 9000, `127.0.0.1:9003` → 9001 |
+| **nessie** | `ghcr.io/projectnessie/nessie:0.99.0` | Iceberg REST catalog | `127.0.0.1:19120` |
+| **minio-init** | `minio/mc:RELEASE.2024-06-12T14-34-03Z` | Bootstrap (bucket + versioning, exits after) | None |
+| **nessie-init** | `alpine:3.20` | Bootstrap (seeds a genesis commit on `main`, exits after) | None |
+
+<Callout type="info">
+Host ports `5433`, `9002`, and `9003` are offset from the in-container ports to avoid clashing with a host-local Postgres or MinIO. Inside the Docker network, services still talk to `postgres:5432` and `minio:9000`.
+</Callout>
 
 <Callout type="info">
 The `ratq` and `runner` services do not expose ports to the host machine. They communicate with `ratd` exclusively over the internal Docker network via gRPC (ConnectRPC).
@@ -76,18 +83,21 @@ ratd:
     dockerfile: Dockerfile
   init: true
   ports:
-    - "8080:8080"
+    - "8080:8080"          # public REST API
+    # internal listener (8090) is NOT published — it has no auth
   environment:
+    RAT_LISTEN_ADDR: "0.0.0.0:8080"
+    INTERNAL_LISTEN_ADDR: "0.0.0.0:8090"
     DATABASE_URL: postgres://rat:rat@postgres:5432/rat?sslmode=disable
     <<: *s3-credentials
     NESSIE_URL: http://nessie:19120/api/v1
     RATQ_ADDR: http://ratq:50051
     RUNNER_ADDR: http://runner:50052
-    EDITION: community
   depends_on:
     postgres: { condition: service_healthy }
     minio: { condition: service_healthy }
     nessie: { condition: service_healthy }
+    nessie-init: { condition: service_completed_successfully }
   healthcheck:
     test: ["CMD", "/ratd", "healthcheck"]
     interval: 5s
@@ -95,6 +105,10 @@ ratd:
     retries: 5
     start_period: 5s
 ```
+
+<Callout type="warning">
+`ratd` serves **two** HTTP listeners: the public API on `8080` and an unauthenticated internal listener on `8090` for service-to-service callbacks and plugin phone-home (ADR-019). There is **no** gRPC listener on `8081`. Publish only `8080` to the host; keep `8090` on the container network.
+</Callout>
 
 ### runner (Python Pipeline Executor)
 
@@ -108,12 +122,13 @@ runner:
   init: true
   environment:
     GRPC_PORT: "50052"
-    RATD_CALLBACK_URL: http://ratd:8080
+    RATD_CALLBACK_URL: http://ratd:8090   # ratd's INTERNAL listener, not the public 8080
     <<: *s3-credentials
     NESSIE_URL: http://nessie:19120/api/v1
   depends_on:
     minio: { condition: service_healthy }
     nessie: { condition: service_healthy }
+    nessie-init: { condition: service_completed_successfully }
   stop_grace_period: 30s
 ```
 
@@ -232,17 +247,18 @@ Browser-accessible services. Only `portal` and `ratd` are on this network.
 
 Internal service communication. All services are on this network.
 
-| Service | Port | Protocol | Accessible From |
+| Service | Port (in-network) | Protocol | Accessible From |
 |---|---|---|---|
-| ratd | 8080 | HTTP | portal, runner (callbacks) |
+| ratd | 8080 | HTTP | portal (public API) |
+| ratd | 8090 | HTTP | runner, plugins (internal callbacks; unauthenticated) |
 | ratq | 50051 | gRPC | ratd |
 | runner | 50052 | gRPC | ratd |
-| postgres | 5432 | TCP | ratd, nessie |
+| postgres | 5432 | TCP | ratd, ratq, nessie |
 | minio | 9000 | HTTP | ratd, ratq, runner, nessie |
 | nessie | 19120 | HTTP | ratd, ratq, runner |
 
 <Callout type="info">
-Postgres, MinIO, and Nessie bind to `127.0.0.1` on the host (localhost only). This prevents external access in development. In production, you may want to remove the port bindings entirely or use a reverse proxy.
+Postgres, MinIO, and Nessie bind to `127.0.0.1` on the host with offset ports (`5433`, `9002`/`9003`, `19120`) for local access only. This prevents external access in development. In production, you may want to remove the host port bindings entirely or use a reverse proxy. The ratd internal listener (`8090`) is never published to the host.
 </Callout>
 
 ### Network Definition
@@ -329,13 +345,13 @@ Based on `depends_on` declarations, services start in this order:
 
 <Steps>
 ### Infrastructure tier
-Postgres and MinIO start first (no dependencies).
+Postgres and MinIO start first (no dependencies). `minio-init` runs once MinIO is healthy to create the bucket and enable versioning.
 
 ### Catalog tier
-Nessie starts after Postgres is healthy (uses Postgres for metadata storage).
+Nessie starts after Postgres is healthy (uses Postgres for metadata storage). `nessie-init` then seeds a genesis bootstrap commit on `main` so the runner's branch-and-merge flow works.
 
 ### Service tier
-`ratd`, `ratq`, and `runner` start after their infrastructure dependencies are healthy.
+`ratd`, `ratq`, and `runner` start after their infrastructure dependencies are healthy **and** `nessie-init` has completed successfully.
 
 ### UI tier
 Portal starts after `ratd` is healthy.
@@ -405,6 +421,21 @@ This container exits after initialization. The `restart: on-failure` policy ensu
 
 ---
 
+## Nessie Initialization
+
+A fresh Nessie 0.99 starts `main` at genesis with zero commits. The runner creates a branch from `main`, writes a commit, and tries to merge — but Nessie's merge endpoint returns `404 "no common ancestor"` when both branches descend from an empty genesis. The one-shot `nessie-init` container seeds a single bootstrap commit on `main` to fix this for all future runs. It is idempotent: it skips the commit if `main` already has history. The long-running services depend on it via `condition: service_completed_successfully`.
+
+```yaml filename="infra/docker-compose.yml (nessie-init)"
+nessie-init:
+  image: alpine:3.20
+  depends_on:
+    nessie: { condition: service_healthy }
+  # Seeds one bootstrap commit on main if it has no history (idempotent).
+  restart: on-failure
+```
+
+---
+
 ## Compose Overrides
 
 For local customizations, create a `docker-compose.override.yml` file in the `infra/` directory:
@@ -417,7 +448,6 @@ services:
       CORS_ORIGINS: "http://localhost:3000,http://localhost:3001"
     ports:
       - "8080:8080"
-      - "8081:8081"  # expose gRPC port for debugging
 
   runner:
     environment:

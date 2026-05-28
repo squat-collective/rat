@@ -108,32 +108,33 @@ WHERE updated_at > '{{ watermark_value }}'
 
 ## First Run vs Subsequent Runs
 
-RAT behaves differently depending on whether the target table already exists:
+`is_incremental()` is `true` whenever the merge strategy is `incremental` — on **every** run, including the first. What actually differs between runs is the `watermark_value`:
 
-### First Run (Table Does Not Exist)
+### First Run (No Watermark Yet)
 
-- `is_incremental()` returns `false`
-- The `{% if is_incremental() %}` block is **skipped**
-- Your query runs **without** the watermark filter — processing **all** source rows
+- `is_incremental()` returns `true` (the strategy is `incremental`)
+- The `{% if is_incremental() %}` block **is included**
+- But `watermark_value` is empty/`None` — there is no existing data to read a `MAX()` from
+- With no watermark to compare against, the `WHERE col > watermark` filter selects **all** source rows (see the [NULL Watermarks](#null-watermarks) pattern below)
 - RAT creates the target Iceberg table and writes all results
-- This is effectively a `full_refresh` for the first run
+- The effect is a `full_refresh` for the first run
 
-### Subsequent Runs (Table Exists)
+### Subsequent Runs (Watermark Set)
 
-- `is_incremental()` returns `true`
+- `is_incremental()` still returns `true`
 - RAT reads `MAX(watermark_column)` from the existing target table
 - `watermark_value` is set to that value
-- The `{% if is_incremental() %}` block is **included**
+- The `{% if is_incremental() %}` block is included
 - Your query processes only rows **newer** than the watermark
 - Results are deduplicated by `unique_key` and merged into the existing table
 
 <Mermaid chart={`
 flowchart TD
-    A[Pipeline Run] --> B{Target table\nexists?}
-    B -->|No — First Run| C[is_incremental = false]
-    C --> D[Process ALL rows]
+    A[Pipeline Run] --> B{watermark_value\nset?}
+    B -->|No — First Run| C[is_incremental = true\nwatermark_value = None]
+    C --> D[Filter selects ALL rows]
     D --> E[Create new table]
-    B -->|Yes — Subsequent| F[is_incremental = true]
+    B -->|Yes — Subsequent| F[is_incremental = true\nwatermark_value = MAX]
     F --> G[Read MAX watermark]
     G --> H[Process rows > watermark]
     H --> I[Dedup by unique_key]
@@ -192,15 +193,15 @@ When the pipeline output contains multiple rows with the same `unique_key`, RAT 
 ```sql
 -- RAT internally does this:
 SELECT * FROM (
-    SELECT *, ROW_NUMBER() OVER (
-        PARTITION BY order_id
-        ORDER BY order_id  -- last row wins
-    ) AS _rn
+    SELECT *, ROW_NUMBER() OVER () AS _rowid
     FROM pipeline_output
-) WHERE _rn = 1
+) QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY order_id
+    ORDER BY _rowid DESC  -- last row by insertion order wins
+) = 1
 ```
 
-The **last row** in the result set for each key is kept. All other duplicates are discarded before the merge.
+RAT tags each incoming row with its insertion order (`_rowid`) and keeps the row with the **highest** `_rowid` per key — i.e. the **last row** in the result set wins. All other duplicates are discarded before the merge.
 
 ### Composite Unique Keys
 
@@ -245,17 +246,18 @@ SELECT
 FROM {{ ref('bronze.raw_users') }}
 
 {% if is_incremental() %}
--- This block is ONLY included when the target table already exists
+-- This block is included on every incremental run; on the first run
+-- watermark_value is empty, so the filter selects everything.
 WHERE last_active_at > '{{ watermark_value }}'
 {% endif %}
 ```
 
-**First run** — The SQL executed is:
+**First run** — `watermark_value` is empty, so the filter matches all rows. The SQL executed is effectively:
 
 ```sql
 SELECT user_id, email, plan, last_active_at
 FROM iceberg_scan('...')
--- No WHERE clause — all rows processed
+-- watermark_value empty/NULL — all rows pass the filter
 ```
 
 **Second run** — The SQL executed is:
@@ -346,8 +348,8 @@ WHERE order_id IS NOT NULL
 
 ### What happens on each run:
 
-**Run 1** (table does not exist):
-1. `is_incremental()` = `false` -> no WHERE filter on watermark
+**Run 1** (no watermark yet):
+1. `is_incremental()` = `true`, but `watermark_value` is empty -> filter matches everything
 2. All 1,000,000 rows from `bronze.raw_orders` are processed
 3. Dedup by `order_id` (ROW_NUMBER) removes duplicates
 4. Target table `silver.orders` is created with ~950,000 unique rows

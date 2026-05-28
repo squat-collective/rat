@@ -144,16 +144,19 @@ not be resolved. Always preview before publishing!
 
 ---
 
-## Explore the Lineage DAG
+## Explore the Lineage DAG (Plugin)
 
-Now that your Silver pipeline references two Bronze pipelines, RAT has built a
-dependency graph. Let's see it.
+Now that your Silver pipeline references two Bronze pipelines, the dependency graph can be
+visualized. Lineage is provided by the optional `rat-plugin-lineage` plugin (it is not part
+of the core), so this step assumes you have installed it. RAT is 100% free and open-source,
+so the plugin is a free install — see the [lineage guide](/guides/lineage).
 
 <Steps>
 
 ### Navigate to the Lineage page
 
-Click **Lineage** in the sidebar navigation (or go to `/lineage` directly).
+With the plugin installed, click **Lineage** in the navigation (the plugin registers it at
+`/x/lineage`).
 
 ### View the DAG
 

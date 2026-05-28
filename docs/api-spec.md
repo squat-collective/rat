@@ -1,7 +1,7 @@
 # ratd REST API Specification
 
 > Base URL: `http://localhost:8080/api/v1`
-> Auth: None (Community); `RAT_API_KEY` shared secret optional; Bearer token (Pro, via auth plugin).
+> Auth: None by default; `RAT_API_KEY` shared secret optional; Bearer token when the auth plugin is installed.
 > Format: JSON request/response. Arrow IPC for query results.
 >
 > **Freshness note (2026-05):** The endpoint inventory at the bottom of
@@ -13,8 +13,8 @@
 > | Area | Endpoints | Source file |
 > |---|---|---|
 > | Cloud credentials | `/cloud/credentials` | `cloud.go` |
-> | Identity (Pro) | `/identity/users`, `/identity/groups`, `/identity/capabilities`, `/me` | `identity.go` |
-> | Permissions (Pro) | `/permissions/{access,check,grants,groups,resources,verbs}` | `permissions.go` |
+> | Identity (identity plugin) | `/identity/users`, `/identity/groups`, `/identity/capabilities`, `/me` | `identity.go` |
+> | Permissions (permissions plugin) | `/permissions/{access,check,grants,groups,resources,verbs}` | `permissions.go` |
 > | Plugin lifecycle | `/api/v1/plugins/{name}/config`, `/api/v1/internal/plugins/register` | `plugins.go`, `internal_routes.go` |
 > | Health probes | `/health/live`, `/health/ready` | `health.go` |
 > | Metrics | `/metrics` | `metrics.go` |
@@ -23,8 +23,8 @@
 >
 > The Wave 8 enforcement-filter wiring also changed semantics on
 > `GET /pipelines`, `GET /pipelines/{ns}/{layer}/{name}`, `GET /runs`,
-> `GET /runs/{id}`, and `GET /namespaces`: in a Pro deployment with the
-> enforcement plugin enabled, those endpoints post-filter to what the
+> `GET /runs/{id}`, and `GET /namespaces`: when the
+> enforcement plugin is enabled, those endpoints post-filter to what the
 > caller can read, and `total` reflects the visible count rather than
 > the raw SQL count. The response shape is otherwise unchanged.
 >
@@ -67,7 +67,7 @@ Endpoints that return lists support pagination via query params:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/health` | Service health check (unauthenticated, outside /api/v1) |
-| GET | `/features` | Active plugins, edition, capabilities |
+| GET | `/features` | Active plugins and capabilities |
 
 ### GET /health
 
@@ -75,7 +75,7 @@ Unauthenticated. Used by Docker health checks and load balancers. Mounted at roo
 
 ```json
 // Response: 200
-{ "status": "healthy" }
+{ "status": "ok" }
 ```
 
 ### GET /features
@@ -183,13 +183,13 @@ Pagination is pushed to SQL via LIMIT/OFFSET.
 // Response: 200 — full pipeline object
 ```
 
-Requires `write` access to the pipeline (Pro: ownership/ACL check).
+Requires `write` access to the pipeline (enforced when the sharing/enforcement plugins are installed).
 
 ### DELETE /pipelines/:namespace/:layer/:name
 
 Soft-deletes the pipeline record and cleans up S3 files under the pipeline prefix.
 
-Requires `delete` access to the pipeline (Pro: ownership/ACL check).
+Requires `delete` access to the pipeline (enforced when the sharing/enforcement plugins are installed).
 
 ```
 Response: 204 No Content
@@ -738,7 +738,7 @@ Reads the `quality.meta.yaml` sidecar file from S3.
 
 ---
 
-## Namespaces (Pro only -- no-op in Community)
+## Namespaces
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -786,7 +786,7 @@ Reads the `quality.meta.yaml` sidecar file from S3.
 
 ### DELETE /namespaces/:name
 
-The "default" namespace cannot be deleted (returns 403). Requires `delete` access (Pro: ownership/ACL check).
+The "default" namespace cannot be deleted (returns 403). Requires `delete` access (enforced when the sharing/enforcement plugins are installed).
 
 ```
 Response: 204 No Content
@@ -1174,7 +1174,7 @@ The plaintext token is hashed (SHA-256) before the database lookup. After retrie
 
 ---
 
-## Sharing (Pro only)
+## Sharing (requires the sharing plugin)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -1183,7 +1183,7 @@ The plaintext token is hashed (SHA-256) before the database lookup. After retrie
 | DELETE | `/sharing/:grantID` | Revoke an access grant |
 | POST | `/sharing/transfer` | Transfer resource ownership |
 
-All sharing endpoints require authentication. Returns 501 when the sharing plugin is not loaded (Community edition).
+All sharing endpoints require authentication. Returns 501 when the sharing plugin is not loaded.
 
 ### POST /sharing
 
@@ -1210,7 +1210,7 @@ All sharing endpoints require authentication. Returns 501 when the sharing plugi
 | 201 | Access granted |
 | 400 | Missing required fields |
 | 401 | Authentication required |
-| 501 | Sharing not available (Community) |
+| 501 | Sharing not available (sharing plugin not loaded) |
 
 ### GET /sharing
 
@@ -1627,7 +1627,7 @@ Response: 204 No Content
 | Lineage | 1 | DAG graph of pipelines, tables, landing zones |
 | Triggers | 5 | Pipeline trigger CRUD (cron, landing zone, webhook, etc.) |
 | Webhooks | 1 | Webhook trigger execution (token-authenticated) |
-| Sharing | 4 | Pro: access grants + ownership transfer |
+| Sharing | 4 | Access grants + ownership transfer (sharing plugin) |
 | Audit | 1 | Audit log listing (auto-logged via middleware) |
 | Preview | 1 | Pipeline dry-run with profiling |
 | Publish | 1 | Snapshot S3 files as published version |

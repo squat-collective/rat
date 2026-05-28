@@ -2,8 +2,8 @@ import { Callout } from 'nextra/components'
 
 # Sharing
 
-<Callout type="warning">
-Sharing is a **Pro Edition** feature. In the Community Edition, these endpoints return `501 Not Implemented`. To enable sharing, deploy the sharing plugin via the Pro compose overlay.
+<Callout type="info">
+Sharing is provided by an optional plugin. When the plugin is not installed, these endpoints return `501 Not Implemented`. Install/enable the sharing plugin (for example via the `infra/docker-compose.plugins.yml` overlay) to use them.
 </Callout>
 
 Sharing endpoints manage access grants and ownership transfers for platform resources. They enable multi-user collaboration by allowing resource owners to grant read, write, or admin permissions to other users.
@@ -100,7 +100,7 @@ curl -X POST http://localhost:8080/api/v1/sharing \
 | `401` | `AUTHENTICATION` | Authentication required |
 | `403` | `AUTHORIZATION` | You do not have permission to share this resource (need `admin` permission) |
 | `404` | `NOT_FOUND` | Resource not found |
-| `501` | `UNAVAILABLE` | Sharing not available (Community Edition) |
+| `501` | `UNAVAILABLE` | Sharing plugin not installed |
 
 ---
 
@@ -160,7 +160,7 @@ curl "http://localhost:8080/api/v1/sharing?resource_type=pipeline&resource_id=pi
 |---|---|---|
 | `400` | `INVALID_ARGUMENT` | Missing `resource_type` or `resource_id` |
 | `401` | `AUTHENTICATION` | Authentication required |
-| `501` | `UNAVAILABLE` | Sharing not available (Community Edition) |
+| `501` | `UNAVAILABLE` | Sharing plugin not installed |
 
 ---
 
@@ -196,7 +196,7 @@ No response body.
 | `401` | `AUTHENTICATION` | Authentication required |
 | `403` | `AUTHORIZATION` | Only the grant creator or resource owner can revoke |
 | `404` | `NOT_FOUND` | Grant not found |
-| `501` | `UNAVAILABLE` | Sharing not available (Community Edition) |
+| `501` | `UNAVAILABLE` | Sharing plugin not installed |
 
 ---
 
@@ -255,7 +255,7 @@ curl -X POST http://localhost:8080/api/v1/sharing/transfer \
 | `401` | `AUTHENTICATION` | Authentication required |
 | `403` | `AUTHORIZATION` | Only the current owner can transfer ownership |
 | `404` | `NOT_FOUND` | Resource not found |
-| `501` | `UNAVAILABLE` | Sharing not available (Community Edition) |
+| `501` | `UNAVAILABLE` | Sharing plugin not installed |
 
 <Callout type="info">
 Ownership transfer is atomic — the old owner loses `admin` permission and the new owner gains it in a single operation. Existing grants from other users are preserved.

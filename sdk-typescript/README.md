@@ -59,7 +59,7 @@ new RatClient({
 
 ## Resources
 
-The client exposes 7 resource classes:
+The client exposes 13 resource classes:
 
 | Resource | Methods | Description |
 |----------|---------|-------------|
@@ -70,6 +70,12 @@ The client exposes 7 resource classes:
 | `client.tables` | `list()`, `get()`, `preview()` | Table browsing + schema |
 | `client.storage` | `list()`, `read()`, `write()`, `delete()`, `upload()` | S3 file management |
 | `client.namespaces` | `list()`, `create()`, `delete()` | Namespace management |
+| `client.landing` | landing-zone methods | Landing zones |
+| `client.triggers` | trigger methods | Pipeline triggers |
+| `client.quality` | quality-test methods | Quality test results |
+| `client.lineage` | lineage methods | Lineage graph |
+| `client.retention` | retention methods | Retention policies |
+| `client.plugins` | plugin methods | Installed plugins + config |
 
 ## Error Handling
 
@@ -90,20 +96,20 @@ try {
 | Error Class | HTTP Status | When |
 |-------------|-------------|------|
 | `ValidationError` | 400/422 | Invalid request body |
-| `AuthenticationError` | 401 | Missing/invalid token (Pro) |
-| `AuthorizationError` | 403 | Insufficient permissions (Pro) |
+| `AuthenticationError` | 401 | Missing/invalid token (when the auth plugin is enabled) |
+| `AuthorizationError` | 403 | Insufficient permissions (when the enforcement plugin is enabled) |
 | `NotFoundError` | 404 | Resource not found |
 | `ConflictError` | 409 | Duplicate resource / not cancellable |
 | `ServerError` | 5xx | Server-side error |
 | `ConnectionError` | — | Network failure / timeout |
 
-> Note: The v2 Go API returns **plain text** error messages (not JSON `{ detail }` like v1).
+> Note: The API returns a structured JSON error envelope — `{ "error": { "code", "type", "message" } }` — which the SDK parses into a `RatError`.
 
 ## Transport
 
 - Automatic retry with exponential backoff (`500ms * attempt`) for connection failures
 - Configurable timeout via `AbortController`
-- No auth headers in Community Edition (Pro adds Bearer token injection)
+- No auth headers by default (the auth plugin adds Bearer token injection)
 
 ## Building
 

@@ -15,23 +15,30 @@ The central API server, scheduler, and plugin host.
 
 | Variable | Default | Description |
 |---|---|---|
-| `RAT_LISTEN_ADDR` | `127.0.0.1:8080` | Full address the HTTP server binds to (host:port) |
+| `RAT_LISTEN_ADDR` | `127.0.0.1:8080` | Full address the public HTTP API binds to (host:port) |
 | `PORT` | — | Alternative port setting. When set, binds to `0.0.0.0:<PORT>`. `RAT_LISTEN_ADDR` takes precedence |
-| `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated list of allowed CORS origins. Must include the portal URL |
-| `RATE_LIMIT` | `50` | Maximum requests per second per client IP. Set to `"0"` to disable rate limiting |
-| `RAT_CONFIG` | `rat.yaml` | Path to the `rat.yaml` configuration file |
-| `EDITION` | `community` | Platform edition: `community` or `pro` |
+| `INTERNAL_LISTEN_ADDR` | `127.0.0.1:8090` | Address for the **internal** HTTP listener used for service-to-service callbacks (run status from the runner) and plugin phone-home. This listener is **unauthenticated** — its security model is "the network is the perimeter". Must differ from `RAT_LISTEN_ADDR` and must never be published to the host (see ADR-019) |
+| `CORS_ORIGINS` | _(none)_ | Comma-separated list of allowed CORS origins. When unset, no CORS origins are configured — set this to your portal URL when the portal is served from a different origin |
+| `RATE_LIMIT` | `50` req/s | On/off switch, not a tunable number. Any non-zero value enables a fixed 50 req/s per-IP limiter; set to `"0"` to disable rate limiting |
+| `RAT_CONFIG` | `rat.yaml` | Path to the `rat.yaml` configuration file (optional) |
+| `RAT_PPROF_ADDR` | — | When set (e.g. `127.0.0.1:6060`), serves Go `net/http/pprof` on a **separate** listener for profiling. Leave unset in production |
 
 ### Authentication
 
 | Variable | Default | Description |
 |---|---|---|
 | `RAT_API_KEY` | — | Static API key. When set, all requests require `Authorization: Bearer <key>` |
-| `RAT_LICENSE_KEY` | — | Pro Edition license key for plugin activation |
 
 <Callout type="info">
-When `RAT_API_KEY` is not set, the API is unauthenticated. This is the default for the Community Edition (single-user, localhost-only). For production deployments, always set an API key or use a plugin-based auth system.
+When `RAT_API_KEY` is not set, the API is unauthenticated — the default single-user, localhost-only mode. For production deployments, always set an API key or install an optional auth plugin.
 </Callout>
+
+### Plugins & Database Pooling
+
+| Variable | Default | Description |
+|---|---|---|
+| `PLUGIN_ALLOW_LOOPBACK` | `false` | When `true`, lets plugins register with loopback (`127.0.0.1`) addresses. For local development only — production plugins must use routable container addresses |
+| `RAT_HEARTBEAT_POOL_ENABLED` | `true` | When `true`, ratd uses a dedicated small Postgres pool for the leader-election heartbeat so a saturated main pool can't starve it. Set to `false` to fall back to the shared pool |
 
 ### Database
 
@@ -124,7 +131,9 @@ Executes pipelines, writes to Iceberg, and runs quality tests.
 | `RUNNER_MAX_CONCURRENT` | `10` | Maximum number of pipelines executing simultaneously |
 | `RUNNER_MAX_WORKERS` | `10` | Maximum worker threads in the execution thread pool |
 | `RUNNER_STATE_DIR` | `/tmp/rat-runner-state` | Directory for temporary run state and intermediate files |
-| `RATD_CALLBACK_URL` | — | Base URL for push-based status callbacks to ratd. Format: `http://ratd:8080`. When set, the runner POSTs terminal run status instead of waiting for ratd to poll |
+| `RATD_CALLBACK_URL` | — | Base URL for push-based status callbacks to ratd's **internal** listener. Format: `http://ratd:8090` (the internal port, NOT the public `8080`). When set, the runner POSTs terminal run status instead of waiting for ratd to poll |
+| `QUALITY_TEST_TIMEOUT_SECS` | `60` | Per-quality-test timeout (seconds). A watchdog calls `conn.interrupt()` once the deadline passes; the test is recorded as failed so the rest of the suite continues |
+| `QUERY_TIMEOUT_SECS` | `60` | Per-query DuckDB timeout (seconds) for the runner's internal queries |
 
 ---
 
@@ -155,6 +164,13 @@ Handles interactive DuckDB queries (read-only) and schema introspection.
 | Variable | Default | Description |
 |---|---|---|
 | `NESSIE_URL` | `http://nessie:19120/api/v1` | Nessie REST catalog endpoint |
+
+### Query
+
+| Variable | Default | Description |
+|---|---|---|
+| `QUERY_TIMEOUT_SECS` | `60` | Per-query DuckDB timeout (seconds). A watchdog calls `conn.interrupt()` once the deadline passes; callers get `DEADLINE_EXCEEDED` |
+| `POSTGRES_USERDATA_URL` | — | Optional federated user-data Postgres URL. When set, ratq ATTACHes it at startup so queries can JOIN across Iceberg + Postgres |
 
 ### gRPC Server
 

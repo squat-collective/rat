@@ -136,7 +136,7 @@ reaches production.
 
 Configure pipeline behavior and metadata.
 
-- **Metadata** — Description, tags, and owner (Community Edition shows a single user).
+- **Metadata** — Description, tags, and owner (single user by default; multi-user is an optional plugin).
 - **Merge strategy** — How the pipeline output is merged into the target table:
   - `full_refresh` — Drop and recreate the table every run
   - `incremental` — Upsert based on unique key and watermark
@@ -242,10 +242,13 @@ kept for 30 days. You can configure this in Settings.
 
 ---
 
-## Lineage
+## Lineage (Plugin)
 
-The Lineage page shows a directed acyclic graph (DAG) of how your pipelines and tables
-relate to each other.
+Lineage is provided by the optional `rat-plugin-lineage` plugin — it is not part of the
+portal core. Once installed, the plugin adds a **Lineage** navigation item (at
+**/x/lineage**) that shows a directed acyclic graph (DAG) of how your pipelines and tables
+relate to each other. RAT is 100% free and open-source, so this is a free install, not a
+paid feature. See the [lineage guide](/guides/lineage).
 
 ### DAG visualization
 
@@ -270,9 +273,9 @@ Use the namespace dropdown at the top to scope the DAG to a specific namespace. 
 large platforms, this keeps the graph readable by showing only the relevant subgraph.
 
 <Callout type="info">
-The lineage graph is generated automatically from your pipeline code. Every time you use
-`ref()` or `landing_zone()` in your SQL, RAT parses these references and builds the
-dependency graph. No manual configuration is needed.
+With the plugin installed, the lineage graph is generated automatically from your pipeline
+code. Every time you use `ref()` or `landing_zone()` in your SQL, the plugin parses these
+references and builds the dependency graph. No manual configuration is needed.
 </Callout>
 
 ---
@@ -299,9 +302,9 @@ Click a table to open its detail page with **three tabs**:
 
 - **Schema** — Column names, data types (INT, VARCHAR, TIMESTAMP, etc.), and
   nullability. Useful for understanding the shape of your data.
-- **Docs** — An editable Markdown documentation area. Write descriptions for the table
-  and individual columns. This documentation is stored in `.meta.yaml` files alongside
-  the pipeline code.
+- **Docs** — An editable documentation area. Write descriptions for the table
+  and individual columns. This documentation is saved through the table-metadata API
+  (`PUT /api/v1/tables/{ns}/{layer}/{name}/metadata`) and stored in Postgres.
 - **Preview** — A quick-look table showing sample data (first 100 rows). Equivalent to
   running `SELECT * FROM table LIMIT 100` in the Query Console.
 
@@ -335,20 +338,20 @@ Iceberg tables.
 
 The Settings page configures platform-wide behavior.
 
-- **Edition info** — Shows whether you are running Community Edition or Pro Edition,
-  along with the current version number and build info.
+- **Version info** — Shows the current version number and build info. RAT is 100% free and
+  open-source — there are no editions or tiers.
 - **Retention configuration** — Set how long run records, logs, and data snapshots are
   retained before the reaper daemon cleans them up:
-  - Run record retention (default: 30 days)
+  - Run record retention (default: 90 days)
   - Log retention (default: 30 days)
-  - Data snapshot retention (default: 90 days)
+  - Iceberg snapshot retention (default: 7 days)
 - **Reaper status** — Shows whether the background reaper daemon is active and when it
   last ran. The reaper prunes old run records, fails stuck runs, and cleans up orphaned
   Nessie branches.
 
 <Callout type="info">
-Pro Edition adds additional settings sections for multi-user management, authentication
-providers, sharing permissions, and license management.
+Optional plugins can add settings sections for multi-user management, authentication
+providers, and sharing permissions. These are free, installable plugins — not a paid tier.
 </Callout>
 
 ---
@@ -357,13 +360,13 @@ providers, sharing permissions, and license management.
 
 | Sidebar Item | Purpose |
 |---|---|
-| **Dashboard** | Platform overview, stats, recent runs |
+| **Home** | Platform overview, stats, recent runs |
 | **Pipelines** | Create, edit, manage data pipelines |
 | **Runs** | Monitor pipeline executions |
-| **Query Console** | Interactive SQL against your data |
-| **Lineage** | DAG visualization of pipeline dependencies |
+| **Query** | Interactive SQL against your data |
+| **Lineage** | DAG visualization of pipeline dependencies (optional `rat-plugin-lineage` plugin) |
 | **Explorer** | Browse tables, schemas, and data |
-| **Landing Zones** | Upload and manage raw data files |
+| **Landing** | Upload and manage raw data files |
 | **Settings** | Platform configuration and administration |
 
 ---

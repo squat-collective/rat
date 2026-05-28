@@ -58,7 +58,7 @@ sequenceDiagram
     Nessie-->>Runner: Merge OK
     Runner->>Nessie: Delete branch
 
-    Runner->>ratd: HTTP POST callback (success)
+    Runner->>ratd: POST /api/v1/internal/runs/{id}/status (to :8090)
     ratd->>Postgres: UPDATE run (status=success)
 
     Portal->>ratd: SWR revalidation
@@ -111,7 +111,7 @@ sequenceDiagram
     participant MinIO
 
     User->>Portal: Type SQL + click "Run Query"
-    Portal->>ratd: POST /api/v1/query/execute
+    Portal->>ratd: POST /api/v1/query
     ratd->>ratd: Validate query (size, timeout)
     ratd->>ratq: gRPC ExecuteQuery
     ratq->>ratq: SQL safety check (blocked statements)
@@ -128,11 +128,11 @@ sequenceDiagram
 
 ### Portal sends the query
 
-The user types SQL in the CodeMirror editor and clicks "Run". The portal sends `POST /api/v1/query/execute` with the raw SQL text.
+The user types SQL in the CodeMirror editor and clicks "Run". The portal sends `POST /api/v1/query` with the raw SQL text.
 
 ### ratd validates and proxies
 
-ratd performs basic validation (query size under 100 KB, timeout set to 30 seconds) and forwards the query to ratq via the `ExecuteQuery` gRPC call. ratd acts as a proxy --- it does not execute SQL itself.
+ratd performs basic validation (query size under 100 KB, timeout set to 60 seconds) and forwards the query to ratq via the `ExecuteQuery` gRPC call. ratd acts as a proxy --- it does not execute SQL itself.
 
 ### ratq enforces read-only
 
@@ -149,7 +149,7 @@ Results are serialized as columnar data (Arrow format) from ratq to ratd, then c
 </Steps>
 
 <Callout type="warning">
-Queries have a **30-second timeout** and a **100 KB size limit**. If your query hits the timeout, consider optimizing it with filters, limits, or by creating a Gold-layer pipeline for pre-aggregation.
+Queries have a **60-second timeout** and a **100 KB size limit**. If your query hits the timeout, consider optimizing it with filters, limits, or by creating a Gold-layer pipeline for pre-aggregation.
 </Callout>
 
 ---
@@ -167,7 +167,7 @@ sequenceDiagram
     participant MinIO
 
     User->>Portal: Drag file into landing zone
-    Portal->>ratd: POST /api/v1/storage/upload
+    Portal->>ratd: POST /api/v1/files/upload
     Note over ratd: Validate: size, type, path
     ratd->>MinIO: PUT object to S3
     MinIO-->>ratd: Upload OK (ETag)
@@ -188,7 +188,7 @@ sequenceDiagram
     Runner->>MinIO: Write to Iceberg
     Runner->>Nessie: Commit + merge
 
-    Runner->>ratd: Callback (success)
+    Runner->>ratd: POST /api/v1/internal/runs/{id}/status (to :8090)
     ratd->>Postgres: UPDATE run (status=success)
 
     opt archive_landing_zones annotation
@@ -203,7 +203,7 @@ sequenceDiagram
 
 ### User uploads a file
 
-The user drags a file into a landing zone in the portal. The portal sends a multipart upload to `POST /api/v1/storage/upload`. ratd validates the file (size limits, allowed content types, no path traversal) and writes it to MinIO at `s3://rat/{namespace}/landing/{zone_name}/{filename}`.
+The user drags a file into a landing zone in the portal. The portal sends a multipart upload to `POST /api/v1/files/upload` (landing-zone uploads use the landing-zone file endpoints). ratd validates the file (size limits, allowed content types, no path traversal) and writes it to MinIO at `s3://rat/{namespace}/landing/{zone_name}/{filename}`.
 
 ### File is registered in Postgres
 
@@ -347,14 +347,14 @@ sequenceDiagram
     participant ratq
 
     User->>Portal: Open table schema viewer
-    Portal->>ratd: GET /api/v1/query/tables
+    Portal->>ratd: GET /api/v1/tables
     ratd->>ratq: gRPC ListTables
     ratq->>ratq: Read cached catalog
     ratq-->>ratd: Table list
     ratd-->>Portal: JSON table list
 
     User->>Portal: Click on a table
-    Portal->>ratd: GET /api/v1/query/schema?table=...
+    Portal->>ratd: GET /api/v1/schema?table=...
     ratd->>ratq: gRPC GetSchema
     ratq->>ratq: DuckDB DESCRIBE
     ratq-->>ratd: Column names + types
@@ -414,9 +414,9 @@ The runner keeps logs in a bounded deque (in-memory ring buffer). On run complet
 
 | Operation | Path | Protocol |
 |-----------|------|----------|
-| Pipeline run | Portal → ratd → Runner → Nessie/MinIO → ratd (callback) | REST + gRPC + S3 + REST |
-| Query | Portal → ratd → ratq → MinIO (read) | REST + gRPC + S3 |
-| File upload | Portal → ratd → MinIO | REST + S3 |
+| Pipeline run | Portal → ratd → Runner → Nessie/MinIO → ratd (callback to :8090) | REST + gRPC + S3 + REST |
+| Query | Portal → ratd (`POST /api/v1/query`) → ratq → MinIO (read) | REST + gRPC + S3 |
+| File upload | Portal → ratd (`POST /api/v1/files/upload`) → MinIO | REST + S3 |
 | Schedule tick | ratd Scheduler → Runner → Nessie/MinIO → ratd (callback) | Internal + gRPC + S3 + REST |
 | Log stream | Portal → ratd → Runner | SSE + gRPC streaming |
 | Schema browse | Portal → ratd → ratq | REST + gRPC |

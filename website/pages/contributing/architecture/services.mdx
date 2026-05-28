@@ -4,7 +4,7 @@ import { Mermaid } from '@/components/mermaid'
 
 # Services
 
-RAT runs as 7 long-lived services plus 1 init job. This page provides a deep dive into each service: what it does, how it works internally, and how it connects to the rest of the platform.
+RAT runs as 7 long-lived services plus 2 init jobs (`minio-init` and `nessie-init`). This page provides a deep dive into each service: what it does, how it works internally, and how it connects to the rest of the platform.
 
 ---
 
@@ -12,9 +12,9 @@ RAT runs as 7 long-lived services plus 1 init job. This page provides a deep div
 
 | Property | Value |
 |----------|-------|
-| **Language** | Go 1.22+ |
+| **Language** | Go 1.24 |
 | **Image base** | `scratch` (static binary) |
-| **Ports** | `8080` (REST), `8081` (gRPC) |
+| **Ports** | `8080` (public REST), `8090` (internal HTTP, not published) |
 | **Memory limit** | 512 MB |
 | **CPU limit** | 1.0 |
 | **Networks** | frontend + backend |
@@ -25,14 +25,18 @@ RAT runs as 7 long-lived services plus 1 init job. This page provides a deep div
 
 ### Key Responsibilities
 
-- **REST API** --- 69 endpoints covering pipelines, runs, schedules, namespaces, storage, quality tests, metadata, query proxy, landing zones, triggers, versions, and platform settings
+- **REST API** --- endpoints covering pipelines, runs, schedules, namespaces, storage, quality tests, metadata, query proxy, landing zones, triggers, versions, plugin management, and platform settings
 - **gRPC client** --- dispatches pipeline execution to runner and queries to ratq via ConnectRPC
-- **Authentication** --- plugin-based auth middleware (Noop for Community, JWT for Pro)
+- **Authentication** --- pass-through (Noop) or static API key by default; an optional auth plugin adds JWT/OIDC
 - **Scheduling** --- background cron scheduler evaluating `schedules` table every 30 seconds
 - **Reaper** --- background daemon for data retention (prune runs, fail stuck, clean branches, purge soft-deletes)
-- **Plugin host** --- loads, health-checks, and communicates with Pro plugins via gRPC
+- **Plugin host** --- loads, health-checks, and reverse-proxies optional plugins via gRPC + the internal listener
 - **Database migrations** --- runs Postgres schema migrations on startup
 - **Catalog operations** --- interacts with Nessie for branch management and MinIO for file storage
+
+<Callout type="info">
+`ratd` serves two HTTP listeners: the public API on `8080` and an unauthenticated **internal** listener on `8090` for service-to-service callbacks (run status from the runner) and plugin phone-home (ADR-019). There is no gRPC listener on `8081`.
+</Callout>
 
 ### Middleware Chain
 
@@ -47,7 +51,7 @@ Every HTTP request passes through 11 middleware layers in order:
 6. Recoverer               → Catches panics, returns 500
 7. JSON Body Limiter       → Caps request body at 1 MB
 8. Rate Limiter            → Per-IP token bucket: 50 req/s, burst 100
-9. Auth                    → Plugin auth (JWT), API key, or Noop
+9. Auth                    → Static API key or Noop (an optional auth plugin adds JWT)
 10. Audit                  → Logs POST/PUT/DELETE to audit_log table
 11. Path Validation        → Validates slugs: [a-z][a-z0-9_-]*, max 128
 ```
@@ -58,20 +62,21 @@ Every HTTP request passes through 11 middleware layers in order:
 /ratd healthcheck
 ```
 
-The binary includes a built-in healthcheck subcommand that hits `http://localhost:8080/health` internally. The `/health` endpoint aggregates the status of Postgres, MinIO, Nessie, runner, and ratq, returning a JSON response:
+The binary includes a built-in healthcheck subcommand that hits `http://localhost:8080/health` internally. `/health` (and `/health/live`) is a liveness probe returning build metadata; dependency-aware checks live at `/health/ready`:
 
-```json filename="GET /health"
+```json filename="GET /health/ready"
 {
-  "status": "ok",
-  "services": {
-    "postgres": "healthy",
-    "minio": "healthy",
-    "nessie": "healthy",
-    "runner": "healthy",
-    "ratq": "healthy"
+  "status": "ready",
+  "checks": {
+    "postgres": { "status": "ok" },
+    "s3": { "status": "ok" },
+    "runner": { "status": "ok" },
+    "query": { "status": "ok" }
   }
 }
 ```
+
+The readiness keys are `postgres`, `s3`, `runner`, and `query`; the overall status is `ready` or `not_ready`.
 
 ### Router Structure
 
@@ -132,6 +137,7 @@ service RunnerService {
   rpc CancelRun(CancelRunRequest) returns (CancelRunResponse);
   rpc PreviewPipeline(PreviewPipelineRequest) returns (PreviewPipelineResponse);
   rpc ValidatePipeline(ValidatePipelineRequest) returns (ValidatePipelineResponse);
+  rpc ListPlugins(ListPluginsRequest) returns (ListPluginsResponse);
 }
 ```
 
@@ -143,6 +149,7 @@ service RunnerService {
 | `CancelRun` | Request cancellation of a running pipeline. |
 | `PreviewPipeline` | Compile and execute the pipeline SQL, returning a preview of the result (no writes). |
 | `ValidatePipeline` | Compile the pipeline SQL and validate it without execution. |
+| `ListPlugins` | List runner plugins (Python entry points) discovered in the runner container. |
 
 ### Health Check
 
@@ -161,7 +168,7 @@ Each pipeline run gets a fresh DuckDB connection with these extensions:
 
 ### Callback Mechanism
 
-When a pipeline run completes (success or failure), the runner **pushes** the terminal status back to ratd via an HTTP POST to `RATD_CALLBACK_URL`. This eliminates continuous polling. ratd falls back to polling GetRunStatus every 60 seconds as a safety net.
+When a pipeline run completes (success or failure), the runner **pushes** the terminal status back to ratd via an HTTP POST to `RATD_CALLBACK_URL` — which points at ratd's **internal** listener (`http://ratd:8090`), not the public `8080`. This eliminates continuous polling. ratd falls back to polling GetRunStatus every 60 seconds as a safety net.
 
 ---
 
@@ -186,7 +193,7 @@ ratq provides interactive, read-only DuckDB queries over Iceberg tables. It is t
 - **Schema introspection** --- list tables, inspect columns, preview data
 - **Read-only enforcement** --- blocks any SQL that could modify data (25+ blocked statements, 20+ blocked functions)
 - **Catalog refresh** --- refreshes Iceberg table metadata from Nessie every 30 seconds
-- **Query limits** --- 100 KB max query size, 30 second timeout
+- **Query limits** --- 100 KB max query size; per-query timeout via `QUERY_TIMEOUT_SECS` (default 60s)
 
 ### gRPC Service
 
@@ -246,32 +253,37 @@ The portal is the **only user interface** for RAT. It is a full-featured web IDE
 - **Code editor** --- CodeMirror 6 with SQL and Python syntax highlighting, integrated with the pipeline file system
 - **Query console** --- interactive SQL editor with tabular results, powered by ratq
 - **Pipeline management** --- create, edit, delete, and run pipelines through the UI
-- **DAG visualization** --- ReactFlow-based lineage graph showing pipeline dependencies via `ref()` calls
+- **Data explorer** --- browse Iceberg tables, inspect schemas, and preview data
 - **Run monitoring** --- real-time log streaming, run history, phase profiling
-- **Schedule management** --- create and manage cron schedules
 - **Landing zones** --- file upload, preview, and management
-- **Quality dashboard** --- view quality test results and history
+- **Plugin UI host** --- mounts optional plugin surfaces (e.g. lineage DAG) under `/x/...`
 
 ### Routes
 
-The portal has 14 routes organized by feature:
+The portal's App Router routes, organized by feature:
 
 | Route | Description |
 |-------|-------------|
 | `/` | Dashboard --- overview of recent runs, pipeline counts |
 | `/pipelines` | Pipeline browser --- list, filter, search |
-| `/pipelines/[namespace]/[layer]/[name]` | Pipeline detail --- editor, config, runs, quality |
-| `/pipelines/new` | Create new pipeline |
+| `/pipelines/[ns]/[layer]/[name]` | Pipeline detail --- editor, config, runs, quality |
 | `/query` | Query console --- interactive SQL editor |
+| `/explorer` | Data explorer --- browse Iceberg tables and data |
+| `/explorer/[ns]/[layer]/[name]` | Table detail --- schema, preview, metadata |
 | `/runs` | Run history --- all runs across all pipelines |
 | `/runs/[id]` | Run detail --- logs, phase timing, error details |
-| `/schedules` | Schedule management |
-| `/landing-zones` | Landing zone browser |
-| `/landing-zones/[namespace]/[name]` | Landing zone detail --- files, upload, preview |
-| `/lineage` | Global lineage DAG |
+| `/landing` | Landing zone browser |
+| `/login` | Login page (used when an auth plugin is active) |
+| `/admin/users` | User administration (when an auth/identity plugin is active) |
 | `/settings` | Platform settings |
-| `/quality` | Quality test dashboard |
-| `/namespaces` | Namespace management |
+| `/settings/permissions` | Permissions / ACL management (permissions plugin) |
+| `/settings/plugins` | Installed plugin management |
+| `/settings/retention` | Retention policy configuration |
+| `/x/[...path]` | Catch-all route host for plugin-provided UI (e.g. `/x/lineage`) |
+
+<Callout type="info">
+Surfaces such as lineage, schedules, quality dashboards, and namespace management that were once standalone routes are now provided either inline (in pipeline/table detail views) or by optional plugins mounted under `/x/...`.
+</Callout>
 
 ### Data Fetching
 
@@ -295,7 +307,7 @@ wget -qO- http://localhost:3000
 | Property | Value |
 |----------|-------|
 | **Image** | `postgres:16.4-alpine` |
-| **Port** | `5432` (localhost only) |
+| **Port** | host `5433` → container `5432` (localhost only) |
 | **Memory limit** | 1 GB |
 | **CPU limit** | 1.0 |
 | **Networks** | backend |
@@ -306,7 +318,7 @@ Postgres stores all platform metadata. It is **not** a data warehouse --- all ac
 
 ### Key Responsibilities
 
-- **16 tables** of platform state (see [Database Schema](/contributing/architecture/database-schema))
+- **19 tables** of platform state (see [Database Schema](/contributing/architecture/database-schema))
 - **Advisory locks** for leader election (ensures only one ratd instance runs the scheduler and reaper)
 - **Schema migrations** managed by ratd on startup
 - **Nessie persistence** --- Nessie also uses this Postgres instance (via JDBC) to persist its catalog metadata
@@ -338,7 +350,7 @@ Postgres is metadata-only. Even if you lose the Postgres volume, your actual dat
 | Property | Value |
 |----------|-------|
 | **Image** | `minio/minio:RELEASE.2024-06-13T22-53-53Z` |
-| **Ports** | `9000` (S3 API, localhost), `9001` (Console, localhost) |
+| **Ports** | host `9002` → 9000 (S3 API, localhost), host `9003` → 9001 (Console, localhost) |
 | **Memory limit** | 1 GB |
 | **CPU limit** | 1.0 |
 | **Networks** | backend |
@@ -402,11 +414,25 @@ This container runs once and exits. If it fails, it restarts (`restart: on-failu
 
 ---
 
+## nessie-init --- Catalog Bootstrap
+
+| Property | Value |
+|----------|-------|
+| **Image** | `alpine:3.20` |
+| **Networks** | backend |
+| **Lifecycle** | One-shot (exits after completion) |
+
+### Role
+
+A one-shot init container that runs after Nessie is healthy. A fresh Nessie 0.99 starts `main` at genesis with zero commits, which makes the runner's branch-and-merge flow fail with `404 "no common ancestor"`. `nessie-init` seeds a single bootstrap commit on `main` to fix this for all future runs. It is idempotent (skips the commit if `main` already has history). The long-running services depend on it via `condition: service_completed_successfully`.
+
+---
+
 ## nessie --- Iceberg Catalog
 
 | Property | Value |
 |----------|-------|
-| **Image** | `ghcr.io/projectnessie/nessie:0.79.0` |
+| **Image** | `ghcr.io/projectnessie/nessie:0.99.0` |
 | **Port** | `19120` (REST, localhost only) |
 | **Memory limit** | 512 MB |
 | **CPU limit** | 1.0 |
@@ -473,6 +499,7 @@ flowchart TD
     ratq --> nessie
     nessie --> postgres
     minioinit["minio-init"] --> minio
+    nessieinit["nessie-init"] --> nessie
 `} />
 
 The startup order enforced by `depends_on` with health check conditions:
@@ -480,9 +507,10 @@ The startup order enforced by `depends_on` with health check conditions:
 1. **postgres** + **minio** (parallel, no dependencies)
 2. **minio-init** (depends on minio healthy)
 3. **nessie** (depends on postgres healthy)
-4. **runner** + **ratq** (depend on minio + nessie healthy)
-5. **ratd** (depends on postgres + minio + nessie healthy)
-6. **portal** (depends on ratd healthy)
+4. **nessie-init** (depends on nessie healthy; seeds genesis commit, then exits)
+5. **runner** + **ratq** (depend on minio + nessie healthy + nessie-init completed)
+6. **ratd** (depends on postgres + minio + nessie healthy + nessie-init completed)
+7. **portal** (depends on ratd healthy)
 
 ---
 

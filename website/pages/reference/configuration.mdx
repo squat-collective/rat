@@ -9,46 +9,39 @@ RAT is configured through a combination of a YAML configuration file (`rat.yaml`
 
 ## rat.yaml
 
-The `rat.yaml` file is the primary configuration file for the `ratd` platform service. It defines plugin configurations, feature flags, and platform-level settings. The file location is controlled by the `RAT_CONFIG` environment variable (default: `rat.yaml` in the working directory).
+The `rat.yaml` file is the primary configuration file for the `ratd` platform service. It declares the optional plugin containers `ratd` should connect to. The file location is controlled by the `RAT_CONFIG` environment variable (default: `rat.yaml` in the working directory). `rat.yaml` is entirely optional — with no file present, `ratd` runs with sensible defaults and no plugins.
 
 ```yaml filename="rat.yaml"
 # RAT Platform Configuration
-# This file configures plugins and platform behavior.
+# Declares the optional plugin containers ratd connects to.
+# The `plugins` field is a MAP keyed by slot name → { addr, config }.
 
-# Plugin configuration — Pro Edition only
-plugins: []
-  # - name: auth-keycloak
-  #   path: /plugins/auth-keycloak
-  #   config:
-  #     issuer_url: https://keycloak.example.com/realms/rat
-  #     client_id: rat-platform
-  #     audience: rat-api
-
-  # - name: acl
-  #   path: /plugins/acl
-  #   config:
-  #     default_policy: deny
-  #     admin_users:
-  #       - admin@example.com
+plugins:
+  auth:
+    addr: "auth:50060"          # gRPC address of the plugin container
+    config:
+      issuer_url: https://keycloak.example.com/realms/rat
+      client_id: rat-platform
+      audience: rat-api
+  acl:
+    addr: "acl:50061"
+    config:
+      default_policy: deny
+      admin_users: "admin@example.com"
 ```
 
 ### Plugin Configuration Fields
 
-Each plugin entry in the `plugins` array supports these fields:
+`plugins` is a map keyed by **slot name** (e.g. `auth`, `acl`). Each entry supports these fields:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `name` | string | Yes | Unique plugin identifier (e.g., `auth-keycloak`, `acl`) |
-| `path` | string | Yes | Filesystem path to the plugin binary |
-| `config` | object | No | Plugin-specific configuration (passed as-is to the plugin) |
+| `addr` | string | Yes | gRPC address of the plugin container (e.g., `auth:50060`) |
+| `config` | object | No | Plugin-specific key/value configuration (passed as-is to the plugin) |
 
 <Callout type="info">
-In the Community Edition, the `plugins` array is empty. Plugins are a Pro Edition feature. The `rat.yaml` file is still loaded — it just has no plugin entries.
+All plugins are free and optional. With no `plugins` declared (or no `rat.yaml` at all), `ratd` runs the core platform with no plugins loaded.
 </Callout>
-
-### Path Resolution
-
-Paths in `rat.yaml` are resolved relative to the `rat.yaml` file location. If `RAT_CONFIG=/etc/rat/rat.yaml` and a plugin path is `./plugins/auth`, it resolves to `/etc/rat/plugins/auth`.
 
 ---
 
@@ -65,18 +58,17 @@ The `ratd` service is the central API server, scheduler, and plugin host.
 | Variable | Default | Description |
 |---|---|---|
 | `RAT_LISTEN_ADDR` | `127.0.0.1:8080` | Address and port the HTTP server binds to |
-| `PORT` | — | Alternative to `RAT_LISTEN_ADDR` (sets port only, binds to `0.0.0.0`) |
-| `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated list of allowed CORS origins |
-| `RATE_LIMIT` | `50` | Maximum requests per second per client. Set to `"0"` to disable |
-| `RAT_CONFIG` | `rat.yaml` | Path to the `rat.yaml` configuration file |
-| `EDITION` | `community` | Platform edition (`community` or `pro`) |
+| `PORT` | — | Alternative to `RAT_LISTEN_ADDR` (sets port only; binds `:<PORT>`, i.e. all interfaces) |
+| `CORS_ORIGINS` | _(none)_ | Comma-separated list of allowed CORS origins. When unset, no CORS origins are configured |
+| `RATE_LIMIT` | `50` req/s | On/off switch, not a tunable number. Any non-zero value enables a fixed 50 req/s per-IP limiter; set to `"0"` to disable |
+| `RAT_CONFIG` | `rat.yaml` | Path to the `rat.yaml` configuration file (optional) |
+| `INTERNAL_LISTEN_ADDR` | `127.0.0.1:8090` | Address for the unauthenticated internal listener (service-to-service callbacks, plugin phone-home). Must differ from `RAT_LISTEN_ADDR`; never expose to the host (see ADR-019) |
 
 #### Authentication
 
 | Variable | Default | Description |
 |---|---|---|
 | `RAT_API_KEY` | — | Static API key for simple auth. When set, all requests must include `Authorization: Bearer <key>` |
-| `RAT_LICENSE_KEY` | — | Pro Edition license key for plugin activation |
 
 #### Database
 
@@ -163,7 +155,9 @@ The runner service executes pipelines, writes to Iceberg, and runs quality tests
 | `RUNNER_MAX_CONCURRENT` | `10` | Maximum number of pipelines executing simultaneously |
 | `RUNNER_MAX_WORKERS` | `10` | Maximum worker threads in the execution pool |
 | `RUNNER_STATE_DIR` | `/tmp/rat-runner-state` | Directory for temporary run state files |
-| `RATD_CALLBACK_URL` | — | URL for push-based status callbacks to ratd (e.g., `http://ratd:8080`) |
+| `RATD_CALLBACK_URL` | — | Base URL for push-based status callbacks to ratd's **internal** listener (e.g., `http://ratd:8090`, NOT the public `:8080`) |
+| `QUALITY_TEST_TIMEOUT_SECS` | `60` | Per-quality-test timeout. A watchdog interrupts a runaway test once the deadline passes |
+| `QUERY_TIMEOUT_SECS` | `60` | Per-query DuckDB timeout for the runner's internal queries |
 
 ### ratq (Python Query Service)
 
@@ -188,6 +182,13 @@ Same as the runner service:
 |---|---|---|
 | `DUCKDB_MEMORY_LIMIT` | `2GB` | Maximum memory DuckDB can use per connection |
 | `DUCKDB_THREADS` | `4` | Number of CPU threads DuckDB uses for query execution |
+
+#### Query
+
+| Variable | Default | Description |
+|---|---|---|
+| `QUERY_TIMEOUT_SECS` | `60` | Per-query DuckDB timeout. A watchdog calls `conn.interrupt()` once the deadline passes; callers get `DEADLINE_EXCEEDED` |
+| `POSTGRES_USERDATA_URL` | — | Optional federated user-data Postgres URL that ratq ATTACHes at startup so queries can JOIN across Iceberg + Postgres |
 
 #### Nessie
 
@@ -220,7 +221,7 @@ The portal is the web-based user interface for RAT.
 
 ## Docker Compose Configuration
 
-The default Docker Compose file is located at `infra/docker-compose.yml`. It defines all 7 services plus the `minio-init` bootstrap container.
+The default Docker Compose file is located at `infra/docker-compose.yml`. It defines all 7 services plus two bootstrap containers: `minio-init` (bucket + versioning) and `nessie-init` (genesis commit seeding).
 
 ### Shared Configuration Anchors
 
@@ -324,8 +325,8 @@ Here is a quick reference of all default values across the platform:
 | Variable | Default | Service |
 |---|---|---|
 | `RAT_LISTEN_ADDR` | `127.0.0.1:8080` | ratd |
-| `CORS_ORIGINS` | `http://localhost:3000` | ratd |
-| `RATE_LIMIT` | `50` req/s | ratd |
+| `CORS_ORIGINS` | _(none)_ | ratd |
+| `RATE_LIMIT` | `50` req/s (fixed; on/off only) | ratd |
 | `SCHEDULER_ENABLED` | `true` | ratd |
 | `S3_BUCKET` | `rat` | all |
 | `S3_USE_SSL` | `false` | all |

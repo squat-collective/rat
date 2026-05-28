@@ -186,7 +186,7 @@ If `no-null-ids` had returned rows (i.e., there were null launch IDs):
 
 If `valid-outcomes` had returned rows:
 
-- The run status would show **Warning**
+- The run status would still show **Success** — there is no separate "Warning" run status; `warn`-severity failures do not change the run's outcome
 - The data would still be **merged** into the table
 - The warning would appear in the run detail with the offending rows
 

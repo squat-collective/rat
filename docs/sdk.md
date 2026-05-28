@@ -273,8 +273,8 @@ All extend `RatError`:
 |-------|--------|-------------|
 | `RatError` | any | Base error class |
 | `ValidationError` | 400/422 | Invalid request |
-| `AuthenticationError` | 401 | Unauthenticated (Pro only) |
-| `AuthorizationError` | 403 | Forbidden (Pro only) |
+| `AuthenticationError` | 401 | Unauthenticated (only when the auth plugin is installed) |
+| `AuthorizationError` | 403 | Forbidden (only when the sharing/enforcement plugins are installed) |
 | `NotFoundError` | 404 | Resource not found |
 | `ConflictError` | 409 | Duplicate / not cancellable |
 | `ServerError` | 5xx | Server-side failure |
@@ -287,7 +287,7 @@ All extend `RatError`:
 - **Error format**: v2 Go API returns plain text errors (`response.text()`), not JSON `{ detail }`
 - **Retry**: Exponential backoff — `500ms * (attempt + 1)`, only for `ConnectionError`
 - **Timeout**: Configurable via `AbortController` (default: 30s)
-- **Auth**: No auth headers in Community Edition. Pro adds Bearer token injection.
+- **Auth**: No auth headers by default. The auth plugin adds Bearer token injection when installed.
 - **Upload**: Multipart `FormData` for `storage.upload()` (bypasses JSON serialization)
 
 ---

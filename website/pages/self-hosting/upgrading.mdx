@@ -9,21 +9,21 @@ This guide covers how to upgrade RAT to a new version, what to expect during the
 
 ## Version Scheme
 
-RAT follows [Semantic Versioning](https://semver.org/) (SemVer):
+RAT releases use a `0.x` scheme while the plugin contract is still being stabilized:
 
 ```
-v2.MAJOR.MINOR
+0.MINOR.PATCH
 ```
 
 | Component | When Incremented | Example |
 |---|---|---|
-| **MAJOR** | Breaking changes (schema migrations, API changes) | v2.1.0 → v2.2.0 |
-| **MINOR** | New features, non-breaking improvements | v2.1.0 → v2.1.1 |
+| **0.MINOR** | New features and possible breaking changes (the contract isn't frozen yet) | 0.2.0 → 0.3.0 |
+| **0.x.PATCH** | Bug fixes, backward-compatible | 0.2.0 → 0.2.1 |
 
-Releases are tagged in Git with the version number (e.g., `v2.1.0`).
+Releases are tagged in Git with the version number (e.g., `v0.2.0-beta.1`); the git tag is the single source of truth for the version.
 
 <Callout type="info">
-The `v2` prefix indicates this is the v2 rewrite of RAT. The major version within v2 tracks breaking changes within this generation.
+"v2" is the **codename** for the current-generation rewrite of RAT — **not** the SemVer major. Released artifacts are versioned as `0.x`. Once the plugin contract is frozen, RAT will move to `1.0`.
 </Callout>
 
 ---
@@ -50,7 +50,7 @@ curl -s http://localhost:8080/health | jq .version
 
 # View release notes on GitHub
 gh release list --repo squat-collective/rat
-gh release view v2.2.0 --repo squat-collective/rat
+gh release view v0.3.0 --repo squat-collective/rat
 ```
 
 ### Create a backup
@@ -71,7 +71,7 @@ docker compose pull
 If you pinned a version, update the image tags in `docker-compose.yml` first, or re-run the installer:
 
 ```bash filename="Terminal"
-curl -fsSL https://raw.githubusercontent.com/squat-collective/rat/main/install/install.sh | bash -s -- --version=2.2.0 --dir=.
+curl -fsSL https://raw.githubusercontent.com/squat-collective/rat/main/install/install.sh | bash -s -- --version=0.3.0 --dir=.
 ```
 
 ### Restart services
@@ -116,7 +116,7 @@ curl -s http://localhost:8080/health | jq .version
 
 # View release notes on GitHub
 gh release list --repo squat-collective/rat
-gh release view v2.2.0 --repo squat-collective/rat
+gh release view v0.3.0 --repo squat-collective/rat
 ```
 
 ### Create a backup
@@ -133,7 +133,7 @@ This creates a timestamped backup of both PostgreSQL and MinIO. See the [Backup 
 
 ```bash filename="Terminal"
 git fetch origin
-git checkout v2.2.0   # checkout the target version tag
+git checkout v0.3.0   # checkout the target version tag
 ```
 
 Or if you track `main`:
@@ -189,8 +189,8 @@ Open the portal at [localhost:3000](http://localhost:3000) and verify that pipel
 RAT runs database migrations **automatically on startup**. When `ratd` starts, it:
 
 1. Connects to PostgreSQL
-2. Checks the current schema version in the `schema_migrations` table
-3. Applies any pending migrations in order
+2. Checks which migrations have already been applied (tracked by filename)
+3. Applies any pending migrations in order (the current set goes up to `018_failed_merges.sql`)
 4. Continues with normal startup
 
 <Callout type="info">
@@ -255,7 +255,7 @@ make down
 ### Checkout the previous version
 
 ```bash filename="Terminal"
-git checkout v2.1.0   # your previous working version
+git checkout v0.2.0   # your previous working version
 ```
 
 ### Restore from backup
@@ -352,5 +352,5 @@ When upgrading, all RAT services must run the same version. Do not mix versions 
 | Postgres schema | ratd | Auto-migrated on startup |
 
 <Callout type="error">
-Never run `ratd` version 2.2.0 with a runner at version 2.1.0. Version skew between services can cause gRPC protocol errors, data corruption, or silent behavior changes. Always upgrade all services together.
+Never run `ratd` version 0.3.0 with a runner at version 0.2.0. Version skew between services can cause gRPC protocol errors, data corruption, or silent behavior changes. Always upgrade all services together.
 </Callout>

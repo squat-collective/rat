@@ -14,7 +14,7 @@ erDiagram
         uuid id PK
         varchar name UK "unique slug"
         text description
-        varchar created_by "null in Community"
+        varchar created_by "null in single-user mode (no auth plugin)"
         timestamptz created_at
     }
 
@@ -26,7 +26,7 @@ erDiagram
         varchar type "sql | python"
         varchar s3_path "S3 prefix for code"
         text description
-        varchar owner "null in Community"
+        varchar owner "null in single-user mode (no auth plugin)"
         jsonb published_versions "file → S3 version ID"
         boolean draft_dirty "draft ≠ published"
         int max_versions "default 50"
@@ -164,7 +164,7 @@ erDiagram
     }
 
     %% ═══════════════════════════════════════════
-    %% PRO ONLY (reserved, not yet implemented)
+    %% OPTIONAL-PLUGIN TABLES (populated when the relevant plugin is enabled)
     %% ═══════════════════════════════════════════
 
     Plugin {
@@ -347,7 +347,7 @@ stateDiagram-v2
 
 | Entity | Storage | Cardinality | Notes |
 |--------|---------|-------------|-------|
-| **Namespace** | Postgres | 1 (Community) / N (Pro) | Top-level grouping |
+| **Namespace** | Postgres | 1 by default / N with the multi-namespace plugin | Top-level grouping |
 | **Pipeline** | Postgres + S3 | Many per namespace | Code in S3, metadata in PG |
 | **PipelineVersion** | Postgres | Many per pipeline | Immutable version snapshots |
 | **Run** | Postgres + S3 | Many per pipeline | Logs in S3, status in PG |
@@ -359,8 +359,8 @@ stateDiagram-v2
 | **LandingFile** | Postgres + S3 | Many per zone | Content in S3 |
 | **TableMetadata** | Postgres | 0-1 per Iceberg table | User-maintained docs |
 | **Iceberg Table** | Nessie + S3 | Dynamic | Created by pipeline runs |
-| **Plugin** | Postgres | 0-N (Pro only) | Plugin registry |
-| **AuditLog** | Postgres | Append-only (Pro) | Action log |
+| **Plugin** | Postgres | 0-N | Plugin registry |
+| **AuditLog** | Postgres | Append-only (written by the optional audit plugin) | Action log |
 
 ## Key Design Patterns
 

@@ -8,7 +8,7 @@
 
 ## Overview
 
-The portal is the **only user interface** for RAT. It's a client-side Next.js app that talks to ratd via the TypeScript SDK. Community Edition has no auth — the portal renders immediately with full access.
+The portal is the **only user interface** for RAT. It's a client-side Next.js app that talks to ratd via the TypeScript SDK. With no auth plugin installed, the portal renders immediately with full access.
 
 ```
 Browser → SWR hook → RatClient (SDK) → fetch() → ratd (Go API :8080)
@@ -141,7 +141,7 @@ const api = useApiClient();
 </ThemeProvider>
 ```
 
-No auth providers, no session providers — Community Edition is anonymous.
+No auth providers, no session providers — anonymous by default (until the auth plugin is enabled).
 
 ---
 
@@ -195,11 +195,11 @@ Underground/squat-collective aesthetic, consistent with v1:
 
 | Aspect | v1 | v2 |
 |--------|----|----|
-| Auth | NextAuth.js v5 + Keycloak | None (Community) |
+| Auth | NextAuth.js v5 + Keycloak | None by default (optional auth plugin) |
 | Routing | `workspace` param | `namespace` param |
 | Query rows | `unknown[][]` (arrays) | `Record<string, unknown>[]` (objects) |
 | File tree | API returns tree structure | Flat `FileInfo[]`, build client-side |
-| API errors | JSON `{ detail }` | Plain text body |
+| API errors | JSON `{ detail }` | JSON `{ error: { code, type, message } }` |
 | Port | 8090 | 3000 |
 | Provider stack | Theme → Session → API → Workspace | Theme → API only |
 
@@ -231,25 +231,26 @@ Docker: 3-stage build → `node:20-alpine` runtime, port 3000.
 > ADR: `docs/adr/016-portal-plugin-ui.md`
 > Source: `portal/src/components/plugins/`
 
-The portal includes a generic **plugin slot system** that allows external packages to inject React components into predefined locations in the UI. When no plugin package is configured, slots render nothing with zero overhead.
+The portal includes a generic **plugin slot system** that lets installed plugins inject React components into predefined locations in the UI. When no plugins are installed, slots render nothing with zero overhead.
 
 ### Architecture
 
-```
-Default:          ThemeProvider > ApiProvider > PluginWrapper(noop) > AppShell
-With plugins:     ThemeProvider > ApiProvider > PluginWrapper(loads registry) > PluginRegistryProvider > AppShell
-                                                    ↑ dynamic import via NEXT_PUBLIC_PLUGIN_PACKAGE
-```
+Plugin UIs load at **runtime** — there is no build-time npm import. The portal discovers installed plugins from ratd's API and fetches each plugin's JS bundle from `GET /api/v1/plugins/{name}/ui/bundle.js` (ratd reverse-proxies it). Each bundle registers its slot components by calling `window.__RAT_REGISTER_PLUGIN("<name>", { navItems, routes, slots })` — a build-free bundle using `React.createElement` (no JSX, no bundler).
 
-`NEXT_PUBLIC_PLUGIN_PACKAGE` names the npm package to load. When unset, `PluginWrapper` is a passthrough.
+```
+ratd /api/v1/plugins  →  portal loads each {name}/ui/bundle.js  →  bundle calls window.__RAT_REGISTER_PLUGIN(...)  →  slots populated
+```
 
 ### Slot Locations
 
-| Slot Name | Location | Component | Props |
-|-----------|----------|-----------|-------|
-| `main-header` | Between LicenseBanner and content | `app-shell.tsx` | — |
-| `sidebar-user` | Before theme toggle in sidebar | `nav/sidebar.tsx` | `collapsed: boolean` |
-| `sidebar-nav-extra` | After main nav in sidebar | `nav/sidebar.tsx` | `collapsed: boolean` |
+The portal exposes roughly two dozen (~23) slots that plugin UIs can render into — across the app shell/header, sidebar/nav, pipeline editor, table detail/actions, catalog, dashboard, and more. Grep `portal/src` for `<PluginSlot name=` for the current authoritative list. A few examples:
+
+| Slot Name | Location | Example use |
+|-----------|----------|-------------|
+| `main-header` | App-shell header area | banners, status |
+| `sidebar-nav-extra` | After main nav in sidebar | plugin nav items |
+| `pipeline-editor-sidebar` | Pipeline editor side panel | dev-assistant |
+| `table-actions` | Table detail action bar | docs-assistant "Suggest docs" |
 
 ### Key Components
 
@@ -258,7 +259,7 @@ With plugins:     ThemeProvider > ApiProvider > PluginWrapper(loads registry) > 
 | `PluginRegistryProvider` | `plugin-context.tsx` | React context providing the slot registry |
 | `usePluginRegistry` | `plugin-context.tsx` | Hook to read the registry |
 | `PluginSlot` | `plugin-slot.tsx` | Renders components registered for a slot name |
-| `PluginWrapper` | `plugin-wrapper.tsx` | Conditional loader — dynamically imports a plugin package and provides its registry |
+| `PluginWrapper` | `plugin-wrapper.tsx` | Loads installed plugins' UI bundles at runtime and provides the registry |
 
 ### Types
 

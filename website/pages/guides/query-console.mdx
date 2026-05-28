@@ -127,8 +127,8 @@ The read-only enforcement is implemented via SQL statement validation in the `ra
 | Limit | Value | Description |
 |---|---|---|
 | **Max query length** | 100 KB | Queries exceeding this size are rejected |
-| **Execution timeout** | 30 seconds | Long-running queries are automatically cancelled |
-| **Result row limit** | Configurable | Default pagination returns results in pages |
+| **Execution timeout** | 60 seconds | Long-running queries are automatically cancelled (`QUERY_TIMEOUT_SECS`) |
+| **Default result limit** | 1000 rows | Applied when the request does not specify a `limit` |
 
 If your query times out, try:
 - Adding `LIMIT` to reduce result set size
@@ -292,14 +292,13 @@ curl -X POST http://localhost:8080/api/v1/query \
   }'
 ```
 
-Response:
+Response. Each column is an object with `name` and `type` (there is no separate `types` array), and the count is reported as `total_rows`:
 
 ```json filename="Response"
 {
-  "columns": ["count_star()"],
-  "types": ["BIGINT"],
-  "rows": [[42150]],
-  "row_count": 1,
+  "columns": [{ "name": "count_star()", "type": "BIGINT" }],
+  "rows": [{ "count_star()": 42150 }],
+  "total_rows": 1,
   "duration_ms": 23
 }
 ```

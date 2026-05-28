@@ -46,8 +46,8 @@ Returns a paginated list of runs, optionally filtered by pipeline, namespace, la
 | `layer` | `string` | — | Filter by layer |
 | `pipeline` | `string` | — | Filter by pipeline name |
 | `status` | `string` | — | Filter by status (`pending`, `running`, `success`, `failed`, `cancelled`) |
-| `from` | `string` | — | Filter runs created after this ISO 8601 timestamp |
-| `to` | `string` | — | Filter runs created before this ISO 8601 timestamp |
+| `started_after` | `string` | — | Filter runs that started after this ISO 8601 timestamp |
+| `started_before` | `string` | — | Filter runs that started before this ISO 8601 timestamp |
 | `sort` | `string` | `created_at` | Sort field |
 | `order` | `string` | `desc` | Sort direction (`asc`, `desc`) |
 | `limit` | `integer` | `50` | Items per page (max 200) |
@@ -66,15 +66,15 @@ curl "http://localhost:8080/api/v1/runs?namespace=default&layer=silver&pipeline=
   "runs": [
     {
       "id": "run-uuid",
-      "namespace": "default",
-      "layer": "silver",
-      "pipeline": "orders",
+      "pipeline_id": "pipeline-uuid",
       "status": "success",
       "trigger": "manual",
       "started_at": "2026-02-12T14:00:00Z",
       "finished_at": "2026-02-12T14:00:05Z",
       "duration_ms": 4500,
       "rows_written": 12340,
+      "error": null,
+      "logs_s3_path": "default/runs/run-uuid/logs.txt",
       "created_at": "2026-02-12T14:00:00Z"
     }
   ],
@@ -88,15 +88,15 @@ curl "http://localhost:8080/api/v1/runs?namespace=default&layer=silver&pipeline=
 |---|---|---|
 | `runs` | `array` | List of run objects |
 | `runs[].id` | `string` | Run UUID |
-| `runs[].namespace` | `string` | Pipeline namespace |
-| `runs[].layer` | `string` | Pipeline layer |
-| `runs[].pipeline` | `string` | Pipeline name |
+| `runs[].pipeline_id` | `string` | UUID of the pipeline this run belongs to |
 | `runs[].status` | `string` | Current run status |
 | `runs[].trigger` | `string` | How the run was triggered: `manual`, `schedule:hourly`, `webhook`, etc. |
 | `runs[].started_at` | `string\|null` | ISO 8601 timestamp when execution began |
 | `runs[].finished_at` | `string\|null` | ISO 8601 timestamp when execution completed |
 | `runs[].duration_ms` | `integer\|null` | Total execution time in milliseconds |
 | `runs[].rows_written` | `integer\|null` | Number of rows written to the target table |
+| `runs[].error` | `string\|null` | Error message if the run failed |
+| `runs[].logs_s3_path` | `string\|null` | S3 path to the persisted run logs |
 | `runs[].created_at` | `string` | ISO 8601 creation timestamp |
 | `total` | `integer` | Total number of matching runs |
 
@@ -179,9 +179,7 @@ curl http://localhost:8080/api/v1/runs/abc123
 ```json
 {
   "id": "abc123",
-  "namespace": "default",
-  "layer": "silver",
-  "pipeline": "orders",
+  "pipeline_id": "pipeline-uuid",
   "status": "success",
   "trigger": "manual",
   "started_at": "2026-02-12T14:00:00Z",
@@ -189,6 +187,7 @@ curl http://localhost:8080/api/v1/runs/abc123
   "duration_ms": 4500,
   "rows_written": 12340,
   "error": null,
+  "logs_s3_path": "default/runs/abc123/logs.txt",
   "created_at": "2026-02-12T14:00:00Z"
 }
 ```
@@ -198,9 +197,7 @@ curl http://localhost:8080/api/v1/runs/abc123
 | Field | Type | Description |
 |---|---|---|
 | `id` | `string` | Run UUID |
-| `namespace` | `string` | Pipeline namespace |
-| `layer` | `string` | Pipeline layer |
-| `pipeline` | `string` | Pipeline name |
+| `pipeline_id` | `string` | UUID of the pipeline this run belongs to |
 | `status` | `string` | Current run status |
 | `trigger` | `string` | Trigger source |
 | `started_at` | `string\|null` | Execution start timestamp |
@@ -208,6 +205,7 @@ curl http://localhost:8080/api/v1/runs/abc123
 | `duration_ms` | `integer\|null` | Execution duration in milliseconds |
 | `rows_written` | `integer\|null` | Rows written to target table |
 | `error` | `string\|null` | Error message if the run failed |
+| `logs_s3_path` | `string\|null` | S3 path to the persisted run logs |
 | `created_at` | `string` | Creation timestamp |
 
 ### Error Responses
@@ -284,7 +282,7 @@ curl -H "Accept: text/event-stream" http://localhost:8080/api/v1/runs/abc123/log
 |---|---|---|
 | `log` | `{"timestamp": "...", "level": "...", "message": "..."}` | A log line from execution |
 | `status` | `{"status": "...", "rows_written": N, "duration_ms": N}` | Run status change |
-| `error` | `{"message": "..."}` | An error occurred during execution |
+| `error` | `{"code": "...", "message": "..."}` | An error occurred during execution |
 
 #### SSE Example
 

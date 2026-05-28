@@ -4,7 +4,7 @@ import { Mermaid } from '@/components/mermaid'
 
 # Architecture Overview
 
-RAT is a self-hostable data platform that runs as **8 containers** orchestrated by Docker Compose. It follows a strict separation of concerns: a Go API server handles orchestration and state, Python services handle data processing, and a Next.js frontend provides the user interface.
+RAT is a self-hostable data platform that runs as **7 services plus 2 init jobs** orchestrated by Docker Compose. It follows a strict separation of concerns: a Go API server handles orchestration and state, Python services handle data processing, and a Next.js frontend provides the user interface.
 
 ---
 
@@ -12,17 +12,17 @@ RAT is a self-hostable data platform that runs as **8 containers** orchestrated 
 
 RAT's architecture is guided by five principles:
 
-1. **Single `docker compose up`** --- The entire platform starts with one command. No external dependencies, no cloud accounts, no license keys for the Community Edition.
+1. **Single `docker compose up`** --- The entire platform starts with one command. No external dependencies, no cloud accounts, no license keys. RAT is fully free and open-source.
 2. **Separation of compute and state** --- Data lives in S3 (MinIO) in open Apache Iceberg format. Metadata lives in Postgres. Compute (DuckDB) is ephemeral and stateless.
 3. **Git-like isolation** --- Every pipeline run creates an isolated Nessie branch. Bad data never reaches the production catalog. Quality tests gate merges.
-4. **Plugin extensibility** --- The Community Edition ships with no-op implementations for auth, sharing, and enforcement. Pro plugins slot in without changing the core platform.
+4. **Plugin extensibility** --- The core ships with pass-through (no-op) defaults for capabilities like auth and sharing. Free optional plugins slot in to add multi-user, sharing, cloud, and a container executor without changing the core platform.
 5. **No vendor lock-in** --- All storage is open format (Iceberg + Parquet). The catalog is Nessie (open source). You can query your data with any tool that speaks Iceberg.
 
 ---
 
 ## System Block Diagram
 
-The following diagram shows all 8 containers (7 services + 1 init job), their communication protocols, network zones, and exposed ports.
+The following diagram shows all containers (7 services + 2 init jobs), their communication protocols, network zones, and exposed ports.
 
 <Mermaid chart={`
 block-beta
@@ -30,7 +30,7 @@ block-beta
 
     block:frontend["🌐 Frontend Network (rat_frontend)"]:4
         portal["Portal\n(Next.js)\n:3000"]
-        ratd["ratd\n(Go)\n:8080 REST\n:8081 gRPC"]
+        ratd["ratd\n(Go)\n:8080 REST\n:8090 internal"]
     end
 
     space:4
@@ -42,6 +42,7 @@ block-beta
         minio["MinIO\n(S3)\n:9000/:9001"]
         nessie["Nessie\n(Iceberg Catalog)\n:19120"]
         minioinit["minio-init\n(one-shot)"]
+        nessieinit["nessie-init\n(one-shot)"]
     end
 
     portal --> ratd
@@ -54,7 +55,9 @@ block-beta
     ratq --> nessie
     runner --> minio
     runner --> nessie
+    runner --> ratd
     minioinit --> minio
+    nessieinit --> nessie
     nessie --> postgres
 `} />
 
@@ -69,13 +72,14 @@ The `portal` and `ratd` containers live on both the **frontend** and **backend**
 | Container | Language | Role | Exposed Ports | Network |
 |-----------|----------|------|---------------|---------|
 | **portal** | Next.js (TypeScript) | Web IDE --- the only user interface | `3000` (HTTP) | frontend + backend |
-| **ratd** | Go | API server, scheduler, plugin host, catalog ops | `8080` (REST), `8081` (gRPC, internal) | frontend + backend |
+| **ratd** | Go | API server, scheduler, plugin host, catalog ops | `8080` (public REST), `8090` (internal HTTP) | frontend + backend |
 | **ratq** | Python | Read-only DuckDB query service | `50051` (gRPC, internal) | backend |
 | **runner** | Python | Pipeline execution engine | `50052` (gRPC, internal) | backend |
-| **postgres** | PostgreSQL 16.4 | Platform state (16 tables) | `5432` (localhost only) | backend |
-| **minio** | MinIO | S3-compatible object storage | `9000` (S3 API), `9001` (Console) | backend |
+| **postgres** | PostgreSQL 16.4 | Platform state (19 tables) | host `5433` → 5432 (localhost only) | backend |
+| **minio** | MinIO | S3-compatible object storage | host `9002`/`9003` → 9000/9001 | backend |
 | **nessie** | Java (Quarkus) | Iceberg REST catalog with git-like branching | `19120` (REST, localhost only) | backend |
 | **minio-init** | MinIO Client (mc) | One-shot: creates bucket, enables versioning | --- (exits after setup) | backend |
+| **nessie-init** | Alpine | One-shot: seeds a genesis commit on `main` | --- (exits after setup) | backend |
 
 ---
 
@@ -86,7 +90,7 @@ flowchart LR
     Portal -->|REST HTTP| ratd
     ratd -->|ConnectRPC gRPC| runner
     ratd -->|ConnectRPC gRPC| ratq
-    ratd -->|ConnectRPC gRPC| plugins["Plugins (Pro)"]
+    ratd -->|ConnectRPC gRPC| plugins["Optional plugins"]
     ratd -->|SQL pgx| postgres
     ratd -->|S3 API MinIO SDK| minio
     ratd -->|Iceberg REST API| nessie
@@ -107,7 +111,7 @@ flowchart LR
 | ratd to Postgres | **SQL via pgx** | Pure Go driver. Connection pooling. Type-safe queries via sqlc. |
 | ratd to MinIO | **S3 API** | Standard S3 protocol via MinIO Go SDK. Swappable with any S3-compatible store. |
 | ratd to Nessie | **Iceberg REST API** | Standard catalog protocol. Not Nessie-specific --- works with any Iceberg REST catalog. |
-| runner to ratd | **HTTP callback** | Push-based status reporting. Runner POSTs terminal status on completion with 60s poll fallback. |
+| runner to ratd | **HTTP callback** | Push-based status reporting. Runner POSTs terminal status to ratd's internal listener (`:8090`) on completion, with 60s poll fallback. |
 
 ---
 
@@ -126,12 +130,12 @@ This is the only network accessible from the host machine (via published ports).
 
 ### Backend Network (`infra_default`)
 
-The internal network where all inter-service communication happens. **All 8 containers** are attached to this network, but only `portal` and `ratd` are also on the frontend network.
+The internal network where all inter-service communication happens. **All containers** are attached to this network, but only `portal` and `ratd` are also on the frontend network. ratd's internal listener (`:8090`) lives on this network and is never published to the host.
 
 Services like `runner`, `ratq`, `postgres`, `minio`, and `nessie` are **never directly accessible** from the host (except via localhost-bound debug ports for postgres, minio, and nessie).
 
 <Callout type="warning">
-In production, the localhost-bound debug ports for Postgres (`:5432`), MinIO (`:9000`, `:9001`), and Nessie (`:19120`) should be removed or firewalled. They exist for development convenience only.
+In production, the localhost-bound debug ports for Postgres (host `:5433`), MinIO (host `:9002`/`:9003`), and Nessie (`:19120`) should be removed or firewalled. They exist for development convenience only.
 </Callout>
 
 ---
@@ -150,17 +154,17 @@ Services start in dependency order enforced by Docker Compose health checks:
 
 Once MinIO is healthy, the **minio-init** container runs. It creates the `rat` bucket, enables S3 versioning, and configures a 7-day lifecycle policy for non-current object versions. It exits after completion.
 
-### Nessie starts
+### Nessie starts, then nessie-init runs
 
-**Nessie** depends on Postgres (it persists catalog metadata via JDBC). It starts once Postgres is healthy and exposes the Iceberg REST catalog on port 19120.
+**Nessie** depends on Postgres (it persists catalog metadata via JDBC). It starts once Postgres is healthy and exposes the Iceberg REST catalog on port 19120. The one-shot **nessie-init** then seeds a genesis bootstrap commit on `main` so the runner's branch-and-merge flow works, and exits.
 
 ### Python services start
 
-**runner** and **ratq** start once MinIO and Nessie are healthy. They initialize their DuckDB engines with S3 and Iceberg extensions.
+**runner** and **ratq** start once MinIO and Nessie are healthy and `nessie-init` has completed. They initialize their DuckDB engines with S3 and Iceberg extensions.
 
 ### ratd starts
 
-**ratd** depends on Postgres, MinIO, and Nessie. On startup it runs database migrations, initializes the scheduler, starts the reaper daemon, connects to runner and ratq via gRPC, and loads any configured plugins.
+**ratd** depends on Postgres, MinIO, and Nessie (and `nessie-init` completed). On startup it runs database migrations, initializes the scheduler, starts the reaper daemon, connects to runner and ratq via gRPC, and loads any configured plugins.
 
 ### Portal starts last
 
@@ -184,6 +188,7 @@ Every container has explicit memory and CPU limits to prevent runaway consumptio
 | minio | 1 GB | 1.0 | 100 | Data file storage |
 | nessie | 512 MB | 1.0 | 100 | Catalog metadata, Quarkus runtime |
 | minio-init | 256 MB | 0.5 | 100 | One-shot, exits immediately |
+| nessie-init | 64 MB | 0.25 | 50 | One-shot, exits immediately |
 
 **Total minimum**: ~7.25 GB RAM. Recommended: 8 GB+ available for Docker.
 
@@ -214,7 +219,7 @@ See the [Security](/contributing/architecture/security) page for the complete se
 | Raw uploaded files | MinIO (S3) | CSV, Parquet, JSON |
 | Transformed data (tables) | MinIO (S3) | Apache Iceberg (Parquet + metadata) |
 | Table catalog | Nessie | Git-like refs pointing to Iceberg metadata |
-| Platform state | Postgres | 16 relational tables |
+| Platform state | Postgres | 19 relational tables |
 | Run logs | Postgres (JSONB column) | Structured log entries |
 
 See [Storage Layout](/contributing/architecture/storage-layout) for the full S3 directory structure and [Database Schema](/contributing/architecture/database-schema) for the Postgres tables.

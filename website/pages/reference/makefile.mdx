@@ -3,7 +3,7 @@ import { Card, Cards } from '@/components/cards'
 
 # Makefile Targets
 
-`make` is the single entry point for every recurrent command in RAT. All targets run inside Docker containers — nothing is installed on the host machine. If you find yourself typing a raw command more than once, it should be a Makefile target.
+`make` is the single entry point for every recurrent command in RAT (~46 targets). All targets run inside Docker containers — nothing is installed on the host machine. If you find yourself typing a raw command more than once, it should be a Makefile target.
 
 Run `make help` to see all available targets with descriptions.
 
@@ -17,7 +17,7 @@ Run `make help` to see all available targets with descriptions.
 - **Containerized**: All targets use Docker — your host machine stays clean
 
 <Callout type="warning">
-Never run raw `go test`, `pytest`, `npm run`, or `docker compose` commands directly. Always use `make <target>`. This ensures consistent environments and flags across all contributors.
+For recurrent workflows, use `make <target>` rather than raw `go test`, `pytest`, `npm run`, or `docker compose` commands — the targets pin tooling versions and match CI. Two pragmatic exceptions: tailing a **single** service's logs (`docker compose -f infra/docker-compose.yml logs -f ratd`) and iterating on a **single** test during development.
 </Callout>
 
 ---
@@ -45,7 +45,7 @@ You only need to run `make setup` once after cloning the repository. After that,
 
 ## Lifecycle
 
-These targets manage the Docker Compose stack (all 7 services).
+These targets manage the Docker Compose stack (7 services + 2 init jobs).
 
 ### make up
 
@@ -115,7 +115,7 @@ make status
 
 ## Testing
 
-RAT has 26+ Makefile targets, with testing being the largest group. All tests run inside Docker containers.
+RAT has ~46 Makefile targets, with testing being one of the largest groups. All tests run inside Docker containers.
 
 ### make test
 
@@ -281,7 +281,7 @@ Start the Go platform service with hot reload using [air](https://github.com/air
 make dev-ratd
 ```
 
-Exposes ports 8080 (REST) and 8081 (gRPC) on the host. Connects to the `infra_default` Docker network so it can reach Postgres, MinIO, and other services.
+Exposes port 8080 (public REST) and the internal listener on 8090 on the host. Connects to the `infra_default` Docker network so it can reach Postgres, MinIO, and other services.
 
 <Callout type="info">
 `make dev-ratd` runs interactively (not detached). Use a separate terminal for other commands. Press `Ctrl+C` to stop.
@@ -418,7 +418,7 @@ make clean-all
 |---|---|
 | `make help` | Show all available targets |
 | `make setup` | First-time setup (proto + sqlc + sdk) |
-| `make up` | Start all 7 services |
+| `make up` | Start all services (7 services + 2 init jobs) |
 | `make down` | Stop all services |
 | `make restart` | Restart all services |
 | `make build` | Build all Docker images |

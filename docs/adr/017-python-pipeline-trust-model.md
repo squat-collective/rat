@@ -81,7 +81,7 @@ Two direct consequences:
   ever DO need to accept untrusted code — runsc-style user-space kernel or a
   seccomp-bpf profile around the runner. Documented here as the escape hatch; not
   built today because the trust model doesn't require it.
-- **DSL replacement (DuckDB SQL only, no Python).** Viable for a Pro Edition tier
+- **DSL replacement (DuckDB SQL only, no Python).** Viable as a stricter, opt-in mode
   that wants the strongest claim ("no arbitrary code execution, ever"). Drops a real
   feature operators use. Out of scope for this ADR.
 

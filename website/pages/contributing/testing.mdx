@@ -215,9 +215,9 @@ def test_is_incremental_returns_true_when_table_exists():
 Pattern: `describe` / `it` blocks that read as sentences.
 
 ```typescript filename="sdk-typescript/tests/client.test.ts"
-describe('createClient', () => {
-  it('creates a client with the given base URL', () => { ... })
-  it('throws if base URL is missing', () => { ... })
+describe('RatClient', () => {
+  it('creates a client with the given apiUrl', () => { ... })
+  it('defaults apiUrl to http://localhost:8080', () => { ... })
 })
 
 describe('pipelines', () => {
