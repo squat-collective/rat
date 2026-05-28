@@ -14,15 +14,16 @@ import (
 // readinessTimeout is the per-dependency timeout for readiness checks.
 const readinessTimeout = 2 * time.Second
 
-// Build-time version information. These are set via -ldflags at build time:
+// Build-time version information. These are injected via -ldflags by the
+// release pipeline (.github/workflows/release.yml → platform/Dockerfile
+// ARG VERSION), so the git tag is the single source of truth — never
+// hardcode a real version here. Local / unstamped builds report "dev".
 //
-//	go build -ldflags "-X api.Version=2.0.0 -X api.GitCommit=abc1234 -X api.BuildTime=2026-02-16T12:00:00Z"
-//
-// If not set, defaults are used.
+//	go build -ldflags "-X github.com/rat-data/rat/platform/internal/api.Version=0.2.0-beta.1 ..."
 var (
-	Version   = "dev"     // Semantic version (e.g., "2.0.0")
-	GitCommit = "unknown" // Git commit SHA
-	BuildTime = "unknown" // ISO 8601 build timestamp
+	Version   = "dev"     // Semantic version — injected at release build
+	GitCommit = "unknown" // Git commit SHA — injected at release build
+	BuildTime = "unknown" // ISO 8601 build timestamp — injected at release build
 )
 
 // HealthChecker verifies that a dependency is reachable and healthy.

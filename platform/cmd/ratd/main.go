@@ -945,12 +945,12 @@ func main() {
 		go func() {
 			errCh <- publicServer.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
 		}()
-		slog.Info("starting ratd public listener (HTTPS)", "addr", addr, "version", "2.0.0-dev")
+		slog.Info("starting ratd public listener (HTTPS)", "addr", addr, "version", api.Version)
 	} else {
 		go func() {
 			errCh <- publicServer.ListenAndServe()
 		}()
-		slog.Info("starting ratd public listener", "addr", addr, "version", "2.0.0-dev")
+		slog.Info("starting ratd public listener", "addr", addr, "version", api.Version)
 	}
 
 	// The internal listener is always plaintext HTTP — see comment on

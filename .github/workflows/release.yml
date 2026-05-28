@@ -117,6 +117,13 @@ jobs:
           push: true
           tags: ${{ steps.docker-meta.outputs.tags }}
           labels: ${{ steps.docker-meta.outputs.labels }}
+          # Inject version metadata so the running binary reports the tag.
+          # ratd's Dockerfile consumes these via ldflags (-X api.Version=…);
+          # the Python/portal Dockerfiles ignore the ones they don't declare.
+          build-args: |
+            VERSION=${{ needs.meta.outputs.version }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ github.event.repository.updated_at }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
