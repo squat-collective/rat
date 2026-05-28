@@ -1,7 +1,7 @@
-# Read paths now enforcement-filtered (Pro only)
+# Read paths now enforcement-filtered (requires the enforcement plugin)
 
-**Affects:** Pro deployments running the enforcement plugin. **No
-behaviour change in Community Edition** — the no-op authorizer
+**Affects:** deployments running the enforcement plugin. **No
+behaviour change without it** — the no-op authorizer
 short-circuits the filter for unauthenticated requests.
 
 ## What changed
@@ -13,9 +13,8 @@ enforcement plugin. Read endpoints (`GET /api/v1/pipelines`,
 regardless of the caller's grants — a data leak.
 
 Wave 8 added an `Authorizer.Filter()` method and wired it into the
-read handlers. In a Pro deployment with the enforcement plugin
-enabled, the list endpoints now post-filter to the subset the caller
-can `read`.
+read handlers. When the enforcement plugin is enabled, the list
+endpoints now post-filter to the subset the caller can `read`.
 
 ## Semantic differences to be aware of
 
@@ -52,10 +51,10 @@ can `read`.
    automatically once the enforcement plugin is loaded — same as it
    did for write paths previously.
 
-## Community deployments
+## Deployments without the enforcement plugin
 
 Nothing changes. `NoopAuthorizer.Filter` returns the input slice
-unmodified, and the read handlers detect a no-user context (community
+unmodified, and the read handlers detect a no-user context (default
 single-user mode) before invoking the filter at all.
 
 ## Source

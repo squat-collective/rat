@@ -1,14 +1,42 @@
+import { Callout } from 'nextra/components'
+
 # Plugin Slots Reference
 
 The portal plugin slot system allows external packages to inject React components into predefined locations in the UI.
 
 ## Slot Locations
 
+The portal exposes the following named slots (grep `portal/src` for `PluginSlot name=`):
+
 | Slot Name | Location | File | Props |
 |-----------|----------|------|-------|
-| `main-header` | Between license banner and content area | `app-shell.tsx` | — |
-| `sidebar-user` | Before theme toggle in sidebar | `nav/sidebar.tsx` | `collapsed: boolean` |
-| `sidebar-nav-extra` | After main navigation in sidebar | `nav/sidebar.tsx` | `collapsed: boolean` |
+| `global-banner` | Top of the app shell | `app-shell.tsx` | — |
+| `main-header` | Between the banner and content area | `app-shell.tsx` | — |
+| `sidebar-nav-extra` | After main navigation in the sidebar | `nav/sidebar.tsx` | `collapsed: boolean` |
+| `sidebar-user` | Before the theme toggle in the sidebar | `nav/sidebar.tsx` | `collapsed: boolean` |
+| `sidebar-footer` | Bottom of the sidebar | `nav/sidebar.tsx` | — |
+| `dashboard-actions` | Dashboard header actions | `app/page.tsx` | — |
+| `dashboard-stats` | Dashboard stats row | `app/page.tsx` | — |
+| `dashboard-widgets` | Dashboard widgets area | `app/page.tsx` | — |
+| `pipeline-actions` | Pipeline list actions | pipelines view | — |
+| `pipeline-detail-header` | Pipeline detail header | `app/pipelines/[ns]/[layer]/[name]/page.tsx` | — |
+| `pipeline-detail-tabs` | Pipeline detail tab strip | pipeline detail | — |
+| `pipeline-editor-toolbar` | Pipeline editor toolbar | `components/pipeline/PipelineEditor.tsx` | — |
+| `pipeline-editor-sidebar` | Pipeline editor side panel | `components/pipeline/PipelineEditor.tsx` | — |
+| `table-actions` | Table detail actions | `app/explorer/[ns]/[layer]/[name]/page.tsx` | — |
+| `table-detail-tabs` | Table detail tab strip | `app/explorer/[ns]/[layer]/[name]/page.tsx` | — |
+| `run-actions` | Run detail actions | run detail | — |
+| `run-detail-header` | Run detail header | `app/runs/[id]/page.tsx` | — |
+| `run-detail-tabs` | Run detail tab strip | `app/runs/[id]/page.tsx` | — |
+| `run-log-filters` | Run log filter controls | run detail | — |
+| `query-toolbar` | Query console toolbar | `app/query/page.tsx` | — |
+| `query-results-tabs` | Query results tab strip | `app/query/page.tsx` | — |
+| `settings-nav` | Settings navigation | `app/settings/page.tsx` | — |
+| `settings-sections` | Settings section content | `app/settings/page.tsx` | — |
+
+<Callout type="info">
+This list reflects the slots currently wired into the portal. Slots are added over time — search `portal/src` for `PluginSlot name=` for the authoritative set.
+</Callout>
 
 ## `PluginSlot` Component
 
@@ -51,7 +79,7 @@ Provides the plugin registry to all `PluginSlot` components in the tree.
 
 | Prop | Type | Required | Description |
 |------|------|----------|-------------|
-| `registry` | `PluginRegistry` | Yes | Map of slot names to component arrays |
+| `registry` | `PluginRegistry` | Yes | `{ slots, navItems, routes }` |
 | `children` | `React.ReactNode` | Yes | Child components |
 
 ### Usage
@@ -60,8 +88,12 @@ Provides the plugin registry to all `PluginSlot` components in the tree.
 import { PluginRegistryProvider } from "@/components/plugins";
 
 const registry = {
-  "sidebar-user": [UserMenu],
-  "main-header": [NamespacePicker],
+  slots: {
+    "sidebar-user": [UserMenu],
+    "main-header": [NamespacePicker],
+  },
+  navItems: [],
+  routes: [],
 };
 
 <PluginRegistryProvider registry={registry}>
@@ -88,12 +120,34 @@ function MyComponent() {
 /** A React component that can render in a plugin slot. */
 type SlotComponent<P = Record<string, unknown>> = React.ComponentType<P>;
 
-/** Maps slot names to arrays of components. */
-type PluginRegistry = Record<string, SlotComponent<any>[]>;
+/** A navigation item injected by a plugin into the sidebar. */
+type PluginNavItem = {
+  label: string;
+  icon: string;   // lucide icon name
+  href: string;
+  priority: number;
+};
+
+/** A full-page route registered by a plugin (mounted under /x/...). */
+type PluginRoute = {
+  path: string;   // e.g. "/x/my-plugin"
+  component: React.ComponentType<{ path: string[] }>;
+};
+
+/** Merged registry from all loaded plugins. */
+type PluginRegistry = {
+  slots: Record<string, SlotComponent<any>[]>;
+  navItems: PluginNavItem[];
+  routes: PluginRoute[];
+};
 ```
+
+<Callout type="info">
+`PluginRegistry` is **not** a flat map — it is an object with `slots`, `navItems`, and `routes`. The `PluginRegistryProvider` accepts this shape; `<PluginSlot>` reads from `registry.slots`.
+</Callout>
 
 ## Default Behavior
 
-When no plugin package is configured (`NEXT_PUBLIC_PLUGIN_PACKAGE` unset), all slots render nothing — zero overhead in the bundle.
+When no plugins are installed, all slots render nothing — zero overhead in the bundle. There is no build-time plugin configuration: plugins are discovered and loaded at runtime.
 
-When a plugin package is configured, it provides a `loadRegistry()` function that determines which components render in which slots. See [Plugin UI Development](/contributing/plugin-ui) for how to create plugin packages.
+When a plugin is installed and enabled, the portal fetches the enabled-plugin list at runtime and injects each plugin's JS bundle. Each bundle calls `window.__RAT_REGISTER_PLUGIN(name, registration)` to register its slot components, nav items, and routes, which the loader merges into the `PluginRegistry`. See [Plugin UI Development](/contributing/plugin-ui) for how to build plugin bundles.

@@ -1,6 +1,6 @@
 # RAT Example Plugins
 
-Example plugins for the RAT plugin system. The five **runner** plugins below are standalone, pip-installable Python packages covering all five Layer-1 extension points; [`rat-plugin-event-notifier`](./rat-plugin-event-notifier), [`rat-plugin-interconnect`](./rat-plugin-interconnect), [`rat-plugin-ai-provider`](./rat-plugin-ai-provider), [`rat-plugin-dev-assistant`](./rat-plugin-dev-assistant), [`rat-plugin-docs-assistant`](./rat-plugin-docs-assistant) and [`rat-plugin-demo-loader`](./rat-plugin-demo-loader) are Go platform plugins covering Layer 2 (platform / gRPC) and Layer 3 (portal UI). Copy any of them as a starting point for your own plugin.
+Example plugins for the RAT plugin system. The five **runner** plugins below are standalone, pip-installable Python packages covering all five Layer-1 extension points. The remaining plugins are **Go platform plugins** covering Layer 2 (platform / gRPC) and Layer 3 (portal UI): [`rat-plugin-event-notifier`](./rat-plugin-event-notifier), [`rat-plugin-interconnect`](./rat-plugin-interconnect), [`rat-plugin-ai-provider`](./rat-plugin-ai-provider), [`rat-plugin-dev-assistant`](./rat-plugin-dev-assistant), [`rat-plugin-docs-assistant`](./rat-plugin-docs-assistant), [`rat-plugin-demo-loader`](./rat-plugin-demo-loader), [`rat-plugin-agents`](./rat-plugin-agents), [`rat-plugin-chat`](./rat-plugin-chat), [`rat-plugin-compaction`](./rat-plugin-compaction), [`rat-plugin-diff`](./rat-plugin-diff), [`rat-plugin-lineage`](./rat-plugin-lineage), [`rat-plugin-mcp-docs`](./rat-plugin-mcp-docs), [`rat-plugin-mcp-sql`](./rat-plugin-mcp-sql), [`rat-plugin-pg-sync`](./rat-plugin-pg-sync) and [`rat-plugin-secrets`](./rat-plugin-secrets). Copy any of them as a starting point for your own plugin. Every plugin here is free and open-source.
 
 ## Extension Points
 
@@ -77,6 +77,42 @@ An **AI documentation writer for datasets**. Adds a *🤖 Suggest docs* button t
 ### `rat-plugin-demo-loader` — One-Click Sample Demos (L2 + L3)
 
 A **one-click sample-data installer**. Ships three self-contained demos (🚀 Cosmos / 🎤 Underground / 🛒 Shop), each a full bronze → silver → gold pipeline with quality tests and synthetic data via `generate_series`. Installing one creates the namespace, all pipelines, writes their SQL, creates the quality tests and triggers the bronze runs — all through ratd's HTTP API. Adds a "Demos" sidebar entry. See its [README](./rat-plugin-demo-loader/README.md).
+
+### `rat-plugin-secrets` — Encrypted Secrets Vault (L2 + L3)
+
+An **AES-256-GCM encrypted vault**. Other plugins consume secrets by name via the interconnect capability `secrets.get`, so credentials never live in the calling plugin's config. See its [README](./rat-plugin-secrets/README.md).
+
+### `rat-plugin-pg-sync` — Postgres → Iceberg Sync (L2 + L3)
+
+Syncs an external Postgres database into Iceberg via auto-generated SQL pipelines (snapshot + incremental modes). Consumes DB credentials from the secrets plugin via the broker. See its [README](./rat-plugin-pg-sync/README.md).
+
+### `rat-plugin-diff` — Activity Feed + Row-Level Diff (L2 + L3)
+
+A live activity feed (15s poll of Nessie commits) plus a Nessie-backed row-level diff drill-in for any Iceberg table. See its [README](./rat-plugin-diff/README.md).
+
+### `rat-plugin-compaction` — Iceberg Small-File Compactor (L2 + L3)
+
+Detects Iceberg tables with too many small data files and rewrites them (hybrid Go + Python). See its [README](./rat-plugin-compaction/README.md).
+
+### `rat-plugin-lineage` — Lineage Graph (L2 + L3)
+
+A platform plugin that surfaces a lineage view of pipelines, tables, and landing zones. See its [README](./rat-plugin-lineage/README.md).
+
+### `rat-plugin-agents` — AI Agents (L2 + L3)
+
+An AI-agents plugin (seeds default agents on first run with an empty catalog). See its [README](./rat-plugin-agents/README.md).
+
+### `rat-plugin-chat` — Data-Aware Chat (L2 + L3)
+
+A conversational chat UI in the portal — a data-aware assistant with conversations persisted in ratd's plugin-config. See its [README](./rat-plugin-chat/README.md).
+
+### `rat-plugin-mcp-sql` — MCP SQL Server (L2 + L3)
+
+Exposes RAT's query surface over the Model Context Protocol so external MCP clients can run SQL. See its [README](./rat-plugin-mcp-sql/README.md).
+
+### `rat-plugin-mcp-docs` — MCP Docs Server (L2 + L3)
+
+Exposes RAT's docs/metadata over the Model Context Protocol for MCP clients. See its [README](./rat-plugin-mcp-docs/README.md).
 
 ## Quick Start
 

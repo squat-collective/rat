@@ -4,7 +4,7 @@ import { Callout } from 'nextra/components'
 
 Namespaces provide logical isolation for pipelines, tables, landing zones, and other resources. Every resource belongs to exactly one namespace. The `default` namespace always exists and cannot be deleted.
 
-In the Community Edition, namespaces are available but function as organizational groups (no access control). In the Pro Edition, namespaces integrate with the ACL system for multi-tenant access control.
+By default, namespaces function as organizational groups (no access control). When the optional permissions/ACL plugins are installed, namespaces integrate with the ACL system for multi-tenant access control.
 
 ---
 
@@ -77,24 +77,21 @@ Creates a new namespace.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `name` | `string` | Yes | Namespace name (lowercase, alphanumeric, hyphens) |
-| `description` | `string` | No | Human-readable description |
+| `name` | `string` | Yes | Namespace name (lowercase letters, digits, hyphens, underscores; must start with a letter) |
 
 ### Request
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/namespaces \
   -H "Content-Type: application/json" \
-  -d '{"name": "analytics", "description": "Analytics team namespace"}'
+  -d '{"name": "analytics"}'
 ```
 
 ### Response — `201 Created`
 
 ```json
 {
-  "name": "analytics",
-  "description": "Analytics team namespace",
-  "created_at": "2026-02-12T10:00:00Z"
+  "name": "analytics"
 }
 ```
 
@@ -180,7 +177,7 @@ No response body.
 | `404` | `NOT_FOUND` | Namespace not found |
 
 <Callout type="warning">
-Deleting a namespace does **not** automatically delete the pipelines, tables, landing zones, and other resources within it. You must delete those resources first, or they will become orphaned. In the Pro Edition, namespace deletion requires `admin` permission on the namespace.
+Deleting a namespace does **not** automatically delete the pipelines, tables, landing zones, and other resources within it. You must delete those resources first, or they will become orphaned. With the optional permissions plugin installed, namespace deletion requires `admin` permission on the namespace.
 </Callout>
 
 ---
@@ -190,7 +187,8 @@ Deleting a namespace does **not** automatically delete the pipelines, tables, la
 | Rule | Valid | Invalid |
 |---|---|---|
 | Lowercase alphanumeric | `analytics` | `Analytics` |
-| Hyphens allowed | `my-team` | `my_team` |
+| Hyphens allowed | `my-team` | — |
+| Underscores allowed | `my_team` | — |
 | Must start with a letter | `team1` | `1team` |
-| 3-63 characters | `dev` | `ab` |
+| 1-128 characters | `dev` | (empty) |
 | No special characters | `data-team` | `data@team` |

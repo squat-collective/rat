@@ -58,7 +58,7 @@ Multiple components can register for the same slot (rendered in order). This all
 ### Positive
 
 - Portal has zero overhead when no plugin package is configured
-- Fully generic — no knowledge of specific implementations baked into community code
+- Fully generic — no knowledge of specific implementations baked into core code
 - Extensible — new slots are a one-line `<PluginSlot>` addition
 - Per-plugin feature gating is the plugin package's responsibility, not the portal's
 

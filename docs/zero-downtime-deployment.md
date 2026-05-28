@@ -1,15 +1,15 @@
 # Zero-Downtime Deployment for RAT Pro
 
 > **Scope**: This guide covers zero-downtime deployment strategies for RAT Pro
-> (multi-container deployment with plugin services). Community Edition uses a
+> (multi-container deployment with plugin services). A single-container install uses a
 > simpler `docker compose up -d` workflow where brief downtime is acceptable.
 
 ---
 
 ## Overview
 
-RAT Pro deploys multiple cooperating services (ratd, ratq, runner, portal, plus
-Pro plugins like auth-keycloak, enforcement, cloud-aws). A zero-downtime deploy
+A full RAT deployment runs multiple cooperating services (ratd, ratq, runner, portal, plus
+optional plugins like auth-keycloak, enforcement, cloud-aws). A zero-downtime deploy
 ensures users experience no interruption during upgrades.
 
 ### Key Constraints
@@ -32,7 +32,7 @@ Deploy services in this order to respect dependency chains:
 1. Infrastructure (Postgres, MinIO, Nessie) — only if schema changes
 2. ratq (stateless query sidecar)
 3. runner (stateful — must drain running pipelines)
-4. Pro plugins (auth-keycloak, enforcement, cloud-aws)
+4. Optional plugins (auth-keycloak, enforcement, cloud-aws)
 5. ratd (API gateway — depends on all backend services)
 6. portal (stateless frontend — last, depends on ratd)
 ```

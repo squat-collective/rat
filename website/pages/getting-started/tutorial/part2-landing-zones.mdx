@@ -56,9 +56,10 @@ Click the **+ New Landing Zone** button. Fill in:
 
 | Field | Value |
 |---|---|
+| **Namespace** | `default` |
 | **Name** | `launch-data` |
 
-Click **Create**.
+Click **Create**. Both **namespace** and **name** are required — a landing zone is addressed as `{namespace}/{name}`.
 
 <Callout type="info">
 Landing zone names are kebab-case identifiers. They are referenced in pipeline SQL as
@@ -80,7 +81,7 @@ Open the landing zone detail page and use the **drag-and-drop** upload area. Dra
 **Option B: Upload via curl**
 
 ```bash filename="Terminal"
-curl -X POST http://localhost:8080/api/v1/landing-zones/launch-data/files \
+curl -X POST http://localhost:8080/api/v1/landing-zones/default/launch-data/files \
   -F "file=@docs/data/space_launches.csv"
 ```
 
@@ -96,7 +97,7 @@ In the landing zone detail page, scroll to the **Samples** section and upload
 </Tabs.Tab>
 <Tabs.Tab>
 ```bash filename="Terminal"
-curl -X POST http://localhost:8080/api/v1/landing-zones/launch-data/samples \
+curl -X POST http://localhost:8080/api/v1/landing-zones/default/launch-data/samples \
   -F "file=@docs/data/space_launches.csv"
 ```
 </Tabs.Tab>
@@ -218,6 +219,7 @@ Go to **Landing** → **+ New Landing Zone**:
 
 | Field | Value |
 |---|---|
+| **Namespace** | `default` |
 | **Name** | `vehicle-catalog` |
 
 ### Upload the CSV
@@ -231,11 +233,11 @@ Drag `launch_vehicles.csv` into the upload area, then upload it again in the Sam
 <Tabs.Tab>
 ```bash filename="Terminal"
 # Upload data file
-curl -X POST http://localhost:8080/api/v1/landing-zones/vehicle-catalog/files \
+curl -X POST http://localhost:8080/api/v1/landing-zones/default/vehicle-catalog/files \
   -F "file=@docs/data/launch_vehicles.csv"
 
 # Upload sample file
-curl -X POST http://localhost:8080/api/v1/landing-zones/vehicle-catalog/samples \
+curl -X POST http://localhost:8080/api/v1/landing-zones/default/vehicle-catalog/samples \
   -F "file=@docs/data/launch_vehicles.csv"
 ```
 </Tabs.Tab>

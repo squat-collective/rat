@@ -74,8 +74,9 @@ SELECT * FROM "marketing"."silver"."campaign_metrics"
 ```
 
 <Callout type="info">
-In the Community Edition, namespaces are purely organizational. In Pro Edition, namespaces
-can have different access controls and ownership policies.
+Namespaces are purely organizational by default. The optional multi-user/sharing plugins
+can add per-namespace access controls and ownership policies on top — RAT itself is 100%
+free and open-source, with no editions or tiers.
 </Callout>
 
 ---
@@ -98,7 +99,7 @@ faithful copy of the source data.
 
 ```sql filename="bronze/raw_orders.sql"
 SELECT *
-FROM {{ landing_zone('order_uploads') }}
+FROM read_csv_auto('{{ landing_zone('order_uploads') }}')
 ```
 
 ### Silver — Cleaned & Conformed
@@ -192,9 +193,9 @@ SQL pipelines support Jinja templating with several built-in functions:
 |---|---|---|
 | `ref('layer.name')` | Reference another table | `{{ ref('bronze.raw_orders') }}` |
 | `ref('ns.layer.name')` | Cross-namespace reference | `{{ ref('finance.silver.invoices') }}` |
-| `landing_zone('name')` | Read from a landing zone | `{{ landing_zone('csv_uploads') }}` |
+| `landing_zone('name')` | Resolve a landing zone's file path (wrap in a reader) | `read_csv_auto('{{ landing_zone('csv_uploads') }}')` |
 | `this` | Current pipeline's output table | `{{ this }}` (used in quality tests) |
-| `is_incremental()` | True if table already exists | `{% if is_incremental() %}` |
+| `is_incremental()` | True when the merge strategy is `incremental` | `{% if is_incremental() %}` |
 | `watermark_value` | Last processed watermark | `'{{ watermark_value }}'` |
 
 ### Versioning
@@ -312,6 +313,38 @@ Missing these will cause the pipeline to fail.
 
 ---
 
+## Pipeline Configuration
+
+Beyond the merge strategy, a pipeline's `config.yaml` (or inline `-- @key: value`
+annotations) accepts a few more options:
+
+| Field | Default | Description |
+|---|---|---|
+| `materialized` | `table` | `table` writes an Iceberg table; `view` registers a view instead of writing data |
+| `merge_strategy` | `full_refresh` | How rows are written (see above) |
+| `unique_key` | — | Column(s) used by `incremental`, `delete_insert`, and `scd2` |
+| `partition_by` | — | A list of `{column, transform}` entries defining the Iceberg partition spec. `transform` is one of `identity`, `year`, `month`, `day`, `hour` |
+| `max_retries` | `0` | If a run fails, the runner automatically retries it up to this many times (`0` disables auto-retry) |
+| `retry_delay_seconds` | `30` | Fixed delay between automatic retry attempts |
+
+```yaml filename="config.yaml"
+materialized: table
+merge_strategy: incremental
+unique_key: [order_id]
+partition_by:
+  - column: order_date
+    transform: month
+max_retries: 2
+retry_delay_seconds: 30
+```
+
+<Callout type="info">
+In Python pipelines this configuration is exposed as a read-only `config` global — a frozen
+`PipelineConfig` object (or `None` when no config block is present), not a dict.
+</Callout>
+
+---
+
 ## Quality Tests
 
 Quality tests are **SQL queries that validate pipeline output** before it merges into
@@ -413,14 +446,14 @@ into RAT.
 1. Create a landing zone in the Portal (give it a name)
 2. Upload files (CSV, Parquet, JSON, etc.) via drag-and-drop
 3. Files are stored in MinIO (S3)
-4. A Bronze pipeline reads the files using `{{ landing_zone('zone_name') }}`
+4. A Bronze pipeline reads the files using `read_csv_auto('{{ landing_zone('zone_name') }}')`
 5. Optionally, set a `landing_zone_upload` trigger to run the pipeline automatically when
    new files arrive
 
 ```sql filename="bronze/ingest_orders.sql"
 -- Reads all files from the 'order_uploads' landing zone
 SELECT *
-FROM {{ landing_zone('order_uploads') }}
+FROM read_csv_auto('{{ landing_zone('order_uploads') }}')
 ```
 
 <Callout type="info">
@@ -430,11 +463,14 @@ running a pipeline. This is useful for verifying file format and column names.
 
 ---
 
-## Lineage
+## Lineage (Plugin)
 
 **Lineage** is the dependency graph that shows how data flows through your platform.
-RAT builds it automatically by parsing `ref()` and `landing_zone()` calls in your
-pipeline code.
+It is provided by the optional `rat-plugin-lineage` plugin (not part of the core
+platform). Once installed, the plugin builds the graph automatically by parsing `ref()`
+and `landing_zone()` calls in your pipeline code, adds a **/x/lineage** navigation item to
+the portal, and serves the graph at `GET /api/v1/x/lineage/graph`. See the
+[lineage guide](/guides/lineage).
 
 ### What lineage shows
 
@@ -492,7 +528,7 @@ downstream consumers.
 | **Trigger** | What starts a pipeline run | 6 types (cron, event, upload, etc.) |
 | **Versioning** | Published snapshots of pipeline code | Rollback to any previous version |
 | **Landing Zone** | File upload area for ingestion | Entry point for external data |
-| **Lineage** | Dependency DAG between pipelines | Built automatically from ref() calls |
+| **Lineage** | Dependency DAG between pipelines | Optional plugin (`rat-plugin-lineage`), built from ref() calls |
 
 ---
 

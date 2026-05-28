@@ -1,5 +1,7 @@
 # ADR-011: Cloud Plugin — AWS STS + ECS Fargate (v2.8)
 
+> **Update (2026-05-28):** RAT is now **100% free and open-source** — there are no Community/Pro editions or license keys. The Community/Pro framing in this record is **historical**; the capabilities it describes now ship as free, optional plugins.
+
 ## Status: Accepted
 
 ## Context

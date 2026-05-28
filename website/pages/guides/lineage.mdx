@@ -3,7 +3,11 @@ import { Mermaid } from '@/components/mermaid'
 
 # Data Lineage
 
-Data lineage shows you how data flows through your pipelines — which tables feed into which pipelines, and which pipelines produce which tables. RAT builds a lineage graph automatically by scanning your pipeline SQL for `ref()` and `landing_zone()` calls, then renders it as an interactive DAG (Directed Acyclic Graph).
+Data lineage shows you how data flows through your pipelines — which tables feed into which pipelines, and which pipelines produce which tables. Lineage is provided by the optional **`rat-plugin-lineage`** plugin; it is not part of the platform core. Once installed, the plugin scans your pipeline SQL for `ref()` and `landing_zone()` calls and renders the result as an interactive DAG (Directed Acyclic Graph).
+
+<Callout type="info">
+RAT is 100% free and open-source — there are no editions or paid features. Lineage is an installable plugin rather than a paywalled feature. Once installed it registers a **/x/lineage** navigation item in the portal and serves its API under `/api/v1/x/lineage`. See [writing plugins](/guides/writing-plugins) for how plugins are installed.
+</Callout>
 
 ---
 
@@ -81,13 +85,13 @@ RAT generates this lineage graph:
 
 ## Using the Lineage Page
 
-The Lineage page is accessible from the Portal sidebar under **Lineage**.
+With the `rat-plugin-lineage` plugin installed, the Lineage page is accessible from the Portal navigation under **Lineage** (route **/x/lineage**).
 
 <Steps>
 
 ### Open the Lineage page
 
-Click **Lineage** in the sidebar. The full DAG for all pipelines loads.
+Click **Lineage** in the navigation (the plugin adds it at **/x/lineage**). The full DAG for all pipelines loads.
 
 ### Filter by namespace
 
@@ -135,30 +139,32 @@ Cross-namespace references create implicit dependencies. If the referenced table
 
 ## Lineage for Python Pipelines
 
-Python pipelines use `ref()` within their SQL queries (executed through DuckDB). RAT scans the Python source for string patterns matching `ref('...')` to extract dependencies. This works reliably for inline SQL strings:
+Python pipelines use `ref()` within their SQL queries (executed through DuckDB). The lineage plugin scans the Python source for string patterns matching `ref('...')` to extract dependencies. This works reliably for inline SQL strings.
+
+A Python pipeline is a flat script: the runner injects a `duckdb_conn` connection (plus `ref`, `landing_zone`, `pa`, etc.) and your script sets a `result` global. There is no `run()` function, no `return`, and no `conn` parameter.
 
 ```python filename="pipeline.py"
-# @merge_strategy: full_refresh
+# config.yaml: merge_strategy: full_refresh
 
-import duckdb
+orders = duckdb_conn.execute(f"""
+    SELECT * FROM {ref('silver.clean_orders')}
+""").fetch_arrow_table()
 
-def run(conn: duckdb.DuckDBPyConnection, ref, landing_zone, **kwargs):
-    orders = conn.sql(f"""
-        SELECT * FROM {ref('silver.clean_orders')}
-    """).arrow()
+customers = duckdb_conn.execute(f"""
+    SELECT * FROM {ref('silver.clean_customers')}
+""").fetch_arrow_table()
 
-    customers = conn.sql(f"""
-        SELECT * FROM {ref('silver.clean_customers')}
-    """).arrow()
+duckdb_conn.register("orders", orders)
+duckdb_conn.register("customers", customers)
 
-    return conn.sql("""
-        SELECT
-            o.order_id,
-            c.customer_name,
-            o.total_amount
-        FROM orders o
-        JOIN customers c ON o.customer_id = c.customer_id
-    """).arrow()
+result = duckdb_conn.execute("""
+    SELECT
+        o.order_id,
+        c.customer_name,
+        o.total_amount
+    FROM orders o
+    JOIN customers c ON o.customer_id = c.customer_id
+""").fetch_arrow_table()
 ```
 
 <Callout type="warning">
@@ -179,7 +185,7 @@ While lineage is primarily a visualization tool, it also serves operational purp
 
 ## How Lineage is Computed
 
-Lineage is computed **on-demand** when you open the Lineage page or request it via API. The process is:
+Lineage is computed **on-demand** by the plugin when you open the Lineage page or request it via the plugin API. The process is:
 
 1. List all pipelines in the target namespace(s)
 2. Read each pipeline's SQL/Python source from S3
@@ -191,12 +197,14 @@ This means lineage always reflects the **current state** of pipeline source file
 
 ### Lineage via API
 
-```bash filename="Terminal"
-# Get lineage for a namespace
-curl http://localhost:8080/api/v1/lineage?namespace=default
+The plugin mounts its API under the plugin route prefix `/api/v1/x/lineage`.
 
-# Get lineage for a specific pipeline (upstream + downstream)
-curl http://localhost:8080/api/v1/lineage?namespace=default&layer=silver&name=clean_orders
+```bash filename="Terminal"
+# Get the full lineage graph
+curl http://localhost:8080/api/v1/x/lineage/graph
+
+# Scope the graph to a namespace
+curl "http://localhost:8080/api/v1/x/lineage/graph?namespace=default"
 ```
 
 Response:

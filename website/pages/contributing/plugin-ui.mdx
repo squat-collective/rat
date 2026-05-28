@@ -1,198 +1,108 @@
+import { Callout, Steps } from 'nextra/components'
+
 # Plugin UI Development
 
-This guide explains how to create UI components that render in the RAT portal through the **plugin slot system**.
+This guide explains how a plugin adds UI to the RAT portal. UI is **Layer 3** of the [plugin system](/contributing/architecture/plugin-system): a platform plugin ships a JavaScript bundle, ratd serves it, and the portal loads it **at runtime** — there is no build-time configuration and no portal rebuild.
 
 ## How It Works
 
-The portal defines named **slots** — empty extension points in the layout. External plugin packages register React components for specific slots. When a plugin package is configured, its components render in the corresponding slot locations.
+A platform plugin (a self-registering container) declares a UI in its `Describe` response. The portal then discovers and loads it on every page load:
 
-### Architecture
+<Steps>
 
-```
-┌────────────────────────── Portal ──────────────────────────────┐
-│                                                                 │
-│  PluginWrapper                                                  │
-│    ├─ NEXT_PUBLIC_PLUGIN_PACKAGE unset → renders children only  │
-│    └─ NEXT_PUBLIC_PLUGIN_PACKAGE set → dynamic import package   │
-│         └─ loadRegistry() → fetches features from API           │
-│              └─ builds PluginRegistry from enabled plugins       │
-│                   └─ PluginRegistryProvider wraps children       │
-│                                                                 │
-│  PluginSlot name="sidebar-user"                                 │
-│    └─ reads registry → renders registered components            │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
+### The plugin declares its UI
 
-### Build Modes
+In its `Describe` response, the plugin sets a `ui` descriptor: `bundle_url`, an optional `bundle_hash` (SRI), and the `nav_items`, `slots`, and client `routes` it contributes. ratd records this in the plugin registry and serves the bundle back through its own origin at `GET /api/v1/plugins/{name}/ui/bundle.js`.
 
-| Mode | Env Var | Behavior |
-|------|---------|----------|
-| Default | `NEXT_PUBLIC_PLUGIN_PACKAGE` unset | Slots render nothing, zero overhead |
-| With plugins | `NEXT_PUBLIC_PLUGIN_PACKAGE=your-package` | `PluginWrapper` loads the package, slots render plugin components |
+### The portal fetches enabled plugins
 
-## Creating a Plugin UI Package
+On load, the portal calls `GET /api/v1/plugins?status=enabled` and keeps the ones whose `descriptor.ui.bundle_url` is set.
 
-### 1. Scaffold the Package
+### The portal injects each bundle
 
-Create the directory structure for your plugin UI:
+For each such plugin it injects a `<script>` tag pointing at `/api/v1/plugins/{name}/ui/bundle.js`. If the plugin advertised a `bundle_hash`, the tag gets a Subresource-Integrity `integrity` attribute so the browser refuses a tampered bundle.
 
-```
-your-plugin-ui/
-├── package.json
-├── tsconfig.json
-├── tsup.config.ts
-└── src/
-    ├── index.ts
-    ├── components/
-    │   └── your-component.tsx
-    └── __tests__/
-        └── index.test.ts
+### The bundle registers itself
+
+As it executes, the bundle calls the global hook the loader set up:
+
+```js
+window.__RAT_REGISTER_PLUGIN("my-plugin", {
+  navItems: [{ label: "My Plugin", icon: "box", href: "/x/my-plugin", priority: 50 }],
+  routes:   [{ path: "/x/my-plugin", component: MyPluginPage }],
+  slots:    { "sidebar-nav-extra": [MyWidget] },
+})
 ```
 
-### 2. Package Configuration
+The loader merges every plugin's registration into one `PluginRegistry` (`{ slots, navItems, routes }`). `<PluginSlot>` renders slot components, nav items appear in the sidebar, and routes mount under `/x/<name>`.
 
-**`package.json`**:
+</Steps>
 
-```json
-{
-  "name": "@your-scope/plugin-ui",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    }
-  },
-  "scripts": {
-    "build": "tsup",
-    "test": "vitest run"
-  },
-  "peerDependencies": {
-    "react": "^18.0.0",
-    "react-dom": "^18.0.0"
-  },
-  "devDependencies": {
-    "react": "^18.3.0",
-    "react-dom": "^18.3.0",
-    "@types/react": "^18.3.0",
-    "tsup": "^8.0.0",
-    "typescript": "^5.4.0",
-    "vitest": "^2.0.0"
+<Callout type="warning">
+**Always use the two-argument form** — `window.__RAT_REGISTER_PLUGIN(name, registration)`. Passing a single object crashes the loader (`Cannot read properties of undefined (reading 'slots')`).
+</Callout>
+
+## Authoring the Bundle
+
+A plugin UI bundle is plain JavaScript that runs in the portal's page — it is **build-free**: hand-written `React.createElement` calls, no JSX and no bundler step, so a plugin doesn't need a Node toolchain.
+
+```js filename="bundle.js (served by the plugin, build-free)"
+(function () {
+  const e = React.createElement;
+
+  function MyPluginPage() {
+    return e("div", { className: "brutal-card p-4" },
+      e("h1", { className: "neon-text" }, "My Plugin"));
   }
-}
-```
 
-**`tsup.config.ts`** (same pattern as SDK):
+  function MyWidget() {
+    return e("div", { className: "border-t border-border/50 px-3 py-2" },
+      e("span", { className: "text-[10px] font-bold tracking-wider text-muted-foreground" }, "MY PLUGIN"));
+  }
 
-```ts
-import { defineConfig } from "tsup";
-
-export default defineConfig({
-  entry: ["src/index.ts"],
-  format: ["esm", "cjs"],
-  dts: true,
-  sourcemap: true,
-  clean: true,
-  splitting: false,
-  external: ["react", "react-dom"],
-});
-```
-
-### 3. Write Your Component
-
-Components should use the existing portal design system classes — no additional CSS needed.
-
-```tsx
-// src/components/your-component.tsx
-export function YourComponent({ collapsed }: { collapsed?: boolean }) {
-  return (
-    <div className="border-t border-border/50 px-3 py-2">
-      <span className="text-[10px] font-bold tracking-wider text-muted-foreground">
-        YOUR LABEL
-      </span>
-    </div>
-  );
-}
-```
-
-### 4. Export Slot Registrations
-
-The `index.ts` exports a **slot registry** — a map of slot names to component arrays:
-
-```ts
-// src/index.ts
-import { YourComponent } from "./components/your-component";
-
-export type SlotRegistry = Record<string, React.ComponentType<any>[]>;
-
-export const yourPluginSlots: SlotRegistry = {
-  "sidebar-nav-extra": [YourComponent],
-};
-```
-
-### 5. Create an Aggregator Package
-
-If you have multiple plugin UI packages, create an aggregator package that combines their slot registrations and exports a `loadRegistry()` function:
-
-```ts
-// aggregator/src/index.ts
-import { buildRegistry } from "./registry";
-import type { PluginRegistry } from "./types";
-
-export async function loadRegistry(): Promise<PluginRegistry> {
-  // Determine which plugins are enabled (e.g., from an API)
-  const enabledPlugins = await fetchEnabledPlugins();
-  return buildRegistry(enabledPlugins);
-}
-```
-
-Then configure the portal to load this aggregator:
-
-```bash
-NEXT_PUBLIC_PLUGIN_PACKAGE=@your-scope/portal-plugins
-```
-
-### 6. Write Tests
-
-```ts
-import { describe, it, expect } from "vitest";
-import { yourPluginSlots } from "../index";
-
-describe("yourPluginSlots", () => {
-  it("exports sidebar-nav-extra slot", () => {
-    expect(yourPluginSlots["sidebar-nav-extra"]).toBeDefined();
-    expect(yourPluginSlots["sidebar-nav-extra"]).toHaveLength(1);
+  window.__RAT_REGISTER_PLUGIN("my-plugin", {
+    navItems: [{ label: "My Plugin", icon: "box", href: "/x/my-plugin", priority: 50 }],
+    routes:   [{ path: "/x/my-plugin", component: MyPluginPage }],
+    slots:    { "sidebar-nav-extra": [MyWidget] },
   });
-});
+})();
 ```
 
-## Available Slot Names
+`React` is provided on `window` by the portal — don't bundle your own copy.
 
-See [Plugin Slots Reference](/reference/plugin-slots) for the full list of available slots, their locations, and expected props.
+### Registration shape
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `navItems` | `{ label, icon, href, priority }[]` | Sidebar entries (icon = a lucide icon name; lower `priority` sorts first) |
+| `routes` | `{ path, component }[]` | Full-page client routes, mounted under `/x/<name>` |
+| `slots` | `Record<string, Component[]>` | Components injected into named portal slots |
+
+See the [Plugin Slots Reference](/reference/plugin-slots) for the full list of slot names, their locations, and props.
+
+### Declaring the UI in `Describe`
+
+The portal only loads a bundle the plugin advertised. In the plugin's `Describe` response, populate the `ui` descriptor:
+
+- `bundle_url` — where the bundle lives (ratd re-serves it at `/api/v1/plugins/{name}/ui/bundle.js`)
+- `bundle_hash` — SHA-256 of the bundle in SRI format (`sha256-<base64>`)
+- `nav_items`, `slots`, `routes` — optional metadata mirroring what the bundle registers
+
+<Callout type="info">
+**SRI is on by default.** A bundle without a `bundle_hash` is **refused** (no `<script>` injected). For local development only, set `NEXT_PUBLIC_RAT_ALLOW_UNSIGNED_BUNDLES=true` on the portal to downgrade that to a warning. Never enable it in production.
+</Callout>
 
 ## Design System Guidelines
 
-Plugin components render inside the portal's layout. Follow these rules:
+Plugin components render inside the portal's layout. Follow the portal theme:
 
 - **Use existing Tailwind classes** — `brutal-card`, `neon-text`, `text-[10px]`, `tracking-wider`
 - **No rounded corners** — `--radius: 0px` is the portal theme
 - **Font**: JetBrains Mono (inherited from `body`)
-- **Colors**: Use CSS variables — `text-primary`, `text-muted-foreground`, `border-border/50`
-- **No additional CSS** — Tailwind content paths don't need updating
+- **Colors**: use CSS variables — `text-primary`, `text-muted-foreground`, `border-border/50`
 
-## Plugin Package Contract
+## See Also
 
-Any package configured via `NEXT_PUBLIC_PLUGIN_PACKAGE` must export:
-
-```typescript
-export function loadRegistry(): Promise<PluginRegistry>;
-```
-
-Where `PluginRegistry` is `Record<string, React.ComponentType<any>[]>`.
+- [Plugin System](/contributing/architecture/plugin-system) — the full open-registry / phone-home model
+- [Portal Plugins guide](/guides/portal-plugins) — building a plugin that ships UI end-to-end
+- [Plugin Slots Reference](/reference/plugin-slots) — slot names, locations, props

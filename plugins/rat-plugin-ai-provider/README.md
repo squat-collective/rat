@@ -45,11 +45,13 @@ This poll-for-config pattern is reusable by any plugin that needs settings.
 
 ## Reused by other plugins
 
-On startup it registers two capabilities with the **interconnect** plugin, so
+On startup it registers four capabilities with the **interconnect** plugin, so
 other plugins call it by capability — no hardcoded names:
 
 - `ai.complete` → `POST /complete`
 - `ai.chat` → `POST /chat`
+- `ai.chat-with-tools` → tool-calling chat
+- `ai.chat-with-tools-stream` → streaming tool-calling chat
 
 ```bash
 # another plugin invoking the AI through the broker:

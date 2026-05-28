@@ -58,7 +58,7 @@ RAT Portal — your only interface for managing pipelines, running queries, and 
 
 ![RAT Dashboard](/tutorial/dashboard.png)
 
-The left sidebar has **8 navigation items**:
+The left sidebar has **7 core navigation items** (an eighth, **Lineage**, appears only when the optional `rat-plugin-lineage` plugin is installed):
 
 | Page | What it does |
 |---|---|
@@ -66,7 +66,7 @@ The left sidebar has **8 navigation items**:
 | **Pipelines** | List, create, and manage all pipelines |
 | **Query** | Interactive SQL editor (powered by DuckDB) |
 | **Runs** | History of all pipeline executions |
-| **Lineage** | Visual DAG showing data flow between pipelines |
+| **Lineage** | Visual DAG showing data flow between pipelines (optional plugin, route `/x/lineage`) |
 | **Explorer** | Browse tables, schemas, and documentation |
 | **Landing** | Manage file drop zones for data ingestion |
 | **Settings** | Platform configuration and retention policies |
@@ -157,7 +157,7 @@ The preview panel opens below the editor, showing a results table:
 | L014 | Starship IFT-2 | 2023-11-18 | Starship | USA | partial_failure | 0 |
 
 <Callout type="info">
-Preview runs your SQL in a **read-only DuckDB session** (via ratq). Nothing is written
+Preview runs your SQL in the **runner** — it compiles the Jinja and executes the query through DuckDB with a `LIMIT`, using the same path as a real run (not the ratq query service). Nothing is written
 to the catalog — it just shows you the output shape. Use it to iterate quickly.
 </Callout>
 

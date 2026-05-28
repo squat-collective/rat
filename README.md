@@ -6,7 +6,7 @@
 [![Docs](https://github.com/squat-collective/rat/actions/workflows/docs.yml/badge.svg)](https://squat-collective.github.io/rat/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-RAT is an open-source data platform built for people who know SQL. Community Edition is free, self-hostable, and runs with a single `docker compose up`.
+RAT is an open-source data platform built for people who know SQL. It's fully free, self-hostable, and runs with a single `docker compose up` — one platform, no editions or tiers. Optional capabilities (auth, multi-user, sharing, cloud) ship as free, optional plugins.
 
 Part of [Le Squat](https://squat-collective.github.io/website/) — an underground builders collective.
 

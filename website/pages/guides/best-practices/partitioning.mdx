@@ -17,7 +17,7 @@ With partitioning on `order_date`, each date's data lives in its own set of file
 | Partition? | Scenario |
 |---|---|
 | **Yes** | Tables with millions of rows that are frequently filtered by a date or category column |
-| **Yes** | Snapshot strategy tables (partitioning is required for `snapshot`) |
+| **Yes** | Snapshot strategy tables (a `partition_column` is recommended for `snapshot` — without one it falls back to `full_refresh`) |
 | **Yes** | Time-series data where most queries filter by date range |
 | **No** | Small tables (under 100K rows) — overhead exceeds benefit |
 | **No** | Tables queried without any column filter (full scans regardless) |
@@ -158,7 +158,7 @@ default/gold/regional_orders/
 
 ### Example 3: Snapshot with Partition Column
 
-The `snapshot` strategy requires a `partition_column`. When the pipeline runs, it replaces only the partition matching the value produced by the query:
+The `snapshot` strategy works best with a `partition_column`. When one is set, the pipeline replaces only the partition matching the value produced by the query. If you omit `partition_column`, `snapshot` quietly falls back to `full_refresh` (no error):
 
 ```yaml filename="config.yaml"
 merge_strategy: snapshot
@@ -288,4 +288,4 @@ Changing the partition scheme on a large table can take significant time because
 2. **Use `month` as the default transform** — provides a good balance between partition count and size
 3. **Monitor partition count** — aim for dozens to low hundreds of partitions, not thousands
 4. **Match partition granularity to query patterns** — if you always query by day, partition by day; if by month, partition by month
-5. **Combine with `partition_column` for snapshots** — the snapshot strategy requires it, and it gives you idempotent partition-level overwriting
+5. **Combine with `partition_column` for snapshots** — the snapshot strategy gives you idempotent partition-level overwriting only when one is set; without it, `snapshot` falls back to `full_refresh`

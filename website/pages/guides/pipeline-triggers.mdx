@@ -13,12 +13,12 @@ RAT supports **6 trigger types**:
 
 | Type | Fires When | Config Fields |
 |---|---|---|
-| `landing_zone_upload` | A file is uploaded to a specific landing zone | `zone_namespace`, `zone_name` |
+| `landing_zone_upload` | A file is uploaded to a specific landing zone | `namespace`, `zone_name` |
 | `cron` | A cron schedule is due | `cron_expr` (5-field) |
-| `pipeline_success` | Another pipeline completes successfully | `pipeline_namespace`, `pipeline_layer`, `pipeline_name` |
-| `webhook` | An HTTP request hits the trigger URL with valid token | *(auto-generated URL + token)* |
-| `file_pattern` | An uploaded filename matches a glob pattern | `zone_namespace`, `zone_name`, `pattern` |
-| `cron_dependency` | Cron is due **and** all dependency pipelines have new data | `cron_expr`, `dependencies[]` |
+| `pipeline_success` | Another pipeline completes successfully | `namespace`, `layer`, `pipeline` |
+| `webhook` | An HTTP request hits the shared webhook endpoint with a valid token | *(auto-generated token)* |
+| `file_pattern` | An uploaded filename matches a glob pattern | `namespace`, `zone_name`, `pattern` |
+| `cron_dependency` | Cron is due **and** all dependency pipelines have new data | `cron_expr`, `dependencies[]` (list of `"ns.layer.pipeline"` strings) |
 
 Every trigger also has these common fields:
 
@@ -72,7 +72,7 @@ Fires when **any file** is uploaded to a specific landing zone. Ideal for event-
 {
   "type": "landing_zone_upload",
   "config": {
-    "zone_namespace": "default",
+    "namespace": "default",
     "zone_name": "raw_orders"
   },
   "cooldown_seconds": 60,
@@ -112,9 +112,9 @@ Fires when a specific upstream pipeline completes **successfully**. Failed or ca
 {
   "type": "pipeline_success",
   "config": {
-    "pipeline_namespace": "default",
-    "pipeline_layer": "bronze",
-    "pipeline_name": "raw_orders"
+    "namespace": "default",
+    "layer": "bronze",
+    "pipeline": "raw_orders"
   },
   "cooldown_seconds": 0,
   "enabled": true
@@ -125,7 +125,7 @@ Fires when a specific upstream pipeline completes **successfully**. Failed or ca
 
 ### 4. Webhook
 
-Creates an HTTP endpoint that fires the pipeline when called with a valid token. RAT auto-generates the URL and bearer token when you create this trigger type.
+Creates a token that fires the pipeline when the shared webhook endpoint is called with it. RAT auto-generates the token when you create this trigger type — the token is a bare hex string (no prefix).
 
 ```json filename="Trigger Config"
 {
@@ -135,21 +135,21 @@ Creates an HTTP endpoint that fires the pipeline when called with a valid token.
 }
 ```
 
-After creation, the API returns:
+After creation, the API returns the webhook URL and the one-time token:
 
 ```json filename="Webhook Response"
 {
   "id": "trigger-uuid",
-  "webhook_url": "http://localhost:8080/api/v1/triggers/trigger-uuid/fire",
-  "webhook_token": "rat_wh_a1b2c3d4e5f6..."
+  "webhook_url": "http://localhost:8080/api/v1/webhooks",
+  "webhook_token": "9f2c1ab7d4e8..."
 }
 ```
 
-Call the webhook:
+Call the shared webhook endpoint, passing the token in the `X-Webhook-Token` header. The endpoint looks up the trigger by token, so the trigger ID is **not** part of the URL:
 
 ```bash filename="Terminal"
-curl -X POST http://localhost:8080/api/v1/triggers/{trigger-id}/fire \
-  -H "Authorization: Bearer rat_wh_a1b2c3d4e5f6..."
+curl -X POST http://localhost:8080/api/v1/webhooks \
+  -H "X-Webhook-Token: 9f2c1ab7d4e8..."
 ```
 
 <Callout type="warning">
@@ -166,7 +166,7 @@ Fires when an uploaded filename matches a glob pattern within a landing zone. Mo
 {
   "type": "file_pattern",
   "config": {
-    "zone_namespace": "default",
+    "namespace": "default",
     "zone_name": "raw_events",
     "pattern": "events_*.parquet"
   },
@@ -195,21 +195,15 @@ The most sophisticated trigger type. It combines a cron schedule with dependency
   "config": {
     "cron_expr": "0 * * * *",
     "dependencies": [
-      {
-        "namespace": "default",
-        "layer": "silver",
-        "name": "clean_orders"
-      },
-      {
-        "namespace": "default",
-        "layer": "silver",
-        "name": "clean_customers"
-      }
+      "default.silver.clean_orders",
+      "default.silver.clean_customers"
     ]
   },
   "enabled": true
 }
 ```
+
+Each dependency is a single string in `"namespace.layer.pipeline"` format — not an object.
 
 **How dependency checking works**:
 
@@ -291,9 +285,9 @@ curl -X POST http://localhost:8080/api/v1/pipelines/{ns}/{layer}/{name}/triggers
   -d '{
     "type": "pipeline_success",
     "config": {
-      "pipeline_namespace": "default",
-      "pipeline_layer": "bronze",
-      "pipeline_name": "raw_orders"
+      "namespace": "default",
+      "layer": "bronze",
+      "pipeline": "raw_orders"
     },
     "cooldown_seconds": 0,
     "enabled": true
@@ -308,8 +302,10 @@ curl http://localhost:8080/api/v1/pipelines/{ns}/{layer}/{name}/triggers
 
 ### Update a trigger
 
+Triggers are nested under their pipeline, so updates use the pipeline-scoped path with `PUT`:
+
 ```bash filename="Terminal"
-curl -X PATCH http://localhost:8080/api/v1/triggers/{trigger-id} \
+curl -X PUT http://localhost:8080/api/v1/pipelines/{ns}/{layer}/{name}/triggers/{trigger-id} \
   -H "Content-Type: application/json" \
   -d '{
     "enabled": false,
@@ -320,7 +316,7 @@ curl -X PATCH http://localhost:8080/api/v1/triggers/{trigger-id} \
 ### Delete a trigger
 
 ```bash filename="Terminal"
-curl -X DELETE http://localhost:8080/api/v1/triggers/{trigger-id}
+curl -X DELETE http://localhost:8080/api/v1/pipelines/{ns}/{layer}/{name}/triggers/{trigger-id}
 ```
 
 ---

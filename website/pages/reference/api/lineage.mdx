@@ -4,20 +4,24 @@ import { Callout } from 'nextra/components'
 
 The lineage endpoint returns the full data lineage graph (DAG) for your platform, showing how pipelines, tables, and landing zones are connected. The portal uses this data to render the interactive DAG visualization.
 
+<Callout type="info">
+Lineage lives in an optional plugin (`rat-plugin-lineage`), not in core `ratd`. When the plugin is installed, `ratd` reverse-proxies it at `/api/v1/x/lineage/graph`. Without the plugin, this route returns `404 Not Found`.
+</Callout>
+
 ---
 
 ## Endpoints
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/v1/lineage` | Get the lineage graph |
+| `GET` | `/api/v1/x/lineage/graph` | Get the lineage graph |
 
 ---
 
 ## Get Lineage Graph
 
 ```
-GET /api/v1/lineage
+GET /api/v1/x/lineage/graph
 ```
 
 Builds and returns the full lineage graph by:
@@ -36,7 +40,7 @@ Builds and returns the full lineage graph by:
 ### Request
 
 ```bash
-curl "http://localhost:8080/api/v1/lineage?namespace=default"
+curl "http://localhost:8080/api/v1/x/lineage/graph?namespace=default"
 ```
 
 ### Response — `200 OK`

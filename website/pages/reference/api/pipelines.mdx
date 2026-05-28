@@ -55,6 +55,7 @@ curl "http://localhost:8080/api/v1/pipelines?namespace=default&layer=silver&limi
 {
   "pipelines": [
     {
+      "id": "pipeline-uuid",
       "namespace": "default",
       "layer": "silver",
       "name": "orders",
@@ -62,12 +63,7 @@ curl "http://localhost:8080/api/v1/pipelines?namespace=default&layer=silver&limi
       "owner": null,
       "description": "Clean and deduplicate orders",
       "created_at": "2026-02-12T10:00:00Z",
-      "updated_at": "2026-02-12T10:00:00Z",
-      "last_run": {
-        "run_id": "abc123",
-        "status": "success",
-        "finished_at": "2026-02-12T14:00:00Z"
-      }
+      "updated_at": "2026-02-12T10:00:00Z"
     }
   ],
   "total": 1
@@ -79,18 +75,15 @@ curl "http://localhost:8080/api/v1/pipelines?namespace=default&layer=silver&limi
 | Field | Type | Description |
 |---|---|---|
 | `pipelines` | `array` | List of pipeline objects |
+| `pipelines[].id` | `string` | Pipeline UUID |
 | `pipelines[].namespace` | `string` | Namespace the pipeline belongs to |
 | `pipelines[].layer` | `string` | Data layer: `bronze`, `silver`, or `gold` |
 | `pipelines[].name` | `string` | Pipeline name |
 | `pipelines[].type` | `string` | Pipeline type: `sql` or `python` |
-| `pipelines[].owner` | `string\|null` | Owner user ID (Pro) or `null` |
+| `pipelines[].owner` | `string\|null` | Owner user ID (set when an auth/ownership plugin is active) or `null` |
 | `pipelines[].description` | `string` | Pipeline description |
 | `pipelines[].created_at` | `string` | ISO 8601 creation timestamp |
 | `pipelines[].updated_at` | `string` | ISO 8601 last update timestamp |
-| `pipelines[].last_run` | `object\|null` | Most recent run summary, or `null` if never run |
-| `pipelines[].last_run.run_id` | `string` | Run ID |
-| `pipelines[].last_run.status` | `string` | Run status |
-| `pipelines[].last_run.finished_at` | `string` | ISO 8601 completion timestamp |
 | `total` | `integer` | Total number of matching pipelines (for pagination) |
 
 ---
@@ -158,7 +151,7 @@ curl -X POST http://localhost:8080/api/v1/pipelines \
 GET /api/v1/pipelines/{ns}/{layer}/{name}
 ```
 
-Returns the full details for a single pipeline, including metadata and last run information.
+Returns the full details for a single pipeline, including metadata.
 
 ### Path Parameters
 
@@ -186,12 +179,7 @@ curl http://localhost:8080/api/v1/pipelines/default/silver/orders
   "description": "Clean and deduplicate orders",
   "s3_path": "default/pipelines/silver/orders/",
   "created_at": "2026-02-12T10:00:00Z",
-  "updated_at": "2026-02-12T10:00:00Z",
-  "last_run": {
-    "run_id": "abc123",
-    "status": "success",
-    "finished_at": "2026-02-12T14:00:00Z"
-  }
+  "updated_at": "2026-02-12T10:00:00Z"
 }
 ```
 
@@ -248,7 +236,7 @@ Returns the full pipeline object with updated fields.
 | Status | Code | Description |
 |---|---|---|
 | `400` | `INVALID_ARGUMENT` | Invalid field values |
-| `403` | `AUTHORIZATION` | Insufficient permissions (Pro: ownership/ACL check) |
+| `403` | `AUTHORIZATION` | Insufficient permissions (when an ownership/ACL plugin is active) |
 | `404` | `NOT_FOUND` | Pipeline not found |
 
 ---
@@ -283,7 +271,7 @@ No response body.
 
 | Status | Code | Description |
 |---|---|---|
-| `403` | `AUTHORIZATION` | Insufficient permissions (Pro: ownership/ACL check) |
+| `403` | `AUTHORIZATION` | Insufficient permissions (when an ownership/ACL plugin is active) |
 | `404` | `NOT_FOUND` | Pipeline not found |
 
 ---

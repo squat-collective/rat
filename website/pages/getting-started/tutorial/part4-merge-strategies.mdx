@@ -22,11 +22,11 @@ fits a different data pattern:
 | Strategy | Behavior | Best For |
 |----------|----------|----------|
 | `full_refresh` | Drop and recreate the entire table | Small/static datasets, lookup tables |
-| `incremental` | Append only rows newer than the watermark | Event logs, time-series, append-heavy data |
+| `incremental` | Upsert rows on the `unique_key` (insert new keys, replace existing) | Event logs, time-series, append-heavy data |
 | `append_only` | Always append, no deduplication | Immutable event streams, audit logs |
 | `delete_insert` | Delete rows matching key, then insert new | Dimension updates, upsert patterns |
 | `scd2` | Slowly Changing Dimension Type 2 — track historical changes | Customer records, product catalogs |
-| `snapshot` | Full snapshot comparison — diff old vs new | Audit trails, compliance reporting |
+| `snapshot` | Replace the matching partition with the new data | Audit trails, compliance reporting |
 
 <Callout type="info">
 The default strategy is `full_refresh`. If you don't specify a merge strategy, RAT
@@ -99,11 +99,15 @@ WHERE launch_date > '{{ watermark_value }}'
 
 Here's what happens:
 
-- **First run:** `is_incremental()` returns `false` because the table doesn't exist yet.
-  The `WHERE` clause is skipped, and all 25 rows are loaded.
-- **Subsequent runs:** `is_incremental()` returns `true` and `watermark_value` contains
-  the maximum `launch_date` from the existing table. Only rows newer than that date
-  are processed.
+- **First run:** `is_incremental()` returns `true` (the strategy is `incremental`), but
+  `watermark_value` is empty/`None` because there's no existing table yet. The
+  `and watermark_value` guard is falsy, so the `WHERE` clause is skipped and all 25 rows
+  are loaded.
+- **Subsequent runs:** `is_incremental()` is still `true`, and `watermark_value` now
+  contains the maximum `launch_date` from the existing table. Only rows newer than that
+  date are processed, and those rows are **upserted** on the `unique_key` (`launch_id`) —
+  new keys are inserted, and rows whose key already exists are replaced, rather than
+  blindly appended.
 
 ### Publish the changes
 
@@ -200,7 +204,7 @@ RAT provides several Jinja helpers for conditional logic in your SQL pipelines:
 
 | Helper | Returns | Description |
 |--------|---------|-------------|
-| `is_incremental()` | `bool` | `True` if the table already exists and strategy is `incremental` |
+| `is_incremental()` | `bool` | `True` whenever the merge strategy is `incremental` |
 | `watermark_value` | `str \| None` | Max value of the watermark column from the existing table |
 | `is_scd2()` | `bool` | `True` if the merge strategy is `scd2` |
 | `is_snapshot()` | `bool` | `True` if the merge strategy is `snapshot` |

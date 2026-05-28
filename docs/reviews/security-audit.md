@@ -13,14 +13,14 @@ This audit covers the RAT v2 data platform — a self-hostable system comprising
 
 ### Overall Risk Rating: **MODERATE-HIGH**
 
-The codebase demonstrates security awareness in several areas (input validation, Jinja sandboxing, SQL statement blocking, rate limiting, path traversal prevention). However, critical vulnerabilities exist in the Python exec() sandbox, SQL injection surface in the Iceberg merge layer, absence of authentication in community mode, and cleartext inter-service communication.
+The codebase demonstrates security awareness in several areas (input validation, Jinja sandboxing, SQL statement blocking, rate limiting, path traversal prevention). However, critical vulnerabilities exist in the Python exec() sandbox, SQL injection surface in the Iceberg merge layer, absence of authentication in the default (no-auth-plugin) mode, and cleartext inter-service communication.
 
 ### Risk Summary
 
 | Severity | Count | Description |
 |----------|-------|-------------|
 | CRITICAL | 3 | Python sandbox escape, DuckDB SQL injection via column names, hardcoded credentials |
-| HIGH | 6 | No auth in community mode, insecure gRPC, query service SQL injection, SSRF vectors, unrestricted file listing, webhook token timing attack |
+| HIGH | 6 | No auth in default mode (no auth plugin), insecure gRPC, query service SQL injection, SSRF vectors, unrestricted file listing, webhook token timing attack |
 | MEDIUM | 8 | Missing security headers, CORS misconfiguration potential, log information leakage, unbounded SSE connections, missing ReadTimeout, S3 credential caching, Nessie branch name injection, YAML schema validation |
 | LOW | 5 | Docker image pinning, TLS minimum version, missing CSP, verbose error messages, missing request ID logging |
 
@@ -95,14 +95,14 @@ S3Config defaults to `minioadmin`/`minioadmin`. Docker-compose uses `rat`/`rat` 
 
 ---
 
-### SEC-004: No Authentication in Community Edition
+### SEC-004: No Authentication by Default (no auth plugin)
 
 **Severity**: HIGH | **CVSS**: 8.2 | **OWASP**: A01:2021 - Broken Access Control
 **Files**: `platform/internal/auth/middleware.go` (lines 10-14), `platform/internal/api/authorizer.go` (lines 17-21)
 
-All API endpoints are completely open in community mode. Any network-reachable client can execute arbitrary SQL queries, upload/download files, trigger pipeline runs (including Python code execution), and modify all configuration.
+All API endpoints are completely open when no auth plugin is installed. Any network-reachable client can execute arbitrary SQL queries, upload/download files, trigger pipeline runs (including Python code execution), and modify all configuration.
 
-**Remediation**: Add basic API key authentication even in community mode; bind ratd to `127.0.0.1` by default.
+**Remediation**: Add basic API key authentication even without the auth plugin; bind ratd to `127.0.0.1` by default.
 
 ---
 
@@ -258,7 +258,7 @@ ratd uses `middleware.RequestID` for HTTP but does not propagate to gRPC calls. 
 | SEC-001 | Python exec() sandbox escape | CRITICAL | High | Critical | 9.8 | P0 |
 | SEC-002 | SQL injection in Iceberg merge | CRITICAL | High | High | 9.1 | P0 |
 | SEC-003 | Hardcoded default credentials | CRITICAL | High | Critical | 9.0 | P0 |
-| SEC-004 | No auth in community edition | HIGH | High | High | 8.2 | P1 |
+| SEC-004 | No auth in default mode (no auth plugin) | HIGH | High | High | 8.2 | P1 |
 | SEC-005 | Insecure gRPC (no TLS) | HIGH | Medium | High | 7.5 | P1 |
 | SEC-006 | Query service SQL injection | HIGH | High | Medium | 7.8 | P1 |
 | SEC-007 | SSRF via Nessie client | HIGH | Medium | High | 7.0 | P1 |
@@ -288,7 +288,7 @@ ratd uses `middleware.RequestID` for HTTP but does not propagate to gRPC calls. 
 - SEC-003: Remove hardcoded default credentials, require explicit configuration
 
 ### Short-term (P1 — within 2 weeks)
-- SEC-004: Add basic API key auth for community edition
+- SEC-004: Add basic API key auth for the default (no-auth-plugin) mode
 - SEC-005: Add TLS support to Python gRPC servers
 - SEC-006: Switch query engine to allowlist-based SQL filtering
 - SEC-007: Add branch name validation and URL encoding

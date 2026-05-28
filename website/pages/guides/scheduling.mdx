@@ -71,11 +71,15 @@ You can also create schedules via the API:
 curl -X POST http://localhost:8080/api/v1/schedules \
   -H "Content-Type: application/json" \
   -d '{
-    "pipeline_id": "your-pipeline-uuid",
+    "namespace": "default",
+    "layer": "bronze",
+    "pipeline": "raw_orders",
     "cron": "0 9 * * *",
     "enabled": true
   }'
 ```
+
+The request identifies the pipeline by `namespace` / `layer` / `pipeline` (plus a `cron` expression) — not by an internal `pipeline_id`.
 
 ---
 
@@ -145,7 +149,7 @@ In a multi-replica deployment of `ratd`, only **one replica** runs the scheduler
 3. If the leader crashes, another replica acquires the lock and takes over.
 
 <Callout type="info">
-In the Community Edition (single-user, single replica), leader election happens automatically — there is only one instance to claim the lock. This is only relevant if you run multiple `ratd` replicas behind a load balancer.
+In a single-user, single-replica deployment, leader election happens automatically — there is only one instance to claim the lock. This is only relevant if you run multiple `ratd` replicas behind a load balancer.
 </Callout>
 
 ---

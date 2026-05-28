@@ -70,8 +70,8 @@ When your `pipeline.py` executes, RAT injects several globals into the execution
 | `landing_zone` | `Callable[[str], str]` | Same as SQL `landing_zone()`. Returns the S3 glob path for the named zone. |
 | `this` | `str` | Current pipeline's own Iceberg table path (for self-referencing in incremental). |
 | `run_started_at` | `str` | ISO 8601 UTC timestamp of the current run. |
-| `is_incremental` | `bool` | `True` if the strategy is `incremental` and the target table already exists. |
-| `config` | `dict` | The parsed `config.yaml` contents (or empty dict if none). |
+| `is_incremental` | `bool` | `True` whenever the merge strategy is `incremental`. (The first run differs by an empty `watermark_value`, not by this flag.) |
+| `config` | `PipelineConfig` or `None` | The parsed pipeline config as a **frozen `PipelineConfig` object** (read fields as attributes, e.g. `config.merge_strategy`). It is `None` when the pipeline has no config block — it is **not** a dict. |
 | `result` | `None` | The output variable. **You must set this to a `pa.Table`**. |
 | `log` | `Logger` | Logger instance. Use `log.info()`, `log.warning()`, `log.error()` for run logs. |
 
@@ -223,39 +223,30 @@ description: Parsed and enriched event stream
 archive_landing_zones: true
 ```
 
-You can also read custom config values via the `config` global:
+You can read the pipeline's configuration through the `config` global. It is a frozen
+`PipelineConfig` object (or `None` when no config block is present), so access its fields
+as **attributes** — not with `config.get(...)`. The available fields are the documented
+config keys: `merge_strategy`, `unique_key`, `watermark_column`, `materialized`,
+`partition_by`, `max_retries`, `retry_delay_seconds`, etc. Arbitrary custom keys are
+**not** supported — unknown keys in `config.yaml` are ignored with a warning.
 
 ```yaml filename="config.yaml"
-merge_strategy: full_refresh
-description: Dynamic pivot table
-
-# Custom config
-pivot_column: category
-value_columns:
-  - revenue
-  - quantity
+merge_strategy: incremental
+unique_key: order_id
+watermark_column: updated_at
+description: Sales fact table
 ```
 
 ```python filename="pipeline.py"
-pivot_col = config.get("pivot_column", "category")
-value_cols = config.get("value_columns", ["revenue"])
+# `config` is a frozen PipelineConfig object (or None) — read attributes, not dict keys.
+if config is not None and config.merge_strategy == "incremental":
+    log.info(f"Incremental on key {config.unique_key}, watermark {config.watermark_column}")
 
-log.info(f"Pivoting on {pivot_col} with values {value_cols}")
-
-# Use config to dynamically build query
 source = duckdb_conn.execute(f"""
     SELECT * FROM {ref('silver.sales')}
 """).fetch_arrow_table()
 
-duckdb_conn.register("source_tbl", source)
-
-# Build dynamic PIVOT query
-values_sql = ", ".join(value_cols)
-result = duckdb_conn.execute(f"""
-    PIVOT source_tbl
-    ON {pivot_col}
-    USING SUM({values_sql})
-""").fetch_arrow_table()
+result = source
 ```
 
 ## Security Sandbox
@@ -271,16 +262,20 @@ The following built-in functions are removed from the execution scope:
 | `eval()` | Arbitrary code execution |
 | `exec()` | Arbitrary code execution |
 | `open()` | Filesystem access |
-| `__import__()` | Unrestricted module loading |
 | `compile()` | Code compilation |
-| `globals()` | Scope manipulation |
-| `locals()` | Scope manipulation |
+| `globals()` / `locals()` / `vars()` | Scope/introspection |
+| `getattr()` / `setattr()` / `delattr()` | Attribute access (can reach `__subclasses__`) |
+| `type()` / `isinstance()` / `hasattr()` | Type introspection chains |
 | `breakpoint()` | Debugger access |
-| `input()` | Interactive input (would hang) |
+| `input()` / `help()` | Interactive (would hang) |
+
+<Callout type="info">
+`__import__` is **not** removed — it is replaced with a *restricted* importer. Normal `import` statements work, but importing a blocked module raises `ImportError`. (PyArrow's C++ code calls `__import__` internally, so removing it entirely would crash the runner.)
+</Callout>
 
 ### Blocked Imports
 
-These modules cannot be imported:
+These modules cannot be imported (the importer raises `ImportError`):
 
 | Module | Reason |
 |---|---|
@@ -289,14 +284,17 @@ These modules cannot be imported:
 | `subprocess` | Process spawning |
 | `shutil` | Filesystem operations |
 | `socket` | Network access |
-| `http` | HTTP client/server |
-| `requests` | HTTP client |
-| `urllib` | URL operations |
-| `pathlib` | Filesystem paths |
+| `http` / `ftplib` / `smtplib` | Network clients |
+| `pathlib` / `tempfile` / `glob` | Filesystem paths |
 | `importlib` | Dynamic imports |
 | `ctypes` | C library access |
-| `multiprocessing` | Process spawning |
-| `threading` | Thread spawning |
+| `multiprocessing` / `threading` / `concurrent` | Process/thread spawning |
+| `builtins` / `inspect` / `gc` / `types` / `abc` | Introspection / sandbox escape |
+| `pickle` / `marshal` / `shelve` | (De)serialization escape vectors |
+
+<Callout type="info">
+Network libraries like `requests` and `urllib` are **not** on the blocklist — they simply are not installed in the pipeline environment. If you need network access, use DuckDB's HTTP extension via `duckdb_conn`.
+</Callout>
 
 ### AST Validation
 

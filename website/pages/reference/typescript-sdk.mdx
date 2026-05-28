@@ -22,41 +22,45 @@ The SDK is published as an ESM + CJS dual-format package with full TypeScript de
 ## Creating a Client
 
 ```typescript filename="example.ts"
-import { createClient } from '@squat-collective/rat-client'
+import { RatClient } from '@squat-collective/rat-client'
 
-const client = createClient({
-  baseUrl: 'http://localhost:8080',
+const client = new RatClient({
+  apiUrl: 'http://localhost:8080',
 })
 ```
 
 ### Client Options
 
+`RatClient` takes a `RatClientOptions` object (all fields optional):
+
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `baseUrl` | `string` | — | **Required.** The RAT API base URL |
-| `apiKey` | `string` | — | API key for authentication (sent as `Authorization: Bearer <key>`) |
-| `timeout` | `number` | `30000` | Request timeout in milliseconds |
-| `retries` | `number` | `3` | Maximum retry attempts for idempotent requests |
-| `onRequest` | `(req: Request) => Request` | — | Request interceptor (modify headers, log, etc.) |
-| `onResponse` | `(res: Response) => Response` | — | Response interceptor |
+| `apiUrl` | `string` | `http://localhost:8080` | The RAT API base URL |
+| `headers` | `Record<string, string>` | — | Extra headers sent on every request (use for `Authorization: Bearer <key>`) |
+| `timeout` | `number` | — | Request timeout in milliseconds |
+| `maxRetries` | `number` | — | Maximum retry attempts for idempotent requests |
+| `onRequest` | `RequestInterceptor` | — | Request interceptor (modify headers, log, etc.) |
+| `onResponse` | `ResponseInterceptor` | — | Response interceptor |
 
 ### With Authentication
 
+Authentication uses a Bearer token in the `Authorization` header (only needed when an auth plugin or `RAT_API_KEY` is configured):
+
 ```typescript filename="example.ts"
-const client = createClient({
-  baseUrl: 'http://localhost:8080',
-  apiKey: 'your-api-key-here',
+const client = new RatClient({
+  apiUrl: 'http://localhost:8080',
+  headers: { Authorization: 'Bearer your-api-key-here' },
 })
 ```
 
 ### With Custom Options
 
 ```typescript filename="example.ts"
-const client = createClient({
-  baseUrl: 'http://localhost:8080',
-  apiKey: process.env.RAT_API_KEY,
+const client = new RatClient({
+  apiUrl: 'http://localhost:8080',
+  headers: { Authorization: `Bearer ${process.env.RAT_API_KEY}` },
   timeout: 60_000,  // 60 seconds
-  retries: 5,
+  maxRetries: 5,
   onRequest: (req) => {
     console.log(`→ ${req.method} ${req.url}`)
     return req
@@ -72,20 +76,20 @@ const client = createClient({
 
 ## Resource Namespaces
 
-The client organizes API methods into 12 resource namespaces, each mapping to a group of related endpoints.
+The client organizes API methods into resource namespaces (`health`, `pipelines`, `runs`, `query`, `tables`, `storage`, `namespaces`, `landing`, `triggers`, `quality`, `lineage`, `retention`, `plugins`), each mapping to a group of related endpoints.
 
 ### health
 
 Check platform health and feature availability.
 
 ```typescript
-// Full health check — returns status of all subsystems
-const health = await client.health.check()
-// { status: 'ok', services: { postgres: 'healthy', minio: 'healthy', ... } }
+// Health check — returns the service status
+const health = await client.health.getHealth()
+// { status: 'ok' }
 
-// Feature flags — which features are enabled (community vs pro)
-const features = await client.health.features()
-// { edition: 'community', features: ['scheduling', 'quality-tests', ...] }
+// Active features and loaded plugins
+const features = await client.health.getFeatures()
+// { edition: 'community', namespaces: false, multi_user: false, landing_zones: true, plugins: {} }
 ```
 
 ### pipelines
@@ -93,7 +97,7 @@ const features = await client.health.features()
 Create, read, update, and delete pipelines.
 
 ```typescript
-// List all pipelines (optional filters)
+// List pipelines (optional filters)
 const pipelines = await client.pipelines.list()
 const filtered = await client.pipelines.list({ namespace: 'ecommerce', layer: 'silver' })
 
@@ -114,6 +118,10 @@ const updated = await client.pipelines.update('ecommerce', 'silver', 'clean_orde
 
 // Delete a pipeline
 await client.pipelines.delete('ecommerce', 'silver', 'clean_orders')
+
+// Publish a draft, then roll back to an earlier version
+await client.pipelines.publish('ecommerce', 'silver', 'clean_orders', 'ship v2')
+await client.pipelines.rollback('ecommerce', 'silver', 'clean_orders', 1)
 ```
 
 ### runs
@@ -121,30 +129,30 @@ await client.pipelines.delete('ecommerce', 'silver', 'clean_orders')
 Trigger pipeline runs and monitor their status.
 
 ```typescript
-// Trigger a new run
-const run = await client.runs.create({
+// Trigger a new run — note `pipeline` (not `name`); returns { run_id, status }
+const created = await client.runs.create({
   namespace: 'ecommerce',
   layer: 'silver',
-  name: 'clean_orders',
+  pipeline: 'clean_orders',
   trigger: 'manual',
 })
 
-// Get run status
-const status = await client.runs.get(run.id)
+// Get run status (the Run object's id is `created.run_id`)
+const run = await client.runs.get(created.run_id)
 
-// List runs for a pipeline
-const runs = await client.runs.list({
+// List runs (optional filters)
+const { runs, total } = await client.runs.list({
   namespace: 'ecommerce',
   layer: 'silver',
-  name: 'clean_orders',
+  pipeline: 'clean_orders',
 })
 
-// Cancel a running pipeline
-await client.runs.cancel(run.id)
+// Cancel a running pipeline → { run_id, status }
+await client.runs.cancel(created.run_id)
 
-// Stream run logs (Server-Sent Events)
-const stream = client.runs.streamLogs(run.id)
-for await (const log of stream) {
+// Fetch the run's logs (returns { logs, status }, not a stream)
+const { logs } = await client.runs.logs(created.run_id)
+for (const log of logs) {
   console.log(`[${log.level}] ${log.message}`)
 }
 ```
@@ -156,44 +164,50 @@ Execute interactive DuckDB queries (read-only).
 ```typescript
 // Execute a SQL query
 const result = await client.query.execute({
-  sql: 'SELECT * FROM iceberg_scan(...) LIMIT 10',
+  sql: 'SELECT * FROM default.silver.clean_orders LIMIT 10',
   namespace: 'ecommerce',
+  limit: 1000,
 })
-// { columns: ['id', 'name', ...], rows: [...], row_count: 10 }
-
-// Get table schema
-const schema = await client.query.schema('ecommerce', 'silver', 'clean_orders')
-// { columns: [{ name: 'order_id', type: 'INTEGER', nullable: false }, ...] }
-
-// Preview a pipeline (dry-run with _samples data)
-const preview = await client.query.preview('ecommerce', 'silver', 'clean_orders')
-
-// Cancel a running query
-await client.query.cancel(queryId)
+// rows are objects keyed by column name:
+// { columns: [{ name: 'order_id', type: 'VARCHAR' }, ...],
+//   rows: [{ order_id: 'ORD-001', amount: 129.99 }, ...],
+//   total_rows: 10, duration_ms: 42 }
 ```
+
+<Callout type="info">
+Schema introspection and pipeline preview live on other resources, not `query`: use `client.tables.schema(...)` and `client.tables.preview(...)` (or `client.pipelines.preview(...)` for a dry-run).
+</Callout>
 
 ### tables
 
 Interact with Iceberg tables.
 
 ```typescript
-// List all tables in a namespace
-const tables = await client.tables.list('ecommerce')
+// List tables (optional namespace/layer filters)
+const tables = await client.tables.list({ namespace: 'ecommerce' })
 
-// Get table metadata
-const meta = await client.tables.get('ecommerce', 'silver', 'clean_orders')
-// { name: 'clean_orders', layer: 'silver', row_count: 15000, ... }
+// Get table detail + metadata
+const detail = await client.tables.get('ecommerce', 'silver', 'clean_orders')
 
-// Get table history (Iceberg snapshots)
-const history = await client.tables.history('ecommerce', 'silver', 'clean_orders')
+// Read the table schema
+const schema = await client.tables.schema({ namespace: 'ecommerce', layer: 'silver' })
+
+// Preview rows from a table (returns a QueryResult)
+const preview = await client.tables.preview('ecommerce', 'silver', 'clean_orders')
+
+// Update table documentation
+await client.tables.updateMetadata('ecommerce', 'silver', 'clean_orders', {
+  description: 'Cleaned orders',
+  column_descriptions: { order_id: 'Unique order identifier' },
+})
 ```
 
 ### storage
 
-Manage files in S3 (pipeline code, landing zone files, etc.).
+Manage files in S3 (pipeline code, etc.).
 
 ```typescript
-// List files in a path
+// List files under a prefix
 const files = await client.storage.list('ecommerce/pipelines/silver/clean_orders/')
 
 // Read a file
@@ -205,8 +219,8 @@ await client.storage.write('ecommerce/pipelines/silver/clean_orders/pipeline.sql
 // Delete a file
 await client.storage.delete('ecommerce/pipelines/silver/clean_orders/old_file.sql')
 
-// Upload a file to a landing zone
-await client.storage.upload('ecommerce/landing/orders/data.csv', fileBuffer)
+// Upload a file (multipart) — file is a File/Blob
+await client.storage.upload('ecommerce/landing/orders/data.csv', fileBlob, 'data.csv')
 ```
 
 ### namespaces
@@ -217,10 +231,11 @@ Manage namespaces (organizational containers for pipelines).
 // List all namespaces
 const namespaces = await client.namespaces.list()
 
-// Create a namespace
-const ns = await client.namespaces.create({ name: 'ecommerce' })
+// Create a namespace (takes a string, not an object)
+const ns = await client.namespaces.create('ecommerce')
 
-// Delete a namespace
+// Update / delete
+await client.namespaces.update('ecommerce', { description: 'Storefront data' })
 await client.namespaces.delete('ecommerce')
 ```
 
@@ -229,39 +244,34 @@ await client.namespaces.delete('ecommerce')
 Manage landing zones (upload targets for external data).
 
 ```typescript
-// List landing zones in a namespace
-const zones = await client.landing.list('ecommerce')
+// List landing zones (optional namespace filter)
+const zones = await client.landing.list({ namespace: 'ecommerce' })
 
-// List files in a landing zone
+// List files in a landing zone (namespace, zone name)
 const files = await client.landing.listFiles('ecommerce', 'orders')
 
-// Upload a file to a landing zone
-await client.landing.upload('ecommerce', 'orders', 'batch_001.csv', fileBuffer)
+// Upload a file to a landing zone — uploadFile(ns, zone, file, filename?)
+await client.landing.uploadFile('ecommerce', 'orders', fileBlob, 'batch_001.csv')
 ```
 
 ### triggers
 
-Manage pipeline triggers (cron, event-driven, dependency-aware).
+Manage pipeline triggers (cron, event-driven, dependency-aware). Trigger methods are scoped to a pipeline by `(namespace, layer, name)`.
 
 ```typescript
 // List triggers for a pipeline
 const triggers = await client.triggers.list('ecommerce', 'silver', 'clean_orders')
 
 // Create a cron trigger
-const trigger = await client.triggers.create({
-  pipeline: { namespace: 'ecommerce', layer: 'silver', name: 'clean_orders' },
+const trigger = await client.triggers.create('ecommerce', 'silver', 'clean_orders', {
   type: 'cron',
-  config: {
-    expression: '0 9 * * *',
-  },
+  config: { cron_expr: '0 9 * * *' },
   enabled: true,
 })
 
-// Update a trigger
-await client.triggers.update(trigger.id, { enabled: false })
-
-// Delete a trigger
-await client.triggers.delete(trigger.id)
+// Update / delete a trigger by its id
+await client.triggers.update('ecommerce', 'silver', 'clean_orders', trigger.id, { enabled: false })
+await client.triggers.delete('ecommerce', 'silver', 'clean_orders', trigger.id)
 ```
 
 ### quality
@@ -272,16 +282,15 @@ Manage quality tests for pipelines.
 // List quality tests for a pipeline
 const tests = await client.quality.list('ecommerce', 'silver', 'clean_orders')
 
-// Get quality test results for a run
-const results = await client.quality.results(runId)
-// [{ name: 'no_negative_amounts', status: 'passed', rows: 0 }, ...]
-
 // Create a quality test
 await client.quality.create('ecommerce', 'silver', 'clean_orders', {
   name: 'no_nulls',
   sql: 'SELECT * FROM {{ this }} WHERE order_id IS NULL',
   severity: 'error',
 })
+
+// Run the pipeline's quality tests now
+const result = await client.quality.run('ecommerce', 'silver', 'clean_orders')
 
 // Delete a quality test
 await client.quality.delete('ecommerce', 'silver', 'clean_orders', 'no_nulls')
@@ -292,27 +301,29 @@ await client.quality.delete('ecommerce', 'silver', 'clean_orders', 'no_nulls')
 Explore the data lineage graph.
 
 ```typescript
-// Get lineage for a pipeline (upstream + downstream)
-const lineage = await client.lineage.get('ecommerce', 'silver', 'clean_orders')
-// { upstream: [...], downstream: [...], edges: [...] }
-
-// Get the full lineage graph for a namespace
-const graph = await client.lineage.graph('ecommerce')
+// Get the lineage graph (optional namespace filter) → { nodes, edges }
+const graph = await client.lineage.get({ namespace: 'ecommerce' })
 ```
+
+<Callout type="info">
+Lineage is served by the optional `lineage` plugin. `client.lineage.get()` returns `404` when that plugin isn't installed.
+</Callout>
 
 ### retention
 
 Manage data retention policies.
 
 ```typescript
-// Get retention config
-const config = await client.retention.get()
-
-// Update retention settings
-await client.retention.update({
-  run_ttl_days: 30,
-  orphan_branch_ttl_hours: 24,
+// Get / update system retention config
+const config = await client.retention.getConfig()
+await client.retention.updateConfig({
+  stuck_run_timeout_minutes: 30,
+  reaper_interval_minutes: 15,
 })
+
+// Reaper status + manual trigger
+const status = await client.retention.getStatus()
+await client.retention.triggerRun()
 ```
 
 ---
@@ -338,11 +349,11 @@ import {
 
 | Error Class | HTTP Status | When |
 |---|---|---|
-| `AuthenticationError` | 401 | Missing or invalid API key / token |
-| `AuthorizationError` | 403 | Valid credentials but insufficient permissions |
+| `AuthenticationError` | 401 | Missing or invalid API key / token (only when auth is enabled) |
+| `AuthorizationError` | 403 | Valid credentials but insufficient permissions (only with the enforcement plugin) |
 | `NotFoundError` | 404 | Resource does not exist |
 | `ConflictError` | 409 | Resource already exists or version conflict |
-| `ValidationError` | 422 | Invalid request body (missing fields, bad types) |
+| `ValidationError` | 400/422 | Invalid request body (missing fields, bad types) |
 | `ServerError` | 500+ | Internal server error |
 | `ConnectionError` | — | Network error, timeout, DNS failure |
 
@@ -362,9 +373,9 @@ interface RatError extends Error {
 ### Example Usage
 
 ```typescript
-import { createClient, NotFoundError, ValidationError } from '@squat-collective/rat-client'
+import { RatClient, NotFoundError, ValidationError } from '@squat-collective/rat-client'
 
-const client = createClient({ baseUrl: 'http://localhost:8080' })
+const client = new RatClient({ apiUrl: 'http://localhost:8080' })
 
 try {
   const pipeline = await client.pipelines.get('ecommerce', 'silver', 'clean_orders')
@@ -401,8 +412,8 @@ The SDK automatically retries **idempotent** requests on transient failures. Onl
 All requests have a default timeout of **30 seconds**. Override per-client:
 
 ```typescript
-const client = createClient({
-  baseUrl: 'http://localhost:8080',
+const client = new RatClient({
+  apiUrl: 'http://localhost:8080',
   timeout: 60_000, // 60 seconds
 })
 ```
@@ -412,17 +423,14 @@ const client = createClient({
 Interceptors let you modify requests before they are sent and responses before they are processed. Common use cases: logging, adding custom headers, metrics.
 
 ```typescript
-const client = createClient({
-  baseUrl: 'http://localhost:8080',
+const client = new RatClient({
+  apiUrl: 'http://localhost:8080',
   onRequest: (request) => {
-    // Add a custom header
     request.headers.set('X-Request-ID', crypto.randomUUID())
-    // Log the outgoing request
     console.log(`→ ${request.method} ${request.url}`)
     return request
   },
   onResponse: (response) => {
-    // Log response timing
     console.log(`← ${response.status} (${response.headers.get('x-response-time')})`)
     return response
   },
@@ -436,10 +444,10 @@ const client = createClient({
 ### Poll for Run Completion
 
 ```typescript
-async function waitForRun(client: RatClient, runId: string): Promise<RunStatus> {
+async function waitForRun(client: RatClient, runId: string): Promise<Run> {
   while (true) {
     const run = await client.runs.get(runId)
-    if (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') {
+    if (run.status === 'success' || run.status === 'failed' || run.status === 'cancelled') {
       return run
     }
     await new Promise((resolve) => setTimeout(resolve, 2000))
@@ -447,29 +455,29 @@ async function waitForRun(client: RatClient, runId: string): Promise<RunStatus> 
 }
 
 // Usage
-const run = await client.runs.create({
+const created = await client.runs.create({
   namespace: 'ecommerce',
   layer: 'silver',
-  name: 'clean_orders',
+  pipeline: 'clean_orders',
   trigger: 'manual',
 })
-const result = await waitForRun(client, run.id)
+const result = await waitForRun(client, created.run_id)
 console.log(`Run ${result.status}: ${result.duration_ms}ms`)
 ```
 
-### Trigger and Stream Logs
+### Trigger and Read Logs
 
 ```typescript
-const run = await client.runs.create({
+const created = await client.runs.create({
   namespace: 'ecommerce',
   layer: 'silver',
-  name: 'clean_orders',
+  pipeline: 'clean_orders',
   trigger: 'manual',
 })
 
-for await (const log of client.runs.streamLogs(run.id)) {
-  const timestamp = new Date(log.timestamp).toISOString()
-  console.log(`[${timestamp}] [${log.level}] ${log.message}`)
+const { logs } = await client.runs.logs(created.run_id)
+for (const log of logs) {
+  console.log(`[${new Date(log.timestamp).toISOString()}] [${log.level}] ${log.message}`)
 }
 ```
 
@@ -477,29 +485,28 @@ for await (const log of client.runs.streamLogs(run.id)) {
 
 ```typescript
 // List all pipelines across all namespaces
-const allPipelines = await client.pipelines.list()
+const { pipelines } = await client.pipelines.list()
 
 // Group by layer
-const byLayer = Object.groupBy(allPipelines, (p) => p.layer)
+const byLayer = Object.groupBy(pipelines, (p) => p.layer)
 console.log(`Bronze: ${byLayer.bronze?.length ?? 0}`)
 console.log(`Silver: ${byLayer.silver?.length ?? 0}`)
 console.log(`Gold: ${byLayer.gold?.length ?? 0}`)
 ```
 
-### Upload Data to Landing Zone
+### Upload Data to a Landing Zone
 
 ```typescript
 import { readFileSync } from 'fs'
 
-const csvData = readFileSync('./orders_2026_02.csv')
-await client.landing.upload('ecommerce', 'orders', 'orders_2026_02.csv', csvData)
-console.log('File uploaded to landing zone')
+const csv = new Blob([readFileSync('./orders_2026_02.csv')])
+await client.landing.uploadFile('ecommerce', 'orders', csv, 'orders_2026_02.csv')
 
 // Trigger the Bronze ingestion pipeline
-const run = await client.runs.create({
+await client.runs.create({
   namespace: 'ecommerce',
   layer: 'bronze',
-  name: 'raw_orders',
+  pipeline: 'raw_orders',
   trigger: 'manual',
 })
 ```
@@ -514,7 +521,7 @@ The SDK source lives at `sdk-typescript/` in the monorepo. To build and test:
 # Build the SDK (ESM + CJS + DTS)
 make sdk-build
 
-# Run SDK tests (27 vitest tests)
+# Run SDK tests
 make sdk-test
 ```
 

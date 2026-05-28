@@ -9,11 +9,11 @@
 
 ## Executive Summary
 
-RAT v2 is a well-designed data platform for its stated target: a single-user, self-hosted "SQLite of data platforms." The Go-based API server (ratd), Python execution sidecars (runner, ratq), and Next.js portal form a clean microservices architecture with good separation of concerns. The plugin system is one of the strongest architectural decisions — it cleanly separates Community and Pro editions without contaminating the core.
+RAT v2 is a well-designed data platform for its stated target: a single-user, self-hosted "SQLite of data platforms." The Go-based API server (ratd), Python execution sidecars (runner, ratq), and Next.js portal form a clean microservices architecture with good separation of concerns. The plugin system is one of the strongest architectural decisions — it cleanly separates the single-user core from optional multi-user capabilities without contaminating the core.
 
-However, there are significant architectural gaps that will become friction points as the platform scales toward multi-user Pro deployments. The system is predominantly synchronous and pull-based, lacking event-driven patterns that distributed data platforms require. There is no message queue, no distributed tracing, no circuit breakers, and several single-points-of-failure. The Iceberg merge strategy (full table overwrite) is a scalability time-bomb. The in-memory run registry in the runner is fragile against crashes.
+However, there are significant architectural gaps that will become friction points as the platform scales toward multi-user deployments. The system is predominantly synchronous and pull-based, lacking event-driven patterns that distributed data platforms require. There is no message queue, no distributed tracing, no circuit breakers, and several single-points-of-failure. The Iceberg merge strategy (full table overwrite) is a scalability time-bomb. The in-memory run registry in the runner is fragile against crashes.
 
-**Overall Assessment**: Strong foundation for Community Edition. **Not production-ready for multi-user Pro deployments** without addressing the critical and high-severity findings below.
+**Overall Assessment**: Strong foundation for single-user deployments. **Not production-ready for multi-user deployments** without addressing the critical and high-severity findings below.
 
 ### Finding Summary
 
@@ -96,7 +96,7 @@ Portal --> ratd --> runner   (gRPC)
 
 - **Current State**: Single DuckDB connection in `query/src/rat_query/engine.py`. No per-query timeout or memory limit.
 - **Risk**: One large query can exhaust memory for all other queries.
-- **Recommendation**: Add per-query timeout, memory tracking, and consider multiple ratq replicas for Pro.
+- **Recommendation**: Add per-query timeout, memory tracking, and consider multiple ratq replicas for multi-user deployments.
 
 #### F-07: Postgres as Bottleneck — `LOW`
 
@@ -179,7 +179,7 @@ Portal --> ratd --> runner   (gRPC)
 #### F-19: No Message Queue or Event Bus — `HIGH`
 
 - **Current State**: All communication is synchronous. Trigger evaluator polls every 30s. No way to add consumers without modifying ratd.
-- **Recommendation**: Postgres `LISTEN/NOTIFY` for events (`run.completed`, `pipeline.created`). Zero new dependencies for Community. Enables trigger evaluator to react instantly.
+- **Recommendation**: Postgres `LISTEN/NOTIFY` for events (`run.completed`, `pipeline.created`). Zero new dependencies for the single-user default. Enables trigger evaluator to react instantly.
 
 ---
 
@@ -227,7 +227,7 @@ Portal --> ratd --> runner   (gRPC)
 #### F-26: No Blue-Green or Canary Deployment Support — `LOW`
 
 - **Current State**: Docker Compose is the only deployment model. Upgrades require downtime.
-- **Recommendation**: For Community, acceptable. For Pro, document Kubernetes deployment with rolling updates.
+- **Recommendation**: For single-user deployments, acceptable. For multi-user deployments, document Kubernetes deployment with rolling updates.
 
 #### F-27: No Feature Flags for Gradual Rollout — `SUGGESTION`
 
@@ -238,7 +238,7 @@ Portal --> ratd --> runner   (gRPC)
 
 ### 10. Multi-Tenancy
 
-#### F-28: No Resource Quotas or Isolation — `HIGH` (Pro)
+#### F-28: No Resource Quotas or Isolation — `HIGH` (multi-user)
 
 - **Current State**: All users share the same runner, ratq, and storage. No CPU/memory quotas per user, no query timeout per user, no storage quota per namespace.
 - **Risk**: Classic noisy neighbor problem.
@@ -290,11 +290,11 @@ Portal --> ratd --> runner   (gRPC)
 
 ### 14. API Gateway
 
-#### F-35: Rate Limiting is Per-Process, Not Distributed — `MEDIUM` (Pro)
+#### F-35: Rate Limiting is Per-Process, Not Distributed — `MEDIUM` (multi-user)
 
 - **Current State**: In-memory token bucket per IP per ratd process.
 - **Risk**: With N replicas, effective rate limit is Nx configured value.
-- **Recommendation**: For Pro, use Redis-backed rate limiter shared across replicas.
+- **Recommendation**: For multi-replica deployments, use Redis-backed rate limiter shared across replicas.
 
 ---
 
@@ -307,17 +307,17 @@ Portal --> ratd --> runner   (gRPC)
   1. Document backup strategy: Postgres `pg_dump` daily, MinIO `mc mirror`.
   2. Add `make backup` target.
   3. Test restore procedure regularly.
-  4. For Pro: integrate with cloud-native backup (RDS snapshots, S3 cross-region replication).
+  4. For cloud deployments: integrate with cloud-native backup (RDS snapshots, S3 cross-region replication).
 
 ---
 
 ### 16. Security
 
-#### F-37: Python Pipeline exec() is a Code Execution Risk — `HIGH` (Pro multi-user)
+#### F-37: Python Pipeline exec() is a Code Execution Risk — `HIGH` (multi-user)
 
 - **Current State**: Python pipelines execute arbitrary code via `exec()` with no sandboxing beyond blocked builtins.
-- **Risk**: In single-user Community mode, acceptable. In multi-user Pro mode, one user could execute arbitrary OS commands.
-- **Recommendation**: For Pro with ContainerExecutor: add `--security-opt=no-new-privileges`, drop capabilities, read-only filesystem, non-root user. Add `python_exec_enabled` feature flag defaulting to off in Pro multi-user mode.
+- **Risk**: In single-user mode, acceptable. In multi-user mode, one user could execute arbitrary OS commands.
+- **Recommendation**: For multi-user deployments with ContainerExecutor: add `--security-opt=no-new-privileges`, drop capabilities, read-only filesystem, non-root user. Add `python_exec_enabled` feature flag defaulting to off in multi-user mode.
 
 ---
 
@@ -331,7 +331,7 @@ Portal --> ratd --> runner   (gRPC)
 4. **F-09**: Add circuit breakers and retries on Nessie/S3 calls
 5. **F-12**: Implement backpressure (pending run limits)
 
-### Phase 2 — Before Pro GA
+### Phase 2 — Before multi-user GA
 
 6. **F-01**: Separate scheduler/reaper from API server (leader election)
 7. **F-17**: Make Postgres the single source of truth for run status
@@ -365,7 +365,7 @@ Portal --> ratd --> runner   (gRPC)
 | `platform/internal/api/ratelimit.go` | Per-IP rate limiting |
 | `platform/internal/api/audit.go` | Audit logging middleware |
 | `platform/internal/api/runs.go` | Run management endpoints |
-| `platform/internal/executor/warmpool.go` | Community executor (polling) |
+| `platform/internal/executor/warmpool.go` | Local warm-pool executor (polling) |
 | `platform/internal/scheduler/scheduler.go` | Cron scheduler |
 | `platform/internal/trigger/evaluator.go` | Trigger evaluator |
 | `platform/internal/reaper/reaper.go` | Data retention daemon |

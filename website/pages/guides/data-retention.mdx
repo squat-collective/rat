@@ -70,10 +70,10 @@ Click **Save**. The reaper picks up the new configuration on its next tick (with
 
 ```bash filename="Terminal"
 # Get current retention config
-curl http://localhost:8080/api/v1/settings/retention
+curl http://localhost:8080/api/v1/admin/retention/config
 
 # Update retention config
-curl -X PUT http://localhost:8080/api/v1/settings/retention \
+curl -X PUT http://localhost:8080/api/v1/admin/retention/config \
   -H "Content-Type: application/json" \
   -d '{
     "runs_max_per_pipeline": 50,
@@ -101,13 +101,11 @@ Individual pipelines can override the system-wide retention settings. This is us
 In the Pipeline **Settings** tab, expand the **Retention Override** section. Any field left blank uses the system default.
 
 ```bash filename="API Override"
-curl -X PATCH http://localhost:8080/api/v1/pipelines/{ns}/{layer}/{name} \
+curl -X PUT http://localhost:8080/api/v1/pipelines/{ns}/{layer}/{name}/retention \
   -H "Content-Type: application/json" \
   -d '{
-    "retention_config": {
-      "runs_max_per_pipeline": 500,
-      "runs_max_age_days": 365
-    }
+    "runs_max_per_pipeline": 500,
+    "runs_max_age_days": 365
   }'
 ```
 
@@ -167,7 +165,7 @@ Audit log entries older than `audit_log_max_age_days` are permanently deleted.
 You can trigger the reaper immediately without waiting for the next scheduled tick:
 
 ```bash filename="Terminal"
-curl -X POST http://localhost:8080/api/v1/settings/retention/reap
+curl -X POST http://localhost:8080/api/v1/admin/retention/run
 ```
 
 This runs a full reaper cycle and returns the cleanup statistics:
@@ -211,7 +209,7 @@ Landing zones have their own retention model:
 Set these in the landing zone settings:
 
 ```bash filename="Terminal"
-curl -X PATCH http://localhost:8080/api/v1/landing-zones/{ns}/{zone_name} \
+curl -X PUT http://localhost:8080/api/v1/landing-zones/{ns}/{zone_name}/lifecycle \
   -H "Content-Type: application/json" \
   -d '{
     "auto_purge": true,
@@ -232,7 +230,7 @@ Setting `processed_max_age_days` too low risks deleting files before you have a 
 Check the last reaper run and its results:
 
 ```bash filename="Terminal"
-curl http://localhost:8080/api/v1/settings/retention/status
+curl http://localhost:8080/api/v1/admin/retention/status
 ```
 
 ```json filename="Response"

@@ -247,7 +247,7 @@ Delay in seconds between retry attempts. Uses a fixed delay (not exponential bac
 | Property | Value |
 |---|---|
 | **Type** | integer |
-| **Default** | `0` |
+| **Default** | `30` |
 | **Required** | No |
 
 ```sql
@@ -270,7 +270,7 @@ Delay in seconds between retry attempts. Uses a fixed delay (not exponential bac
 | `@scd_valid_to` | string | `valid_to` | — | SCD2 validity end column |
 | `@archive_landing_zones` | boolean | `false` | — | Move landing files after success |
 | `@max_retries` | integer | `0` | — | Retry attempts on failure |
-| `@retry_delay_seconds` | integer | `0` | — | Delay between retries |
+| `@retry_delay_seconds` | integer | `30` | — | Delay between retries |
 
 ---
 
@@ -412,9 +412,9 @@ RAT validates annotations at pipeline registration time and again at the start o
 | Validation | Error |
 |---|---|
 | Unknown annotation key | Warning (logged, not blocking) |
-| Missing `@unique_key` for `incremental` strategy | Error (run fails) |
-| Missing `@watermark_column` for `incremental` strategy | Error (run fails) |
-| Missing `@partition_column` for `snapshot` strategy | Error (run fails) |
+| Missing `@unique_key` for `incremental`/`delete_insert`/`scd2` strategy | Warning (logged) — falls back to `full_refresh`, run continues |
+| Missing `@watermark_column` for `incremental` strategy | Warning (logged) — falls back to `full_refresh`, run continues |
+| Missing `@partition_column` for `snapshot` strategy | Warning (logged) — falls back to `full_refresh`, run continues |
 | Invalid `@merge_strategy` value | Error (run fails) |
 | Invalid `@severity` value in quality test | Error (defaults to `error`) |
 | `@max_retries` is not a positive integer | Error (run fails) |

@@ -396,7 +396,7 @@ WHERE event_time > '{{ watermark_value }}'
 
 SELECT *
 FROM read_csv_auto(
-    {{ landing_zone('raw_orders') }},
+    '{{ landing_zone('raw_orders') }}',
     header = true,
     all_varchar = true,
     ignore_errors = true
@@ -415,7 +415,7 @@ Using `all_varchar = true` reads all columns as strings. This prevents type infe
 
 SELECT *
 FROM read_parquet(
-    {{ landing_zone('raw_events') }},
+    '{{ landing_zone('raw_events') }}',
     hive_partitioning = false
 )
 ```
@@ -428,7 +428,7 @@ FROM read_parquet(
 
 SELECT *
 FROM read_json_auto(
-    {{ landing_zone('api_responses') }},
+    '{{ landing_zone('api_responses') }}',
     maximum_object_size = 10485760
 )
 ```
@@ -442,7 +442,7 @@ When CSV files have known schema issues, define the schema explicitly:
 
 SELECT *
 FROM read_csv(
-    {{ landing_zone('raw_products') }},
+    '{{ landing_zone('raw_products') }}',
     columns = {
         'product_id': 'VARCHAR',
         'name': 'VARCHAR',
@@ -468,7 +468,7 @@ When a landing zone receives mixed file types:
 
 SELECT *, 'csv' AS _source_format
 FROM read_csv_auto(
-    {{ landing_zone('raw_data') }},
+    '{{ landing_zone('raw_data') }}',
     filename = true,
     header = true,
     ignore_errors = true
@@ -513,7 +513,7 @@ All variables available in pipeline SQL templates:
 |---|---|---|
 | `{{ ref('layer.name') }}` | Function | Resolves to `iceberg_scan()` of the referenced table |
 | `{{ ref('ns.layer.name') }}` | Function | Cross-namespace reference |
-| `{{ landing_zone('zone') }}` | Function | Resolves to S3 glob for landing zone files |
+| `{{ landing_zone('zone') }}` | Function | Resolves to the S3 glob path for landing zone files (wrap in a reader, e.g. `read_csv_auto('{{ landing_zone("zone") }}')`) |
 | `{{ this }}` | String | Current pipeline's own output table reference |
 | `{{ run_started_at }}` | String | ISO timestamp of the current run start |
 | `{{ watermark_value }}` | String | Max value of the watermark column (incremental only) |

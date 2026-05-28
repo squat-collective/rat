@@ -75,8 +75,8 @@ All services should show `Up` and `(healthy)`:
 
 ```
 NAME        STATUS                  PORTS
-postgres    Up 30s (healthy)        127.0.0.1:5432->5432/tcp
-minio       Up 30s (healthy)        127.0.0.1:9000->9000/tcp, 127.0.0.1:9001->9001/tcp
+postgres    Up 30s (healthy)        127.0.0.1:5433->5432/tcp
+minio       Up 30s (healthy)        127.0.0.1:9002->9000/tcp, 127.0.0.1:9003->9001/tcp
 nessie      Up 30s (healthy)        127.0.0.1:19120->19120/tcp
 ratd        Up 25s (healthy)        0.0.0.0:8080->8080/tcp
 runner      Up 20s (healthy)        50052/tcp
@@ -129,8 +129,8 @@ make dev-ratd
 ```
 
 This runs `ratd` outside the compose stack but on the same Docker network, so it can reach Postgres, MinIO, and other services. It exposes:
-- Port **8080** (REST API)
-- Port **8081** (gRPC)
+- Port **8080** (public REST API)
+- Port **8090** (internal listener — unauthenticated service-to-service callbacks; not published to the host in compose)
 
 <Callout type="warning">
 When using `make dev-ratd`, stop the `ratd` container in the compose stack first to avoid port conflicts:
@@ -284,9 +284,10 @@ chore(infra): update postgres to 16.2
 |---|---|---|---|
 | **Portal** | 3000 | [localhost:3000](http://localhost:3000) | Always (main interface) |
 | **API (ratd)** | 8080 | [localhost:8080](http://localhost:8080) | API development, debugging |
-| **MinIO Console** | 9001 | [localhost:9001](http://localhost:9001) | Browsing S3 data |
+| **MinIO Console** | 9003 | [localhost:9003](http://localhost:9003) | Browsing S3 data |
+| **MinIO API (S3)** | 9002 | `localhost:9002` | S3 API access |
 | **Nessie** | 19120 | [localhost:19120](http://localhost:19120) | Iceberg catalog debugging |
-| **Postgres** | 5432 | `localhost:5432` | Database debugging |
+| **Postgres** | 5433 | `localhost:5433` | Database debugging |
 
 <Callout type="info">
 Postgres, MinIO, and Nessie bind to `127.0.0.1` (localhost only). They are accessible from your machine but not from the network.

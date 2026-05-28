@@ -2,7 +2,7 @@
 
 > *"In the sewer, we transform data faster than anyone above ground."*
 
-RAT is a self-hostable data platform. Community Edition is free, open-source, single-user. Pro Edition adds multi-user, sharing, and cloud via closed-source container plugins. **"v2"** is the codename for the full rewrite, *not* the SemVer version — releases are `0.x` (the plugin contract isn't frozen yet). Stack: Go platform (`ratd`) + Python execution (runner, query) + Next.js portal.
+RAT is a self-hostable data platform. It's **100% free and open-source** — one platform, no editions or tiers. It runs single-user out of the box; multi-user, sharing, and cloud are free, optional plugins you install when you need them. **"v2"** is the codename for the full rewrite, *not* the SemVer version — releases are `0.x` (the plugin contract isn't frozen yet). Stack: Go platform (`ratd`) + Python execution (runner, query) + Next.js portal.
 
 ## Where the rules live
 
@@ -39,18 +39,18 @@ nessie          — Iceberg REST catalog
 ## Repository structure
 
 ```
-ratatouille/                 # PUBLIC community monorepo
+ratatouille/                 # PUBLIC monorepo
 ├── platform/                # Go — ratd
 ├── runner/  query/          # Python — pipeline execution / query sidecar
 ├── portal/                  # Next.js — web IDE
 ├── sdk-typescript/  sdk-go/ # SDKs (portal / plugins)
 ├── proto/                   # shared gRPC protobuf
-├── plugins/                 # community plugins (Go containers + Python pkgs)
+├── plugins/                 # optional plugins (Go containers + Python pkgs)
 ├── infra/                   # docker compose, configs, scripts
 ├── docs/                    # architecture docs, ADRs, migrations
 └── Makefile                 # root orchestrator
 ```
-`ratatouille-pro/` is a separate private repo (Pro plugins, Keycloak realm).
+`ratatouille-pro/` is a separate repo holding the auth (Keycloak), executor, sharing, and cloud plugins + the Keycloak realm config.
 
 ---
 
@@ -94,4 +94,4 @@ No secrets in code (env vars only). Validate all input at API boundaries. **Para
 
 ## Reference
 
-`docs/v2-strategy.md` (architecture source of truth) · `docs/config.md` · `docs/api-spec.md` · `docs/adr/` · `docs/migrations/` · v1 codebase: `~/sandbox/ratatouille/` · Pro plugins: `~/sandbox/ratatouille-v2/ratatouille-pro/`.
+`docs/v2-strategy.md` (architecture source of truth) · `docs/config.md` · `docs/api-spec.md` · `docs/adr/` · `docs/migrations/` · v1 codebase: `~/sandbox/ratatouille/` · auth/executor/sharing/cloud plugins: `~/sandbox/ratatouille-v2/ratatouille-pro/`.

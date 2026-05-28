@@ -170,8 +170,8 @@ These are the only tools you need — no imports required for the basics.
 | `landing_zone` | `Callable[[str], str]` | Returns the S3 glob path for a named landing zone. Same as SQL `{{ landing_zone() }}`. |
 | `this` | `str` | Current pipeline's own Iceberg table path. Used for self-referencing in incremental pipelines. |
 | `run_started_at` | `str` | ISO 8601 UTC timestamp of the current run. Useful for `_loaded_at` columns. |
-| `is_incremental` | `bool` | `True` if the merge strategy is `incremental` and the target table already exists. |
-| `config` | `dict` | Parsed `config.yaml` contents (or empty dict if no config file exists). |
+| `is_incremental` | `bool` | `True` whenever the merge strategy is `incremental`. (The first run differs by an empty `watermark_value`, not by this flag.) |
+| `config` | `PipelineConfig` or `None` | The parsed pipeline config as a **frozen `PipelineConfig` object** (read fields as attributes, e.g. `config.merge_strategy`). It is `None` when there is no config block — it is **not** a dict. |
 | `log` | `Logger` | Python logger instance. Use `log.info()`, `log.warning()`, `log.error()` for run logs. |
 | `result` | `None` | The output variable. **You must set this to a `pa.Table`** before the pipeline finishes. |
 
@@ -195,15 +195,23 @@ pipelines from interfering with the runner process or accessing the host system.
 | `exec()` | Arbitrary code execution |
 | `eval()` | Arbitrary code execution |
 | `compile()` | Code compilation |
-| `__import__()` | Unrestricted module loading |
 | `open()` | Filesystem access |
-| `globals()` | Scope manipulation |
+| `globals()` / `locals()` / `vars()` | Scope manipulation |
+| `getattr()` / `setattr()` / `delattr()` | Attribute access (reaches `__subclasses__`) |
+| `type()` / `isinstance()` / `hasattr()` | Type introspection chains |
 | `breakpoint()` | Debugger access |
-| `input()` | Would hang the runner |
+| `input()` / `help()` | Would hang the runner |
+
+<Callout type="info">
+`__import__` is **not** blocked — it is replaced with a *restricted* importer. Normal
+`import` statements work; importing a blocked module raises `ImportError`. (PyArrow's
+C++ code calls `__import__` internally, so removing it entirely would crash the runner.)
+</Callout>
 
 ### Allowed Imports
 
-You **can** import these modules — they are explicitly allowed:
+You **can** import these modules — anything not on the blocklist that happens to be
+installed:
 
 | Category | Modules |
 |---|---|
@@ -212,18 +220,20 @@ You **can** import these modules — they are explicitly allowed:
 | **Dates** | `datetime` |
 | **Text** | `re`, `string`, `textwrap`, `base64` |
 | **Collections** | `collections`, `itertools`, `functools`, `operator` |
-| **Utilities** | `hashlib`, `uuid`, `struct`, `io`, `copy`, `enum`, `abc`, `warnings`, `contextlib` |
+| **Utilities** | `hashlib`, `uuid`, `struct`, `io`, `copy`, `enum`, `warnings`, `contextlib` |
 | **Typing** | `dataclasses`, `typing` |
 
 ### Blocked Imports
 
-Everything else is blocked — notably `os`, `sys`, `subprocess`, `socket`, `http`, `requests`,
-`urllib`, `pathlib`, `importlib`, `ctypes`, `multiprocessing`, and `threading`.
+The importer rejects these modules — notably `os`, `sys`, `subprocess`, `socket`, `http`,
+`pathlib`, `tempfile`, `glob`, `importlib`, `ctypes`, `multiprocessing`, `threading`,
+`concurrent`, `builtins`, `inspect`, `gc`, `types`, `abc`, `pickle`, and `marshal`.
 
-<Callout type="warning">
-If you need to fetch data from an HTTP endpoint, use DuckDB's built-in HTTP extension
-via `duckdb_conn` rather than trying to import `requests`. The sandbox blocks direct
-network access from Python, but DuckDB can reach external URLs.
+<Callout type="info">
+Network libraries like `requests` and `urllib` are **not** on the blocklist — they
+simply are not installed in the pipeline environment. If you need to fetch data from an
+HTTP endpoint, use DuckDB's built-in HTTP extension via `duckdb_conn`, which can reach
+external URLs.
 </Callout>
 
 ### AST Validation
@@ -282,7 +292,7 @@ reliability trends.
 In this part, you:
 
 - ✅ Created a **Python pipeline** (`launch_vehicle_stats`) using DuckDB + PyArrow
-- ✅ Learned all **10 available globals** and how they work
+- ✅ Learned the available globals (including the frozen `config` object) and how they work
 - ✅ Understood the **`result` contract** — every Python pipeline must set it to a PyArrow table
 - ✅ Explored the **security sandbox** — what's allowed and what's blocked
 - ✅ Queried the results to verify the computed statistics

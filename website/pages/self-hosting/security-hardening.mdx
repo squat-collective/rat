@@ -137,14 +137,14 @@ The portal sends this header automatically when configured with the same key.
 Generate a strong API key using `openssl rand -hex 32` (produces a 64-character hex string).
 </Callout>
 
-### Plugin Authentication (Pro Edition)
+### Plugin Authentication (optional auth plugin)
 
-The Pro Edition supports plugin-based authentication via the `auth` plugin slot. The most common plugin is `auth-keycloak`, which validates JWT tokens against a Keycloak instance:
+For multi-user setups, install the optional auth plugin via the `auth` slot. The most common is `auth-keycloak`, which validates JWT tokens against a Keycloak instance. `plugins` is a map keyed by slot name → `{ addr, config }`:
 
 ```yaml filename="rat.yaml"
 plugins:
-  - name: auth-keycloak
-    path: /plugins/auth-keycloak
+  auth:
+    addr: auth-keycloak:50060
     config:
       issuer_url: https://keycloak.example.com/realms/rat
       client_id: rat-platform
@@ -182,7 +182,7 @@ CORS_ORIGINS=https://rat.yourdomain.com
 # Multiple origins (staging + production)
 CORS_ORIGINS=https://rat.yourdomain.com,https://staging.rat.yourdomain.com
 
-# Development (default)
+# Development (CORS is off by default — set this when the portal runs on a different origin)
 CORS_ORIGINS=http://localhost:3000
 ```
 
@@ -198,16 +198,15 @@ Never use `CORS_ORIGINS=*` in production. This allows any website to make authen
 
 | Variable | Default | Description |
 |---|---|---|
-| `RATE_LIMIT` | `50` | Maximum requests per second per client IP |
+| `RATE_LIMIT` | `50` req/s | On/off switch, not a tunable number. Any non-zero value enables a fixed 50 req/s per-IP limiter; `"0"` disables it |
 
-### Tuning
+### Enabling / disabling
+
+`RATE_LIMIT` is **not** a tunable threshold — `ratd` only checks whether it is non-zero. Any non-zero value enables the same fixed 50 req/s per-IP limiter; the number itself is ignored.
 
 ```bash
-# Production — moderate rate limiting
-RATE_LIMIT=100
-
-# High-traffic — increase limit
-RATE_LIMIT=500
+# Enable the built-in 50 req/s per-IP limiter (any non-zero value works)
+RATE_LIMIT=1
 
 # Behind a reverse proxy — disable (let the proxy handle it)
 RATE_LIMIT=0
@@ -321,7 +320,7 @@ Infrastructure services (Postgres, MinIO, Nessie) bind to `127.0.0.1` on the hos
 ```yaml
 postgres:
   ports:
-    - "127.0.0.1:5432:5432"  # localhost only
+    - "127.0.0.1:5433:5432"  # localhost only (host 5433 → container 5432)
 ```
 
 ### Production Recommendation
