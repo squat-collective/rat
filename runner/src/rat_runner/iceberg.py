@@ -278,7 +278,7 @@ def _build_delete_filter_single_key(
     can push down to data file pruning.
     """
     # Convert PyArrow array to Python list for PyIceberg's In() expression.
-    if isinstance(values, (pa.Array, pa.ChunkedArray)):
+    if isinstance(values, pa.Array | pa.ChunkedArray):
         py_values = values.to_pylist()
     else:
         py_values = list(values)
@@ -331,7 +331,7 @@ def _build_delete_filter_composite_key(
 
     def _row_predicate(row: tuple[object, ...]) -> And:
         predicates = []
-        for col, val in zip(key_columns, row):
+        for col, val in zip(key_columns, row, strict=False):
             if val is None:
                 predicates.append(IsNull(col))
             else:

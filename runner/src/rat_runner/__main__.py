@@ -46,9 +46,7 @@ def _auto_install_plugins() -> None:
     if not _PLUGIN_DIR.is_dir():
         return
 
-    packages = sorted(
-        p.parent for p in _PLUGIN_DIR.glob("*/pyproject.toml")
-    )
+    packages = sorted(p.parent for p in _PLUGIN_DIR.glob("*/pyproject.toml"))
     if not packages:
         return
 
@@ -60,8 +58,13 @@ def _auto_install_plugins() -> None:
     )
 
     cmd = [
-        sys.executable, "-m", "pip", "install",
-        "--user", "--quiet", "--no-cache-dir",
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--user",
+        "--quiet",
+        "--no-cache-dir",
         *[str(p) for p in packages],
     ]
     try:

@@ -227,9 +227,7 @@ def _detect_pipeline(
         plugin_type = registry.get_pipeline_type(type_name)
         if plugin_type is None:
             continue
-        ext_source = read_s3_text(
-            s3_config, f"{prefix}/pipeline.{plugin_type.file_extension}"
-        )
+        ext_source = read_s3_text(s3_config, f"{prefix}/pipeline.{plugin_type.file_extension}")
         if ext_source is not None:
             log.info(f"Detected {type_name} pipeline")
             config = _load_config(ext_source, prefix, s3_config, registry)

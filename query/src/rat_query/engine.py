@@ -166,19 +166,16 @@ class QueryEngine:
                 # Single-quote escape — the URL is from env, not user input,
                 # but we still avoid string-format injection.
                 safe_url = self._userdata_pg.url.replace("'", "''")
-                safe_alias = _validate_identifier(
-                    self._userdata_pg.alias, "postgres alias"
-                )
+                safe_alias = _validate_identifier(self._userdata_pg.alias, "postgres alias")
                 conn.execute(
                     f"ATTACH IF NOT EXISTS '{safe_url}' "
-                    f"AS \"{safe_alias}\" (TYPE postgres, READ_ONLY false)"
+                    f'AS "{safe_alias}" (TYPE postgres, READ_ONLY false)'
                 )
-                logger.info(
-                    "attached userdata postgres as '%s'", safe_alias
-                )
+                logger.info("attached userdata postgres as '%s'", safe_alias)
             except Exception:
                 logger.exception(
-                    "failed to attach userdata postgres at %s — federation disabled, queries against userdata.* will fail",
+                    "failed to attach userdata postgres at %s — federation "
+                    "disabled, queries against userdata.* will fail",
                     self._userdata_pg.url,
                 )
 
@@ -323,9 +320,7 @@ class QueryEngine:
             return _to_arrow_table(result.arrow())
         except duckdb.InterruptException as e:
             if timed_out.is_set():
-                raise QueryTimeoutError(
-                    f"query exceeded {effective_timeout}s timeout"
-                ) from e
+                raise QueryTimeoutError(f"query exceeded {effective_timeout}s timeout") from e
             raise
         finally:
             timer.cancel()

@@ -188,7 +188,6 @@ class TestNotifyRunComplete:
         SubmitPipeline gRPC metadata), the callback POST must echo it in the
         X-Request-ID header so ratd's chi RequestID middleware reuses the
         same ID and the run is grep'able across both services' JSON logs."""
-        from unittest.mock import MagicMock
 
         run = _make_terminal_run()
         run.request_id = "trace-abcd-1234"

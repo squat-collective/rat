@@ -160,14 +160,14 @@ class _DunderAccessChecker(ast.NodeVisitor):
     - x.__globals__
     """
 
-    def visit_Attribute(self, node: ast.Attribute) -> None:
+    def visit_Attribute(self, node: ast.Attribute) -> None:  # noqa: N802 — ast.NodeVisitor API mandates the CamelCase node name
         if node.attr in _BLOCKED_DUNDERS:
             raise _SandboxViolationError(
                 f"Access to '{node.attr}' is not allowed in pipelines (line {node.lineno})"
             )
         self.generic_visit(node)
 
-    def visit_Subscript(self, node: ast.Subscript) -> None:
+    def visit_Subscript(self, node: ast.Subscript) -> None:  # noqa: N802 — ast.NodeVisitor API mandates the CamelCase node name
         # Block dict-style access like obj["__class__"]
         if (
             isinstance(node.slice, ast.Constant)

@@ -535,9 +535,7 @@ class TestQueryTimeout:
             mock_result.arrow.return_value = reader
             mock_conn.execute.return_value = mock_result
 
-            engine = QueryEngine(
-                s3_config, DuckDBConfig(query_timeout_seconds=60)
-            )
+            engine = QueryEngine(s3_config, DuckDBConfig(query_timeout_seconds=60))
 
             result = engine.query_arrow("SELECT 1")
             assert isinstance(result, pa.Table)
@@ -558,9 +556,7 @@ class TestQueryTimeout:
 
             # Use a 0.05s deadline so the watchdog fires while the
             # execute() call below is blocked.
-            engine = QueryEngine(
-                s3_config, DuckDBConfig(query_timeout_seconds=1)
-            )
+            engine = QueryEngine(s3_config, DuckDBConfig(query_timeout_seconds=1))
 
             # Simulate a long-running query: execute() blocks until the
             # watchdog calls interrupt(), then raises InterruptException.
@@ -585,9 +581,7 @@ class TestQueryTimeout:
 
             assert mock_conn.interrupt.called
 
-    def test_query_timeout_does_not_mask_non_timeout_interrupts(
-        self, s3_config: S3Config
-    ):
+    def test_query_timeout_does_not_mask_non_timeout_interrupts(self, s3_config: S3Config):
         """If DuckDB raises InterruptException for a reason OTHER than the
         watchdog (e.g. an explicit external cancel), we should re-raise
         the original error rather than mislabel it as a timeout."""
@@ -596,13 +590,9 @@ class TestQueryTimeout:
             mock_connect.return_value = mock_conn
 
             # Long timeout — the watchdog will NOT fire during the test.
-            engine = QueryEngine(
-                s3_config, DuckDBConfig(query_timeout_seconds=300)
-            )
+            engine = QueryEngine(s3_config, DuckDBConfig(query_timeout_seconds=300))
 
-            mock_conn.execute.side_effect = duckdb.InterruptException(
-                "external cancel"
-            )
+            mock_conn.execute.side_effect = duckdb.InterruptException("external cancel")
 
             with pytest.raises(duckdb.InterruptException, match="external cancel"):
                 engine.query_arrow("SELECT 1")
@@ -621,9 +611,7 @@ class TestQueryTimeout:
             mock_result.arrow.return_value = reader
             mock_conn.execute.return_value = mock_result
 
-            engine = QueryEngine(
-                s3_config, DuckDBConfig(query_timeout_seconds=60)
-            )
+            engine = QueryEngine(s3_config, DuckDBConfig(query_timeout_seconds=60))
 
             with patch("rat_query.engine.threading.Timer") as mock_timer_cls:
                 fake_timer = MagicMock()
@@ -648,9 +636,7 @@ class TestQueryTimeout:
             mock_result.arrow.return_value = reader
             mock_conn.execute.return_value = mock_result
 
-            engine = QueryEngine(
-                s3_config, DuckDBConfig(query_timeout_seconds=120)
-            )
+            engine = QueryEngine(s3_config, DuckDBConfig(query_timeout_seconds=120))
 
             with patch("rat_query.engine.threading.Timer") as mock_timer_cls:
                 fake_timer = MagicMock()

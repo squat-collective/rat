@@ -359,6 +359,7 @@ class TestRunContextVar:
         sees the other's bound extras. ContextVars are per-task by default —
         this guards against accidental cross-task leakage if the implementation
         ever switches to a module-level dict."""
+
         async def task(run_id: str, results: dict[str, str]) -> None:
             token = set_run_context({"run_id": run_id})
             try:

@@ -42,10 +42,10 @@ GROUP_SOURCES = "rat.sources"
 class PluginInfo:
     """Metadata for a discovered runner plugin entry point."""
 
-    name: str           # entry point name ("soft_delete", "env_var")
-    group: str          # "rat.strategies", "rat.hooks", etc.
-    version: str        # package version
-    package_name: str   # Python package name ("rat-plugin-soft-delete")
+    name: str  # entry point name ("soft_delete", "env_var")
+    group: str  # "rat.strategies", "rat.hooks", etc.
+    version: str  # package version
+    package_name: str  # Python package name ("rat-plugin-soft-delete")
 
 
 class PluginRegistry:

@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable  # noqa: TCH003 — used at runtime by validate_pipeline_config
 from dataclasses import dataclass
 
 import boto3
@@ -249,8 +249,7 @@ def validate_pipeline_config(
         if not MergeStrategy.validate(strategy_str) and strategy_str not in plugin_strategies:
             valid = sorted({m.value for m in MergeStrategy} | plugin_strategies)
             raise ValueError(
-                f"Invalid merge_strategy '{strategy_str}'. "
-                f"Must be one of: {', '.join(valid)}"
+                f"Invalid merge_strategy '{strategy_str}'. " f"Must be one of: {', '.join(valid)}"
             )
 
     # Validate materialized — only "table" and "view" are supported.
@@ -402,9 +401,7 @@ def merge_configs(
         description=annotations.get("description", b.description),
         materialized=annotations.get("materialized", b.materialized),
         unique_key=unique_key,
-        merge_strategy=annotations["merge_strategy"]
-        if "merge_strategy" in annotations
-        else b.merge_strategy,
+        merge_strategy=annotations.get("merge_strategy", b.merge_strategy),
         watermark_column=annotations.get("watermark_column", b.watermark_column),
         archive_landing_zones=(
             annotations["archive_landing_zones"].lower() == "true"

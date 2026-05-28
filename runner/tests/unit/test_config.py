@@ -543,9 +543,7 @@ class TestValidatePipelineConfig:
     def test_unknown_strategy_rejected_even_with_known_strategies(self):
         """known_strategies extends the accepted set but does not disable validation."""
         with pytest.raises(ValueError, match="Invalid merge_strategy 'bogus'"):
-            validate_pipeline_config(
-                {"merge_strategy": "bogus"}, known_strategies=["soft_delete"]
-            )
+            validate_pipeline_config({"merge_strategy": "bogus"}, known_strategies=["soft_delete"])
 
     def test_parse_pipeline_config_accepts_plugin_strategy(self):
         """parse_pipeline_config accepts a plugin strategy passed via known_strategies."""

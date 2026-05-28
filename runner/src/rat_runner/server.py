@@ -303,9 +303,7 @@ class RunnerServiceImpl(runner_pb2_grpc.RunnerServiceServicer):
             return
 
         try:
-            config = parse_pipeline_config(
-                config_yaml, self._plugin_registry.strategy_names()
-            )
+            config = parse_pipeline_config(config_yaml, self._plugin_registry.strategy_names())
         except Exception:
             return
 

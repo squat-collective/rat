@@ -165,9 +165,7 @@ class NessieCatalog:
         if current_hash:
             self._last_commit_hash = current_hash
 
-    def register_all_tables(
-        self, extra_namespaces: list[str] | None = None
-    ) -> None:
+    def register_all_tables(self, extra_namespaces: list[str] | None = None) -> None:
         """Discover every namespace from Nessie + any extras, register each.
 
         One Nessie-hash short-circuit covers all namespaces — if nothing in
@@ -223,9 +221,7 @@ class NessieCatalog:
                 skipped += 1
                 continue
 
-            self._engine.register_view(
-                t.layer, t.name, t.metadata_location, namespace=namespace
-            )
+            self._engine.register_view(t.layer, t.name, t.metadata_location, namespace=namespace)
             registered += 1
 
         # Drop only stale views (removed from Nessie since last refresh).

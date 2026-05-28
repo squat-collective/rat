@@ -113,9 +113,7 @@ class DuckDBEngine:
             return _to_arrow_table(result.arrow())
         except duckdb.InterruptException as e:
             if timed_out.is_set():
-                raise QueryTimeoutError(
-                    f"query exceeded {timeout_seconds}s timeout"
-                ) from e
+                raise QueryTimeoutError(f"query exceeded {timeout_seconds}s timeout") from e
             raise
         finally:
             timer.cancel()

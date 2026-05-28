@@ -18,7 +18,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
-    "ruff>=0.5",
+    "ruff==0.6.9",
     "pyright>=1.1",
     "grpcio-tools>=1.65",
 ]
@@ -47,7 +47,8 @@ exclude = ["src/rat_runner/gen"]
 select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "TCH"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["SIM117", "TC001", "TC002", "TC003", "B011", "N806", "E501"]
+# N802: test HTTP handlers must be named do_POST etc. (http.server API).
+"tests/**" = ["SIM117", "TCH001", "TCH002", "TCH003", "B011", "N806", "N802", "E501"]
 
 [tool.pyright]
 typeCheckingMode = "strict"

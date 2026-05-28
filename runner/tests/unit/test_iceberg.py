@@ -1147,7 +1147,7 @@ class TestBuildDeleteFilterCompositeKey:
 
     def test_null_values_use_is_null(self):
         """NULL values in key columns produce IsNull() predicates."""
-        from pyiceberg.expressions import And, IsNull
+        from pyiceberg.expressions import And
 
         result = _build_delete_filter_composite_key(
             ["id", "region"],

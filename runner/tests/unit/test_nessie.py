@@ -517,15 +517,11 @@ class TestMergeBranchConflictRetry:
 
     @staticmethod
     def _src_ref(hash_: str = "src0") -> MagicMock:
-        return _ok_response(
-            {"reference": {"name": "run-r1", "hash": hash_, "type": "BRANCH"}}
-        )
+        return _ok_response({"reference": {"name": "run-r1", "hash": hash_, "type": "BRANCH"}})
 
     @staticmethod
     def _tgt_ref(hash_: str) -> MagicMock:
-        return _ok_response(
-            {"reference": {"name": "main", "hash": hash_, "type": "BRANCH"}}
-        )
+        return _ok_response({"reference": {"name": "main", "hash": hash_, "type": "BRANCH"}})
 
     @staticmethod
     def _merge_ok() -> MagicMock:
@@ -567,8 +563,7 @@ class TestMergeBranchConflictRetry:
 
         # Confirm the SECOND merge POST URL used the fresh target hash (hashB).
         merge_calls = [
-            c for c in mock_urlopen.call_args_list
-            if "/history/merge" in c[0][0].full_url
+            c for c in mock_urlopen.call_args_list if "/history/merge" in c[0][0].full_url
         ]
         assert len(merge_calls) == 2
         assert "main%40hashA" in merge_calls[0][0][0].full_url

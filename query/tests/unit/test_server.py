@@ -93,9 +93,7 @@ class TestExecuteQuery:
         from rat_query.engine import QueryTimeoutError
 
         servicer = _make_servicer()
-        servicer._engine.query_arrow.side_effect = QueryTimeoutError(
-            "query exceeded 2s timeout"
-        )
+        servicer._engine.query_arrow.side_effect = QueryTimeoutError("query exceeded 2s timeout")
 
         ctx = MagicMock()
         req = query_pb2.ExecuteQueryRequest(sql="SELECT * FROM huge_table", limit=100)

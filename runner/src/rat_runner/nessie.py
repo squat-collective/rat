@@ -207,9 +207,7 @@ def merge_branch(
         target_hash = target_ref["hash"]
 
         # Path-embed the expected target hash with @-syntax (URL-encoded).
-        target_path = (
-            _encode_branch(target) + urllib.parse.quote("@" + target_hash, safe="")
-        )
+        target_path = _encode_branch(target) + urllib.parse.quote("@" + target_hash, safe="")
         url = f"{nessie_config.api_v2_url}/trees/{target_path}/history/merge"
         payload = {
             "fromRefName": source,

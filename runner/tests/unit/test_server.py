@@ -360,9 +360,9 @@ class TestStreamLogs:
         # The log should arrive well under the old 500ms polling interval.
         # With condition-based wakeup it should be near-instant (< 100ms).
         latency = received[0] - add_time
-        assert latency < 0.3, (
-            f"Log delivery took {latency:.3f}s — expected < 0.3s with condition wakeup"
-        )
+        assert (
+            latency < 0.3
+        ), f"Log delivery took {latency:.3f}s — expected < 0.3s with condition wakeup"
 
 
 class TestBackpressure:
@@ -970,15 +970,27 @@ class TestListPluginsRPC:
     ):
         """ListPlugins does a fresh discovery and returns plugin metadata."""
         fake_plugins = [
-            PluginInfo(name="soft_delete", group="rat.hooks", version="0.3.1", package_name="rat-plugin-soft-delete"),
-            PluginInfo(name="env_var", group="rat.jinja_helpers", version="1.0.0", package_name="rat-plugin-env"),
+            PluginInfo(
+                name="soft_delete",
+                group="rat.hooks",
+                version="0.3.1",
+                package_name="rat-plugin-soft-delete",
+            ),
+            PluginInfo(
+                name="env_var",
+                group="rat.jinja_helpers",
+                version="1.0.0",
+                package_name="rat-plugin-env",
+            ),
         ]
 
         def _fake_discover(self_reg):
             self_reg._discovered_plugins = list(fake_plugins)
 
         registry = PluginRegistry()
-        svc = RunnerServiceImpl(s3_config, nessie_config, max_workers=1, state_dir=state_dir, plugin_registry=registry)
+        svc = RunnerServiceImpl(
+            s3_config, nessie_config, max_workers=1, state_dir=state_dir, plugin_registry=registry
+        )
         try:
             server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
             runner_pb2_grpc.add_RunnerServiceServicer_to_server(svc, server)
@@ -1012,7 +1024,9 @@ class TestListPluginsRPC:
     ):
         """ListPlugins returns empty list when discovery finds nothing."""
         registry = PluginRegistry()
-        svc = RunnerServiceImpl(s3_config, nessie_config, max_workers=1, state_dir=state_dir, plugin_registry=registry)
+        svc = RunnerServiceImpl(
+            s3_config, nessie_config, max_workers=1, state_dir=state_dir, plugin_registry=registry
+        )
         try:
             server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
             runner_pb2_grpc.add_RunnerServiceServicer_to_server(svc, server)

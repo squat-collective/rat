@@ -100,7 +100,8 @@ def record_failed_merge(
             )
     except urllib.error.URLError as e:
         logger.warning(
-            "Failed-merge audit POST failed (branch retained, manual recovery needed): url=%s error=%s",
+            "Failed-merge audit POST failed (branch retained, manual recovery "
+            "needed): url=%s error=%s",
             url,
             e,
             extra={

@@ -2,23 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 
 from rat_runner.plugin_protocols import (
     HookContext,
-    HookProtocol,
     JinjaHelperProtocol,
     MergeStrategyProtocol,
-    PipelineTypeProtocol,
-    SourceConnectorProtocol,
 )
 from rat_runner.plugin_registry import (
-    GROUP_HOOKS,
     GROUP_JINJA_HELPERS,
-    GROUP_SOURCES,
     GROUP_STRATEGIES,
     PluginRegistry,
 )
@@ -30,13 +24,6 @@ from rat_runner.strategies import (
     SCD2Strategy,
     SnapshotStrategy,
 )
-
-if TYPE_CHECKING:
-    import duckdb
-
-    from rat_runner.config import NessieConfig, S3Config
-    from rat_runner.models import PipelineConfig
-
 
 # ── Protocol compliance tests ──────────────────────────────────────
 
@@ -78,7 +65,9 @@ class TestProtocolCompliance:
 # ── Registry discovery tests ───────────────────────────────────────
 
 
-def _make_entry_point(name: str, cls: type, *, dist_name: str = "rat-runner", dist_version: str = "2.0.0"):
+def _make_entry_point(
+    name: str, cls: type, *, dist_name: str = "rat-runner", dist_version: str = "2.0.0"
+):
     """Create a mock entry point that loads the given class."""
     ep = MagicMock()
     ep.name = name
@@ -503,9 +492,23 @@ class TestListPlugins:
 
         def eps_side(group):
             if group == GROUP_STRATEGIES:
-                return [_make_entry_point("full_refresh", FullRefreshStrategy, dist_name="rat-runner", dist_version="2.0.0")]
+                return [
+                    _make_entry_point(
+                        "full_refresh",
+                        FullRefreshStrategy,
+                        dist_name="rat-runner",
+                        dist_version="2.0.0",
+                    )
+                ]
             if group == GROUP_JINJA_HELPERS:
-                return [_make_entry_point("env_var", JinjaHelperProtocol, dist_name="rat-plugin-env", dist_version="1.0.0")]
+                return [
+                    _make_entry_point(
+                        "env_var",
+                        JinjaHelperProtocol,
+                        dist_name="rat-plugin-env",
+                        dist_version="1.0.0",
+                    )
+                ]
             return []
 
         mock_eps.side_effect = eps_side
@@ -523,7 +526,12 @@ class TestListPlugins:
     def test_list_plugins_includes_version(self, mock_eps):
         """list_plugins() includes package version and name from distribution metadata."""
         mock_eps.return_value = [
-            _make_entry_point("soft_delete", FullRefreshStrategy, dist_name="rat-plugin-soft-delete", dist_version="0.3.1"),
+            _make_entry_point(
+                "soft_delete",
+                FullRefreshStrategy,
+                dist_name="rat-plugin-soft-delete",
+                dist_version="0.3.1",
+            ),
         ]
 
         registry = PluginRegistry()

@@ -153,8 +153,12 @@ jobs:
           args: --timeout=3m
 
       # — Python lint —
+      # Pin ruff: an unpinned `pipx install ruff` grabs whatever's latest,
+      # and each ruff release adds rules + tweaks the formatter, so a green
+      # build silently breaks on the next release. 0.6.9 is the version the
+      # runner/query sources are clean against (matches the pyproject dev pin).
       - name: Install ruff
-        run: pipx install ruff
+        run: pipx install ruff==0.6.9
 
       - name: Ruff check (runner)
         working-directory: runner

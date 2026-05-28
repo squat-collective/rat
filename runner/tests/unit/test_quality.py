@@ -42,9 +42,7 @@ def _make_engine(quality_test_timeout_seconds: int = 60) -> MagicMock:
     # quality.py reads engine._duckdb_config.quality_test_timeout_seconds
     # to compute the per-test deadline — populate a realistic config so the
     # watchdog wiring receives the value we expect under test.
-    engine._duckdb_config = DuckDBConfig(
-        quality_test_timeout_seconds=quality_test_timeout_seconds
-    )
+    engine._duckdb_config = DuckDBConfig(quality_test_timeout_seconds=quality_test_timeout_seconds)
     return engine
 
 
@@ -658,9 +656,7 @@ class TestQualityTestTimeout:
         AND the engine must have received the configured timeout — proving
         the watchdog is wired (not silently bypassed)."""
         engine = _make_engine(quality_test_timeout_seconds=45)
-        engine.query_arrow.return_value = pa.table(
-            {"x": pa.array([], type=pa.int64())}
-        )
+        engine.query_arrow.return_value = pa.table({"x": pa.array([], type=pa.int64())})
         run = _make_run()
         log = RunLogger(run)
 

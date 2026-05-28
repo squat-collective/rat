@@ -21,7 +21,7 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # Per-thread / per-asyncio-task run context — merged into every log emit by
 # JSONFormatter so subsystem modules (iceberg, nessie, maintenance, …) whose
@@ -61,6 +61,7 @@ def clear_run_context(token: contextvars.Token[dict[str, object]]) -> None:
 def current_run_context() -> dict[str, object]:
     """Return the current run-context snapshot. Public for tests/diagnostics."""
     return dict(_run_context.get())
+
 
 # Standard LogRecord attributes that should NOT be copied into the JSON payload
 # as user "extras" — they're either already represented (level, time, msg) or
@@ -119,9 +120,10 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         # RFC3339 with millisecond precision in UTC — matches slog's default.
-        ts = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%S.%f"
-        )[:-3] + "Z"
+        ts = (
+            datetime.fromtimestamp(record.created, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+            + "Z"
+        )
         payload: dict[str, object] = {
             "time": ts,
             "level": _LEVEL_NAMES.get(record.levelno, record.levelname.lower()),

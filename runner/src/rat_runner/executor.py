@@ -32,6 +32,7 @@ from rat_runner.config import (
     read_s3_text_version,
 )
 from rat_runner.engine import DuckDBEngine
+from rat_runner.failed_merge_audit import record_failed_merge
 from rat_runner.iceberg import (
     append_iceberg,
     delete_insert_iceberg,
@@ -45,7 +46,6 @@ from rat_runner.json_log import clear_run_context, set_run_context
 from rat_runner.log import RunLogger, run_log_extras
 from rat_runner.maintenance import run_maintenance
 from rat_runner.models import MergeStrategy, PipelineConfig, QualityTestResult, RunState, RunStatus
-from rat_runner.failed_merge_audit import record_failed_merge
 from rat_runner.nessie import (
     BRANCH_CREATE_MAX_RETRIES,
     MERGE_CONFLICT_MAX_RETRIES,
@@ -54,10 +54,10 @@ from rat_runner.nessie import (
     delete_branch,
     merge_branch,
 )
-from rat_runner.python_exec import execute_python_pipeline
-from rat_runner.quality import has_error_failures, run_quality_tests
 from rat_runner.plugin_protocols import HookContext
 from rat_runner.plugin_registry import PluginRegistry
+from rat_runner.python_exec import execute_python_pipeline
+from rat_runner.quality import has_error_failures, run_quality_tests
 from rat_runner.templating import (
     compile_sql,
     extract_landing_zones,
@@ -199,9 +199,7 @@ def _phase0_create_branch(ctx: _PipelineContext) -> None:
         # Re-raise with a clear, attributable error message. The Nessie
         # client has already exhausted retries for transient errors.
         attempts = BRANCH_CREATE_MAX_RETRIES + 1
-        raise RuntimeError(
-            f"branch creation failed after {attempts} attempts: {e}"
-        ) from e
+        raise RuntimeError(f"branch creation failed after {attempts} attempts: {e}") from e
     ctx.run.branch = ctx.branch_name
     ctx.log.info(f"Branch '{ctx.branch_name}' created")
 
@@ -266,9 +264,7 @@ def _phase1_detect_and_load(ctx: _PipelineContext) -> None:
     # Pass plugin-discovered strategy names so config validation accepts
     # custom merge strategies registered via runner plugins, not just built-ins.
     base_config = (
-        parse_pipeline_config(config_yaml, ctx.registry.strategy_names())
-        if config_yaml
-        else None
+        parse_pipeline_config(config_yaml, ctx.registry.strategy_names()) if config_yaml else None
     )
     if annotation_meta or base_config:
         ctx.config = merge_configs(base_config, annotation_meta)
@@ -321,9 +317,7 @@ def _execute_plugin_type_path(ctx: _PipelineContext) -> pa.Table:
     """Execute a pipeline whose type is provided by a runner plugin."""
     plugin_type = ctx.registry.get_pipeline_type(ctx.pipeline_type)
     if plugin_type is None:
-        raise RuntimeError(
-            f"No plugin registered for pipeline type '{ctx.pipeline_type}'"
-        )
+        raise RuntimeError(f"No plugin registered for pipeline type '{ctx.pipeline_type}'")
     ns, layer, name = ctx.run.namespace, ctx.run.layer, ctx.run.pipeline_name
     ctx.log.info(f"Executing '{ctx.pipeline_type}' pipeline via plugin")
     return plugin_type.execute(
@@ -585,7 +579,7 @@ def _classify_merge_error(exc: BaseException) -> tuple[str, str]:
             return "permanent_4xx", f"HTTP {exc.code}: {exc.reason}"
         if exc.code >= 500:
             return "transient_exhausted", f"HTTP {exc.code}: {exc.reason}"
-    if isinstance(exc, (urllib.error.URLError, TimeoutError)):
+    if isinstance(exc, urllib.error.URLError | TimeoutError):
         return "transient_exhausted", f"{type(exc).__name__}: {exc}"
     return "unknown", f"{type(exc).__name__}: {exc}"
 
@@ -633,9 +627,7 @@ def _phase5_resolve_branch(ctx: _PipelineContext, quality_results: list[QualityT
     except Exception as e:
         ctx.retain_branch = True
         error_kind, human = _classify_merge_error(e)
-        msg = (
-            f"branch merge failed: {human} — branch {ctx.branch_name} retained for recovery"
-        )
+        msg = f"branch merge failed: {human} — branch {ctx.branch_name} retained for recovery"
         # Structured ERROR log with the fields a human will grep for.
         logger.error(
             "Phase 5 merge failed — branch retained",

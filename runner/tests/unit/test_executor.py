@@ -414,7 +414,6 @@ class TestExecutePipelineIncremental:
         s3_config: S3Config,
         nessie_config: NessieConfig,
     ):
-
         def read_side(cfg, key):
             if key.endswith(".py"):
                 return None
@@ -1439,9 +1438,9 @@ class TestExecutePipelinePluginType:
 
 class TestPhase5MergeFailure:
     """Phase 5 merge failures must:
-      * NOT delete the ephemeral branch (it holds the only copy of the data)
-      * POST a failed_merges audit row to ratd
-      * Mark the run FAILED with a recovery-friendly error message
+    * NOT delete the ephemeral branch (it holds the only copy of the data)
+    * POST a failed_merges audit row to ratd
+    * Mark the run FAILED with a recovery-friendly error message
     """
 
     @staticmethod
@@ -1655,12 +1654,15 @@ class TestPhase5MergeTransientThenSuccess:
             _ok(ref_payload),  # pre-merge src hash
             _ok(ref_payload),  # pre-merge tgt hash
             urllib.error.HTTPError(  # merge_branch: src _get_reference fails 503
-                url="x", code=503, msg="Service Unavailable",
-                hdrs=None, fp=None,  # type: ignore[arg-type]
+                url="x",
+                code=503,
+                msg="Service Unavailable",
+                hdrs=None,
+                fp=None,  # type: ignore[arg-type]
             ),
             _ok(ref_payload),  # retry succeeds
             _ok(ref_payload),  # merge_branch: tgt _get_reference
-            merge_ok,          # merge POST 200
+            merge_ok,  # merge POST 200
         ]
         mock_urlopen.side_effect = responses
 
