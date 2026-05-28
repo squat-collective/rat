@@ -55,9 +55,9 @@ type Plugin struct {
 }
 
 // HasCapability returns true if the plugin declares the given capability.
-func (p *Plugin) HasCapability(cap string) bool {
+func (p *Plugin) HasCapability(capName string) bool {
 	for _, c := range p.Capabilities {
-		if c == cap {
+		if c == capName {
 			return true
 		}
 	}
@@ -149,11 +149,11 @@ func (r *Registry) All() []*Plugin {
 }
 
 // ByCapability returns the plugin that holds the given capability, or nil.
-func (r *Registry) ByCapability(cap string) *Plugin {
+func (r *Registry) ByCapability(capName string) *Plugin {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	name := r.capabilityHolder(cap)
+	name := r.capabilityHolder(capName)
 	if name == "" {
 		return nil
 	}
@@ -382,8 +382,8 @@ func (r *Registry) GetCredentials(ctx context.Context, userID, namespace string)
 
 // ── Internal helpers ───────────────────────────────────────────
 
-func (r *Registry) capabilityHolder(cap string) string {
-	switch cap {
+func (r *Registry) capabilityHolder(capName string) string {
+	switch capName {
 	case CapAuth:
 		return r.authPlugin
 	case CapExecutor:
@@ -399,8 +399,8 @@ func (r *Registry) capabilityHolder(cap string) string {
 	}
 }
 
-func (r *Registry) setCapabilityHolder(cap, name string) {
-	switch cap {
+func (r *Registry) setCapabilityHolder(capName, name string) {
+	switch capName {
 	case CapAuth:
 		r.authPlugin = name
 	case CapExecutor:

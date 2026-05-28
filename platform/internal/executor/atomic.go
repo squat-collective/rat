@@ -39,8 +39,8 @@ func (a *AtomicExecutor) Get() api.Executor {
 
 // Swap atomically replaces the inner executor and returns the previous one.
 // Pass nil to clear the executor.
-func (a *AtomicExecutor) Swap(new api.Executor) api.Executor {
-	old := a.inner.Swap(new)
+func (a *AtomicExecutor) Swap(next api.Executor) api.Executor {
+	old := a.inner.Swap(next)
 	if old == nil {
 		return nil
 	}

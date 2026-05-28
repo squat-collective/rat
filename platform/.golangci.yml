@@ -18,7 +18,6 @@ linters:
     # Additional quality linters
     - gocritic      # opinionated but useful code patterns
     - revive        # extensible Go linter (replaces golint)
-    - misspell      # catches common typos in comments/strings
     - prealloc      # suggests slice pre-allocation
 
   disable:
@@ -27,6 +26,12 @@ linters:
     - wrapcheck         # wrapping every error is excessive
     - exhaustruct       # requiring all struct fields is impractical
     - varnamelen        # short var names are idiomatic Go
+    # misspell: the codebase mixes British (behaviour, serialise, centralise)
+    # and American (initialize, sanitize, unauthorized) spellings, so neither
+    # the US nor UK locale passes cleanly. Enforcing one would mean a ~60-file
+    # mechanical rewrite for zero correctness gain. Re-enable after a dedicated
+    # spelling-normalisation pass picks a single variety.
+    - misspell
 
 linters-settings:
   errcheck:
@@ -77,14 +82,6 @@ linters-settings:
       - name: unused-parameter
       - name: unreachable-code
       - name: redefines-builtin-id
-
-  misspell:
-    locale: US
-    # "cancelled" is used as a domain value in our API (run status).
-    # Both spellings are valid; we use British English for this term.
-    ignore-words:
-      - cancelled
-      - recognised
 
   prealloc:
     simple: true

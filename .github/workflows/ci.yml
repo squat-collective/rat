@@ -302,11 +302,11 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-go-plugins-${{ matrix.plugin }}-${{ hashFiles('platform/go.sum', format('examples/{0}/go.sum', matrix.plugin)) }}
+          key: ${{ runner.os }}-go-plugins-${{ matrix.plugin }}-${{ hashFiles('platform/go.sum', format('plugins/{0}/go.sum', matrix.plugin)) }}
           restore-keys: |
             ${{ runner.os }}-go-plugins-
             ${{ runner.os }}-go-
 
       - name: Run plugin tests
-        working-directory: examples/${{ matrix.plugin }}
+        working-directory: plugins/${{ matrix.plugin }}
         run: make test

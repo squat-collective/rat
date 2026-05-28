@@ -138,10 +138,11 @@ export function useScreenGlitch() {
     };
   }, [active]);
 
-  const GlitchOverlay = useMemo(
-    () => () => <GlitchOverlayEl active={active} />,
-    [active],
-  );
+  const GlitchOverlay = useMemo(() => {
+    const Overlay = () => <GlitchOverlayEl active={active} />;
+    Overlay.displayName = "GlitchOverlay";
+    return Overlay;
+  }, [active]);
 
   return useMemo(
     () => ({ triggerGlitch, GlitchOverlay, isGlitching: active }),

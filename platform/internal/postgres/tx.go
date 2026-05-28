@@ -45,7 +45,7 @@ func InTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) (er
 		}
 	}()
 
-	if err = fn(tx); err != nil {
+	if err = fn(tx); err != nil { //nolint:gocritic // must assign to the named return so the deferred rollback sees fn's error
 		return err
 	}
 	if err = tx.Commit(ctx); err != nil {

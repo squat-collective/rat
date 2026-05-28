@@ -356,7 +356,7 @@ wheels = [
 
 [[package]]
 name = "rat-query"
-version = "0.1.0a1"
+version = "0.2.0b1"
 source = { editable = "." }
 dependencies = [
     { name = "duckdb" },

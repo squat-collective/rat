@@ -128,7 +128,7 @@ func (s *Server) HandleListRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	runs = filterRunsByPipelineAccess(s, r.Context(), runs, "read")
+	runs = filterRunsByPipelineAccess(r.Context(), s, runs, "read")
 
 	total, err := s.Runs.CountRuns(r.Context(), filter)
 	if err != nil {
@@ -148,7 +148,7 @@ func (s *Server) HandleListRuns(w http.ResponseWriter, r *http.Request) {
 // filterRunsByPipelineAccess restricts runs to those whose parent pipeline
 // the caller can access. Dedups pipeline IDs to keep the per-page Filter
 // cost proportional to the number of distinct pipelines, not runs.
-func filterRunsByPipelineAccess(s *Server, ctx context.Context, runs []domain.Run, action string) []domain.Run {
+func filterRunsByPipelineAccess(ctx context.Context, s *Server, runs []domain.Run, action string) []domain.Run {
 	if len(runs) == 0 {
 		return runs
 	}

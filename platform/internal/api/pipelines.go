@@ -130,7 +130,7 @@ func (s *Server) HandleListPipelines(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pipelines = filterPipelinesByAccess(s, r.Context(), pipelines, "read")
+	pipelines = filterPipelinesByAccess(r.Context(), s, pipelines, "read")
 
 	total, err := s.Pipelines.CountPipelines(r.Context(), filter)
 	if err != nil {
@@ -152,7 +152,7 @@ func (s *Server) HandleListPipelines(w http.ResponseWriter, r *http.Request) {
 // filterPipelinesByAccess returns only the pipelines the current request's
 // user can access for the given action. NoopAuthorizer / no-user contexts
 // pass through unchanged.
-func filterPipelinesByAccess(s *Server, ctx context.Context, pipelines []domain.Pipeline, action string) []domain.Pipeline {
+func filterPipelinesByAccess(ctx context.Context, s *Server, pipelines []domain.Pipeline, action string) []domain.Pipeline {
 	if len(pipelines) == 0 {
 		return pipelines
 	}

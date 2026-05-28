@@ -35,7 +35,7 @@ export default function RunsPage() {
       <div>
         <h1 className="text-sm font-bold tracking-wider">Runs</h1>
         <p className="text-[10px] text-muted-foreground">
-          {data?.total ?? 0} run{(data?.total ?? 0) !== 1 ? "s" : ""} // auto-refresh 5s
+          {data?.total ?? 0} run{(data?.total ?? 0) !== 1 ? "s" : ""}
         </p>
       </div>
 

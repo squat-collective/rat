@@ -141,10 +141,10 @@ func TestHealthLoop_OnTransition_FiredOnEnabledToError(t *testing.T) {
 	var oldStatus, newStatus domain.PluginStatus
 
 	hl := NewHealthLoop(reg, nil)
-	hl.OnTransition = func(p *Plugin, old, new domain.PluginStatus) {
+	hl.OnTransition = func(p *Plugin, oldSt, newSt domain.PluginStatus) {
 		transitionPlugin = p
-		oldStatus = old
-		newStatus = new
+		oldStatus = oldSt
+		newStatus = newSt
 	}
 	hl.checkAll(context.Background())
 
@@ -178,10 +178,10 @@ func TestHealthLoop_OnTransition_FiredOnErrorToEnabled(t *testing.T) {
 	var oldStatus, newStatus domain.PluginStatus
 
 	hl := NewHealthLoop(reg, nil)
-	hl.OnTransition = func(p *Plugin, old, new domain.PluginStatus) {
+	hl.OnTransition = func(p *Plugin, oldSt, newSt domain.PluginStatus) {
 		transitionPlugin = p
-		oldStatus = old
-		newStatus = new
+		oldStatus = oldSt
+		newStatus = newSt
 	}
 	hl.checkAll(context.Background())
 

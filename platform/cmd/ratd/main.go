@@ -990,10 +990,11 @@ func main() {
 	// Ordered cleanup: health loop → dispatcher → leader → executor → event bus → heartbeat pool → database pool.
 	// Heartbeat pool closes before the main pool so any final leader.Stop()
 	// unlock attempt (which uses the main pool) still has a connection.
-	if stopHealthLoop != nil {
-		stopHealthLoop()
-		slog.Info("plugin health loop stopped")
-	}
+	// stopHealthLoop and stopExecutor are assigned unconditionally during
+	// startup, so they're always non-nil here (no guard — unlike the
+	// conditional stops, which are only set when their feature is enabled).
+	stopHealthLoop()
+	slog.Info("plugin health loop stopped")
 	if stopDispatcher != nil {
 		stopDispatcher()
 		slog.Info("event dispatcher stopped")
@@ -1002,10 +1003,8 @@ func main() {
 		stopLeader()
 		slog.Info("leader elector stopped")
 	}
-	if stopExecutor != nil {
-		stopExecutor()
-		slog.Info("executor stopped")
-	}
+	stopExecutor()
+	slog.Info("executor stopped")
 	if stopEventBus != nil {
 		stopEventBus()
 		slog.Info("event bus stopped")

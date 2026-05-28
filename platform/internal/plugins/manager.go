@@ -661,14 +661,14 @@ func (m *Manager) fireCallbacks(capabilities []string) {
 // fireOne invokes a callback safely: recovers panics, logs them at
 // ERROR with the capability name and stack, and continues. A bad
 // callback handler must not deadlock the manager mutex.
-func (m *Manager) fireOne(cap string, fn func(*Registry)) {
+func (m *Manager) fireOne(capName string, fn func(*Registry)) {
 	if fn == nil {
 		return
 	}
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("plugin callback panicked",
-				"capability", cap,
+				"capability", capName,
 				"panic", r,
 				"stack", string(debug.Stack()))
 		}

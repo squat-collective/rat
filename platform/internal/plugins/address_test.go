@@ -302,7 +302,7 @@ func TestLoopbackOverrideFromEnv(t *testing.T) {
 		"1":     true,
 		"yes":   true,
 		"YES":   true,
-		" true ": true, // trimmed
+		" true ": true, //nolint:gocritic // intentional: verifies surrounding whitespace is trimmed
 	}
 	for v, want := range cases {
 		t.Run("val="+v, func(t *testing.T) {
