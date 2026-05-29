@@ -11,12 +11,16 @@
 version: 2
 
 updates:
-  # ── Go modules: ratd, the Go SDK, and all Go plugins ──
+  # ── Go modules: ratd + the Go SDK ──
+  # Go plugins are intentionally excluded: their go.mod files use container-only
+  # `replace … => /platform` / `=> /sdk-go` (supplied via Docker --build-context),
+  # which Dependabot can't resolve — it errors out with "malformed module path …
+  # trailing dot in path element". They're unpublished local modules anyway, so
+  # there's nothing for Dependabot to bump.
   - package-ecosystem: gomod
     directories:
       - "/platform"
       - "/sdk-go"
-      - "/plugins/*"
     schedule:
       interval: weekly
       day: monday
