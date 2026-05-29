@@ -430,7 +430,7 @@ func NewRouter(srv *Server) chi.Router {
 	// SA1019: chi 5.3 deprecates RealIP over header spoofing. Here it only
 	// seeds the rate-limit / log client IP (not an authz boundary), and RAT
 	// sits behind the operator's own reverse proxy. Follow-up: replace with a
-	// trusted-proxy allowlist (tracked separately).
+	// trusted-proxy allowlist (see #31).
 	r.Use(middleware.RealIP) //nolint:staticcheck // deprecation accepted, see note above
 	r.Use(RequestLogger)
 	r.Use(middleware.Recoverer)
@@ -576,7 +576,7 @@ func NewInternalRouter(srv *Server) chi.Router {
 	// SA1019: chi 5.3 deprecates RealIP over header spoofing. Here it only
 	// seeds the rate-limit / log client IP (not an authz boundary), and RAT
 	// sits behind the operator's own reverse proxy. Follow-up: replace with a
-	// trusted-proxy allowlist (tracked separately).
+	// trusted-proxy allowlist (see #31).
 	r.Use(middleware.RealIP) //nolint:staticcheck // deprecation accepted, see note above
 	r.Use(RequestLogger)
 	r.Use(middleware.Recoverer)
