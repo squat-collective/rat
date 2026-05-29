@@ -20,10 +20,10 @@ Every recurrent command goes through `make` — no raw `docker run`/`go test`/`p
 ## Pinned tooling (the whole point — never use `latest`)
 | Tool | Pin | Where |
 |---|---|---|
-| golangci-lint | `v1.64.8` | `GO_LINT_IMAGE` + `ci.yml` golangci action |
-| ruff | `0.6.9` | Makefile `RUFF_VERSION` + both `pyproject` dev + `ci.yml` pipx |
+| golangci-lint | `v2.12.2` | `GO_LINT_IMAGE` + `ci.yml` golangci action (config: `platform/.golangci.yml`, schema v2) |
+| ruff | `0.15.15` | Makefile `RUFF_VERSION` + both `pyproject` dev + `ci.yml` pipx |
 | buf python codegen | `v33.0` | `proto/buf.gen.yaml` |
-| Go | `1.24` | go.mod + images |
+| Go | `1.26` | go.mod + images |
 | Node | `20` | images |
 | protobuf (py runtime) | `>=6.33,<7` (via lock) | runner/query |
 

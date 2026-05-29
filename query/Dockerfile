@@ -1,5 +1,5 @@
 # Build stage — only production dependencies
-FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203 AS builder
+FROM python:3.14-slim@sha256:c845af9399020c7e562969a13689e929074a10fd057acd1b1fad06a2fb068e97 AS builder
 WORKDIR /build
 RUN pip install --no-cache-dir uv
 # Copy the lockfile + pyproject so uv can install from the frozen set
@@ -18,7 +18,7 @@ COPY src/ ./src/
 RUN uv sync --locked --no-dev --no-editable
 
 # Runtime stage
-FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
+FROM python:3.14-slim@sha256:c845af9399020c7e562969a13689e929074a10fd057acd1b1fad06a2fb068e97
 LABEL org.opencontainers.image.title="rat-query"
 LABEL org.opencontainers.image.description="RAT query service (DuckDB read-only sidecar)"
 LABEL org.opencontainers.image.source="https://github.com/squat-collective/rat"

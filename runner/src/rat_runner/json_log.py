@@ -38,12 +38,17 @@ from datetime import UTC, datetime
 # top of execute_pipeline) rather than relying on copy_context propagation,
 # so each pipeline thread builds its own isolated context regardless of
 # whatever the dispatcher thread had set.
-_run_context: contextvars.ContextVar[dict[str, object]] = contextvars.ContextVar(
-    "rat_run_ctx", default={}
+# default=None (not {}): a mutable ContextVar default is shared across every
+# context (ruff B039). It's read-only here, but None + coalesce is the idiomatic,
+# lint-clean form; readers treat "unset" as the empty dict.
+_run_context: contextvars.ContextVar[dict[str, object] | None] = contextvars.ContextVar(
+    "rat_run_ctx", default=None
 )
 
 
-def set_run_context(extras: dict[str, object]) -> contextvars.Token[dict[str, object]]:
+def set_run_context(
+    extras: dict[str, object],
+) -> contextvars.Token[dict[str, object] | None]:
     """Bind run-scoped extras into the current thread/task context.
 
     Returns a token that ``clear_run_context`` uses to restore the prior value
@@ -53,14 +58,14 @@ def set_run_context(extras: dict[str, object]) -> contextvars.Token[dict[str, ob
     return _run_context.set(dict(extras))
 
 
-def clear_run_context(token: contextvars.Token[dict[str, object]]) -> None:
+def clear_run_context(token: contextvars.Token[dict[str, object] | None]) -> None:
     """Restore the prior run-context binding using the token from set_run_context."""
     _run_context.reset(token)
 
 
 def current_run_context() -> dict[str, object]:
     """Return the current run-context snapshot. Public for tests/diagnostics."""
-    return dict(_run_context.get())
+    return dict(_run_context.get() or {})
 
 
 # Standard LogRecord attributes that should NOT be copied into the JSON payload

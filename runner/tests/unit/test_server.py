@@ -360,9 +360,9 @@ class TestStreamLogs:
         # The log should arrive well under the old 500ms polling interval.
         # With condition-based wakeup it should be near-instant (< 100ms).
         latency = received[0] - add_time
-        assert (
-            latency < 0.3
-        ), f"Log delivery took {latency:.3f}s — expected < 0.3s with condition wakeup"
+        assert latency < 0.3, (
+            f"Log delivery took {latency:.3f}s — expected < 0.3s with condition wakeup"
+        )
 
 
 class TestBackpressure:

@@ -23,11 +23,11 @@ jobs:
       run:
         working-directory: platform
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version: "1.24"
+          go-version: "1.26"
           cache-dependency-path: platform/go.sum
 
       - name: Run tests
@@ -41,14 +41,14 @@ jobs:
       run:
         working-directory: runner
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: uv pip install --system -e '.[dev]'
@@ -64,14 +64,14 @@ jobs:
       run:
         working-directory: query
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: uv pip install --system -e '.[dev]'
@@ -84,11 +84,11 @@ jobs:
     name: TypeScript Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "26"
           cache: npm
           cache-dependency-path: |
             sdk-typescript/package-lock.json
@@ -133,12 +133,12 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # — Go lint —
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version: "1.24"
+          go-version: "1.26"
           cache-dependency-path: platform/go.sum
 
       - name: Go vet
@@ -146,22 +146,22 @@ jobs:
         run: go vet ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           # Pinned (not "latest") so a new golangci release can't silently
           # turn a green build red — matches GO_LINT_IMAGE in the Makefile so
-          # `make ci` locally == this job.
-          version: v1.64.8
+          # `make ci` locally == this job. v2 config lives in platform/.golangci.yml.
+          version: v2.12.2
           working-directory: platform
           args: --timeout=3m
 
       # — Python lint —
       # Pin ruff: an unpinned `pipx install ruff` grabs whatever's latest,
       # and each ruff release adds rules + tweaks the formatter, so a green
-      # build silently breaks on the next release. 0.6.9 is the version the
+      # build silently breaks on the next release. 0.15.15 is the version the
       # runner/query sources are clean against (matches the pyproject dev pin).
       - name: Install ruff
-        run: pipx install ruff==0.6.9
+        run: pipx install ruff==0.15.15
 
       - name: Ruff check (runner)
         working-directory: runner
@@ -194,7 +194,7 @@ jobs:
     name: Security
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: gitleaks secret scan
         run: make security-secrets
 
@@ -203,7 +203,7 @@ jobs:
     name: Docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: docs-check
         run: make docs-check
 
@@ -212,15 +212,15 @@ jobs:
     name: Docker Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Build all four service images in parallel using Buildx bake.
       # We only verify they compile — images are not pushed.
       - name: Build ratd (platform)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: platform
           file: platform/Dockerfile
@@ -229,7 +229,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=ratd
 
       - name: Build runner
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: runner
           file: runner/Dockerfile
@@ -238,7 +238,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=runner
 
       - name: Build query
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: query
           file: query/Dockerfile
@@ -247,7 +247,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=query
 
       - name: Build portal
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: portal/Dockerfile
@@ -264,13 +264,13 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Cache Go modules
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/go-build
@@ -317,15 +317,15 @@ jobs:
           - rat-plugin-pg-sync
           - rat-plugin-secrets
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # All plugins share the platform module via the local `replace`
       # directive, so caching ~/go/pkg/mod across the matrix is a big win.
       - name: Cache Go modules
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/go-build

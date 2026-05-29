@@ -249,7 +249,7 @@ def validate_pipeline_config(
         if not MergeStrategy.validate(strategy_str) and strategy_str not in plugin_strategies:
             valid = sorted({m.value for m in MergeStrategy} | plugin_strategies)
             raise ValueError(
-                f"Invalid merge_strategy '{strategy_str}'. " f"Must be one of: {', '.join(valid)}"
+                f"Invalid merge_strategy '{strategy_str}'. Must be one of: {', '.join(valid)}"
             )
 
     # Validate materialized — only "table" and "view" are supported.
