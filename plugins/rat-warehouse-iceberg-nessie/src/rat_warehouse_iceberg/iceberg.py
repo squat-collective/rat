@@ -71,8 +71,7 @@ from rat_warehouse_iceberg.config import _to_arrow_table
 if TYPE_CHECKING:
     from pyiceberg.table import Table as IcebergTable
 
-    from rat_warehouse_iceberg.config import NessieConfig, S3Config
-    from rat_warehouse_iceberg.config import PartitionByEntry
+    from rat_warehouse_iceberg.config import NessieConfig, PartitionByEntry, S3Config
 
 logger = logging.getLogger(__name__)
 

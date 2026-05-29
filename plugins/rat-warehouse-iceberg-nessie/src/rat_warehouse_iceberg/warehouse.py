@@ -85,7 +85,9 @@ class IcebergNessieWarehouse:
                 out.append((parts[0], parts[1], parts[2]))
         return out
 
-    def get_schema(self, namespace: str, layer: str, name: str, *, branch: str = "main") -> pa.Schema:
+    def get_schema(
+        self, namespace: str, layer: str, name: str, *, branch: str = "main"
+    ) -> pa.Schema:
         catalog = iceberg.get_catalog(self._s3, self._nessie, branch)
         table = catalog.load_table(_split_ref(namespace, layer, name))
         return table.schema().as_arrow()
@@ -192,7 +194,9 @@ class IcebergNessieWarehouse:
         return snaps
 
     # ── ROW_DIFF capability ──
-    def row_diff(self, namespace: str, layer: str, name: str, from_ref: str, to_ref: str, *, limit: int = 0):
+    def row_diff(
+        self, namespace: str, layer: str, name: str, from_ref: str, to_ref: str, *, limit: int = 0
+    ):
         # Row diff is computed via DuckDB iceberg_scan EXCEPT (today done in the
         # diff plugin); it moves here in the consumer-migration slice.
         raise NotImplementedError("row_diff: wired in the consumer-migration slice")

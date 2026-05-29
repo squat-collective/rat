@@ -236,6 +236,7 @@ proto: ## Generate Go + Python code from proto files
 		-v $$(pwd)/platform:/workspace/platform \
 		-v $$(pwd)/runner:/workspace/runner \
 		-v $$(pwd)/query:/workspace/query \
+		-v $$(pwd)/plugins/rat-warehouse-iceberg-nessie:/workspace/plugins/rat-warehouse-iceberg-nessie \
 		-w /workspace/proto \
 		$(PROTO_IMAGE) generate
 	@echo "✅ Proto generated"

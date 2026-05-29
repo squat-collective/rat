@@ -54,9 +54,22 @@ class _Warehouse(Protocol):
     def capabilities(self) -> frozenset[str]: ...
     def list_namespaces(self) -> list[str]: ...
     def list_tables(self, namespace: str) -> list[tuple[str, str, str]]: ...
-    def get_schema(self, namespace: str, layer: str, name: str, *, branch: str = "main") -> pa.Schema: ...
+    def get_schema(
+        self, namespace: str, layer: str, name: str, *, branch: str = "main"
+    ) -> pa.Schema: ...
     def attach(self, runner_type: str, *, branch: str = "main") -> dict[str, object]: ...
-    def write(self, namespace: str, layer: str, name: str, data: pa.Table, strategy: str, options: dict[str, str] | None = ..., *, branch: str = "main", location: str = "") -> int: ...
+    def write(
+        self,
+        namespace: str,
+        layer: str,
+        name: str,
+        data: pa.Table,
+        strategy: str,
+        options: dict[str, str] | None = ...,
+        *,
+        branch: str = "main",
+        location: str = "",
+    ) -> int: ...
 
 
 class WarehouseServicer(warehouse_pb2_grpc.WarehouseServiceServicer):
@@ -114,7 +127,9 @@ class WarehouseServicer(warehouse_pb2_grpc.WarehouseServiceServicer):
                 reader = pa.ipc.open_stream(msg.arrow_batch)
                 batches.extend(reader)
         if header is None:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Write: first message must be the header")
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT, "Write: first message must be the header"
+            )
         ref = header.ref
         table = pa.Table.from_batches(batches) if batches else pa.table({})
         rows = self._wh.write(
@@ -147,7 +162,9 @@ class WarehouseServicer(warehouse_pb2_grpc.WarehouseServiceServicer):
     def DeleteBranch(self, request, context):  # noqa: N802
         return self._gated(
             context,
-            lambda: warehouse_pb2.DeleteBranchResponse(deleted=self._wh.delete_branch(request.name)),
+            lambda: warehouse_pb2.DeleteBranchResponse(
+                deleted=self._wh.delete_branch(request.name)
+            ),
         )
 
     def ListBranches(self, request, context):  # noqa: N802
@@ -164,7 +181,9 @@ class WarehouseServicer(warehouse_pb2_grpc.WarehouseServiceServicer):
             return warehouse_pb2.GetHistoryResponse(
                 snapshots=[
                     warehouse_pb2.Snapshot(
-                        id=str(s["id"]), message=str(s.get("message", "")), rows=int(s.get("rows", 0))
+                        id=str(s["id"]),
+                        message=str(s.get("message", "")),
+                        rows=int(s.get("rows", 0)),
                     )
                     for s in snaps
                 ]
@@ -177,7 +196,12 @@ class WarehouseServicer(warehouse_pb2_grpc.WarehouseServiceServicer):
 
         def _do():
             diff = self._wh.row_diff(
-                ref.namespace, _layer_str(ref.layer), ref.name, request.from_ref, request.to_ref, limit=request.limit
+                ref.namespace,
+                _layer_str(ref.layer),
+                ref.name,
+                request.from_ref,
+                request.to_ref,
+                limit=request.limit,
             )
             return warehouse_pb2.RowDiffResponse(
                 added=diff.added.serialize().to_pybytes() if diff.added else b"",
