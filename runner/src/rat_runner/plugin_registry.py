@@ -36,6 +36,10 @@ GROUP_PIPELINE_TYPES = "rat.pipeline_types"
 GROUP_JINJA_HELPERS = "rat.jinja_helpers"
 GROUP_HOOKS = "rat.hooks"
 GROUP_SOURCES = "rat.sources"
+# ADR-024: storage-substrate seam. Discovery/registration of warehouse plugins
+# lands with the iceberg-nessie reference impl in a later slice; the contract
+# (WarehouseProtocol) and this group name are defined now so the seam is stable.
+GROUP_WAREHOUSES = "rat.warehouses"
 
 
 @dataclass(frozen=True)
