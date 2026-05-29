@@ -341,8 +341,14 @@ func TestLeader_TwoConsecutiveHeartbeatFails_VoluntarilyReleases(t *testing.T) {
 		"should become leader")
 
 	// One healthy tick to prove the heartbeat goroutine is running.
-	clock.Advance(10 * time.Millisecond)
-	require.GreaterOrEqual(t, ping.getCalls(), 1,
+	// The heartbeat goroutine registers its ticker asynchronously (inside the
+	// goroutine, after IsLeader is already observable), so a single Advance can
+	// land before the ticker exists and be lost. Advance inside the poll so a
+	// later tick is guaranteed to fire once the ticker is registered.
+	require.Eventually(t, func() bool {
+		clock.Advance(10 * time.Millisecond)
+		return ping.getCalls() >= 1
+	}, time.Second, 10*time.Millisecond,
 		"heartbeat goroutine should have ticked once before injecting failures")
 
 	// Inject the network partition, then advance the two failure ticks.
