@@ -24,7 +24,7 @@ Every recurrent command goes through `make` — no raw `docker run`/`go test`/`p
 | ruff | `0.15.15` | Makefile `RUFF_VERSION` + both `pyproject` dev + `ci.yml` pipx |
 | buf python codegen | `v33.0` | `proto/buf.gen.yaml` |
 | Go | `1.26` | go.mod + images |
-| Node | `20` | images |
+| Node | `26` | images + `ci.yml` setup-node |
 | protobuf (py runtime) | `>=6.33,<7` (via lock) | runner/query |
 
 An unpinned linter is a future "green build silently breaks." If you bump a pin, re-run `make ci` and update every location in this table together.
