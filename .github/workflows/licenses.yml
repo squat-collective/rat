@@ -99,7 +99,19 @@ jobs:
             echo "No license changes — nothing to commit."
           else
             git commit -m "chore(licenses): update third-party license reports [skip ci]"
-            git push
+            # This commit goes straight to the default branch, so a PR merge that
+            # lands between checkout and push rejects it ("fetch first"). Rebase
+            # onto the latest main and retry a few times before giving up.
+            n=0
+            until git push origin "HEAD:${GITHUB_REF_NAME}"; do
+              n=$((n + 1))
+              if [ "$n" -ge 5 ]; then
+                echo "push still rejected after $n attempts — giving up"
+                exit 1
+              fi
+              echo "push rejected (branch advanced) — rebasing and retrying ($n)…"
+              git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+            done
           fi
 
       # ── Attach to release (tag push only) ──
