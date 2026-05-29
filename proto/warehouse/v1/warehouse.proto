@@ -33,6 +33,7 @@ service WarehouseService {
   // — Capability-gated: BRANCHING —
   rpc CreateBranch(CreateBranchRequest) returns (CreateBranchResponse);
   rpc MergeBranch(MergeBranchRequest) returns (MergeBranchResponse);
+  rpc DeleteBranch(DeleteBranchRequest) returns (DeleteBranchResponse);
   rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse);
 
   // — Capability-gated: ROW_DIFF —
@@ -166,6 +167,14 @@ message MergeBranchRequest {
 message MergeBranchResponse {
   bool merged = 1;
   string conflict = 2;  // non-empty when merge failed on conflict
+}
+
+message DeleteBranchRequest {
+  string name = 1;
+}
+
+message DeleteBranchResponse {
+  bool deleted = 1;  // false if the branch did not exist (idempotent)
 }
 
 message ListBranchesRequest {}

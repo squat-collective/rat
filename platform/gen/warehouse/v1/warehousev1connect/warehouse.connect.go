@@ -58,6 +58,9 @@ const (
 	// WarehouseServiceMergeBranchProcedure is the fully-qualified name of the WarehouseService's
 	// MergeBranch RPC.
 	WarehouseServiceMergeBranchProcedure = "/ratatouille.warehouse.v1.WarehouseService/MergeBranch"
+	// WarehouseServiceDeleteBranchProcedure is the fully-qualified name of the WarehouseService's
+	// DeleteBranch RPC.
+	WarehouseServiceDeleteBranchProcedure = "/ratatouille.warehouse.v1.WarehouseService/DeleteBranch"
 	// WarehouseServiceListBranchesProcedure is the fully-qualified name of the WarehouseService's
 	// ListBranches RPC.
 	WarehouseServiceListBranchesProcedure = "/ratatouille.warehouse.v1.WarehouseService/ListBranches"
@@ -80,6 +83,7 @@ type WarehouseServiceClient interface {
 	// — Capability-gated: BRANCHING —
 	CreateBranch(context.Context, *connect.Request[v1.CreateBranchRequest]) (*connect.Response[v1.CreateBranchResponse], error)
 	MergeBranch(context.Context, *connect.Request[v1.MergeBranchRequest]) (*connect.Response[v1.MergeBranchResponse], error)
+	DeleteBranch(context.Context, *connect.Request[v1.DeleteBranchRequest]) (*connect.Response[v1.DeleteBranchResponse], error)
 	ListBranches(context.Context, *connect.Request[v1.ListBranchesRequest]) (*connect.Response[v1.ListBranchesResponse], error)
 	// — Capability-gated: ROW_DIFF —
 	RowDiff(context.Context, *connect.Request[v1.RowDiffRequest]) (*connect.Response[v1.RowDiffResponse], error)
@@ -150,6 +154,12 @@ func NewWarehouseServiceClient(httpClient connect.HTTPClient, baseURL string, op
 			connect.WithSchema(warehouseServiceMethods.ByName("MergeBranch")),
 			connect.WithClientOptions(opts...),
 		),
+		deleteBranch: connect.NewClient[v1.DeleteBranchRequest, v1.DeleteBranchResponse](
+			httpClient,
+			baseURL+WarehouseServiceDeleteBranchProcedure,
+			connect.WithSchema(warehouseServiceMethods.ByName("DeleteBranch")),
+			connect.WithClientOptions(opts...),
+		),
 		listBranches: connect.NewClient[v1.ListBranchesRequest, v1.ListBranchesResponse](
 			httpClient,
 			baseURL+WarehouseServiceListBranchesProcedure,
@@ -176,6 +186,7 @@ type warehouseServiceClient struct {
 	getHistory     *connect.Client[v1.GetHistoryRequest, v1.GetHistoryResponse]
 	createBranch   *connect.Client[v1.CreateBranchRequest, v1.CreateBranchResponse]
 	mergeBranch    *connect.Client[v1.MergeBranchRequest, v1.MergeBranchResponse]
+	deleteBranch   *connect.Client[v1.DeleteBranchRequest, v1.DeleteBranchResponse]
 	listBranches   *connect.Client[v1.ListBranchesRequest, v1.ListBranchesResponse]
 	rowDiff        *connect.Client[v1.RowDiffRequest, v1.RowDiffResponse]
 }
@@ -225,6 +236,11 @@ func (c *warehouseServiceClient) MergeBranch(ctx context.Context, req *connect.R
 	return c.mergeBranch.CallUnary(ctx, req)
 }
 
+// DeleteBranch calls ratatouille.warehouse.v1.WarehouseService.DeleteBranch.
+func (c *warehouseServiceClient) DeleteBranch(ctx context.Context, req *connect.Request[v1.DeleteBranchRequest]) (*connect.Response[v1.DeleteBranchResponse], error) {
+	return c.deleteBranch.CallUnary(ctx, req)
+}
+
 // ListBranches calls ratatouille.warehouse.v1.WarehouseService.ListBranches.
 func (c *warehouseServiceClient) ListBranches(ctx context.Context, req *connect.Request[v1.ListBranchesRequest]) (*connect.Response[v1.ListBranchesResponse], error) {
 	return c.listBranches.CallUnary(ctx, req)
@@ -250,6 +266,7 @@ type WarehouseServiceHandler interface {
 	// — Capability-gated: BRANCHING —
 	CreateBranch(context.Context, *connect.Request[v1.CreateBranchRequest]) (*connect.Response[v1.CreateBranchResponse], error)
 	MergeBranch(context.Context, *connect.Request[v1.MergeBranchRequest]) (*connect.Response[v1.MergeBranchResponse], error)
+	DeleteBranch(context.Context, *connect.Request[v1.DeleteBranchRequest]) (*connect.Response[v1.DeleteBranchResponse], error)
 	ListBranches(context.Context, *connect.Request[v1.ListBranchesRequest]) (*connect.Response[v1.ListBranchesResponse], error)
 	// — Capability-gated: ROW_DIFF —
 	RowDiff(context.Context, *connect.Request[v1.RowDiffRequest]) (*connect.Response[v1.RowDiffResponse], error)
@@ -316,6 +333,12 @@ func NewWarehouseServiceHandler(svc WarehouseServiceHandler, opts ...connect.Han
 		connect.WithSchema(warehouseServiceMethods.ByName("MergeBranch")),
 		connect.WithHandlerOptions(opts...),
 	)
+	warehouseServiceDeleteBranchHandler := connect.NewUnaryHandler(
+		WarehouseServiceDeleteBranchProcedure,
+		svc.DeleteBranch,
+		connect.WithSchema(warehouseServiceMethods.ByName("DeleteBranch")),
+		connect.WithHandlerOptions(opts...),
+	)
 	warehouseServiceListBranchesHandler := connect.NewUnaryHandler(
 		WarehouseServiceListBranchesProcedure,
 		svc.ListBranches,
@@ -348,6 +371,8 @@ func NewWarehouseServiceHandler(svc WarehouseServiceHandler, opts ...connect.Han
 			warehouseServiceCreateBranchHandler.ServeHTTP(w, r)
 		case WarehouseServiceMergeBranchProcedure:
 			warehouseServiceMergeBranchHandler.ServeHTTP(w, r)
+		case WarehouseServiceDeleteBranchProcedure:
+			warehouseServiceDeleteBranchHandler.ServeHTTP(w, r)
 		case WarehouseServiceListBranchesProcedure:
 			warehouseServiceListBranchesHandler.ServeHTTP(w, r)
 		case WarehouseServiceRowDiffProcedure:
@@ -395,6 +420,10 @@ func (UnimplementedWarehouseServiceHandler) CreateBranch(context.Context, *conne
 
 func (UnimplementedWarehouseServiceHandler) MergeBranch(context.Context, *connect.Request[v1.MergeBranchRequest]) (*connect.Response[v1.MergeBranchResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ratatouille.warehouse.v1.WarehouseService.MergeBranch is not implemented"))
+}
+
+func (UnimplementedWarehouseServiceHandler) DeleteBranch(context.Context, *connect.Request[v1.DeleteBranchRequest]) (*connect.Response[v1.DeleteBranchResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("ratatouille.warehouse.v1.WarehouseService.DeleteBranch is not implemented"))
 }
 
 func (UnimplementedWarehouseServiceHandler) ListBranches(context.Context, *connect.Request[v1.ListBranchesRequest]) (*connect.Response[v1.ListBranchesResponse], error) {

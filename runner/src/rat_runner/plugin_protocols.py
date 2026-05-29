@@ -296,6 +296,10 @@ class BranchingWarehouse(Protocol):
         """Merge ``from_branch`` into ``into_branch`` (raises on conflict)."""
         ...
 
+    def delete_branch(self, name: str) -> bool:
+        """Delete a branch; return False if it didn't exist (idempotent)."""
+        ...
+
     def list_branches(self) -> list[str]:
         """List branch names."""
         ...

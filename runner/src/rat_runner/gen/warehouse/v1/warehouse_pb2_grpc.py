@@ -70,6 +70,11 @@ class WarehouseServiceStub(object):
                 request_serializer=warehouse_dot_v1_dot_warehouse__pb2.MergeBranchRequest.SerializeToString,
                 response_deserializer=warehouse_dot_v1_dot_warehouse__pb2.MergeBranchResponse.FromString,
                 _registered_method=True)
+        self.DeleteBranch = channel.unary_unary(
+                '/ratatouille.warehouse.v1.WarehouseService/DeleteBranch',
+                request_serializer=warehouse_dot_v1_dot_warehouse__pb2.DeleteBranchRequest.SerializeToString,
+                response_deserializer=warehouse_dot_v1_dot_warehouse__pb2.DeleteBranchResponse.FromString,
+                _registered_method=True)
         self.ListBranches = channel.unary_unary(
                 '/ratatouille.warehouse.v1.WarehouseService/ListBranches',
                 request_serializer=warehouse_dot_v1_dot_warehouse__pb2.ListBranchesRequest.SerializeToString,
@@ -153,6 +158,12 @@ class WarehouseServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def DeleteBranch(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListBranches(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -213,6 +224,11 @@ def add_WarehouseServiceServicer_to_server(servicer, server):
                     servicer.MergeBranch,
                     request_deserializer=warehouse_dot_v1_dot_warehouse__pb2.MergeBranchRequest.FromString,
                     response_serializer=warehouse_dot_v1_dot_warehouse__pb2.MergeBranchResponse.SerializeToString,
+            ),
+            'DeleteBranch': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteBranch,
+                    request_deserializer=warehouse_dot_v1_dot_warehouse__pb2.DeleteBranchRequest.FromString,
+                    response_serializer=warehouse_dot_v1_dot_warehouse__pb2.DeleteBranchResponse.SerializeToString,
             ),
             'ListBranches': grpc.unary_unary_rpc_method_handler(
                     servicer.ListBranches,
@@ -479,6 +495,33 @@ class WarehouseService(object):
             '/ratatouille.warehouse.v1.WarehouseService/MergeBranch',
             warehouse_dot_v1_dot_warehouse__pb2.MergeBranchRequest.SerializeToString,
             warehouse_dot_v1_dot_warehouse__pb2.MergeBranchResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteBranch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ratatouille.warehouse.v1.WarehouseService/DeleteBranch',
+            warehouse_dot_v1_dot_warehouse__pb2.DeleteBranchRequest.SerializeToString,
+            warehouse_dot_v1_dot_warehouse__pb2.DeleteBranchResponse.FromString,
             options,
             channel_credentials,
             insecure,

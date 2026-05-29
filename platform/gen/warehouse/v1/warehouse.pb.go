@@ -1251,6 +1251,94 @@ func (x *MergeBranchResponse) GetConflict() string {
 	return ""
 }
 
+type DeleteBranchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteBranchRequest) Reset() {
+	*x = DeleteBranchRequest{}
+	mi := &file_warehouse_v1_warehouse_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteBranchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteBranchRequest) ProtoMessage() {}
+
+func (x *DeleteBranchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_warehouse_v1_warehouse_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteBranchRequest.ProtoReflect.Descriptor instead.
+func (*DeleteBranchRequest) Descriptor() ([]byte, []int) {
+	return file_warehouse_v1_warehouse_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *DeleteBranchRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+type DeleteBranchResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Deleted       bool                   `protobuf:"varint,1,opt,name=deleted,proto3" json:"deleted,omitempty"` // false if the branch did not exist (idempotent)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteBranchResponse) Reset() {
+	*x = DeleteBranchResponse{}
+	mi := &file_warehouse_v1_warehouse_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteBranchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteBranchResponse) ProtoMessage() {}
+
+func (x *DeleteBranchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_warehouse_v1_warehouse_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteBranchResponse.ProtoReflect.Descriptor instead.
+func (*DeleteBranchResponse) Descriptor() ([]byte, []int) {
+	return file_warehouse_v1_warehouse_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *DeleteBranchResponse) GetDeleted() bool {
+	if x != nil {
+		return x.Deleted
+	}
+	return false
+}
+
 type ListBranchesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1259,7 +1347,7 @@ type ListBranchesRequest struct {
 
 func (x *ListBranchesRequest) Reset() {
 	*x = ListBranchesRequest{}
-	mi := &file_warehouse_v1_warehouse_proto_msgTypes[22]
+	mi := &file_warehouse_v1_warehouse_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1271,7 +1359,7 @@ func (x *ListBranchesRequest) String() string {
 func (*ListBranchesRequest) ProtoMessage() {}
 
 func (x *ListBranchesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_warehouse_v1_warehouse_proto_msgTypes[22]
+	mi := &file_warehouse_v1_warehouse_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1284,7 +1372,7 @@ func (x *ListBranchesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBranchesRequest.ProtoReflect.Descriptor instead.
 func (*ListBranchesRequest) Descriptor() ([]byte, []int) {
-	return file_warehouse_v1_warehouse_proto_rawDescGZIP(), []int{22}
+	return file_warehouse_v1_warehouse_proto_rawDescGZIP(), []int{24}
 }
 
 type ListBranchesResponse struct {
@@ -1296,7 +1384,7 @@ type ListBranchesResponse struct {
 
 func (x *ListBranchesResponse) Reset() {
 	*x = ListBranchesResponse{}
-	mi := &file_warehouse_v1_warehouse_proto_msgTypes[23]
+	mi := &file_warehouse_v1_warehouse_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1308,7 +1396,7 @@ func (x *ListBranchesResponse) String() string {
 func (*ListBranchesResponse) ProtoMessage() {}
 
 func (x *ListBranchesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_warehouse_v1_warehouse_proto_msgTypes[23]
+	mi := &file_warehouse_v1_warehouse_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1321,7 +1409,7 @@ func (x *ListBranchesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBranchesResponse.ProtoReflect.Descriptor instead.
 func (*ListBranchesResponse) Descriptor() ([]byte, []int) {
-	return file_warehouse_v1_warehouse_proto_rawDescGZIP(), []int{23}
+	return file_warehouse_v1_warehouse_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ListBranchesResponse) GetBranches() []string {
@@ -1344,7 +1432,7 @@ type RowDiffRequest struct {
 
 func (x *RowDiffRequest) Reset() {
 	*x = RowDiffRequest{}
-	mi := &file_warehouse_v1_warehouse_proto_msgTypes[24]
+	mi := &file_warehouse_v1_warehouse_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1356,7 +1444,7 @@ func (x *RowDiffRequest) String() string {
 func (*RowDiffRequest) ProtoMessage() {}
 
 func (x *RowDiffRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_warehouse_v1_warehouse_proto_msgTypes[24]
+	mi := &file_warehouse_v1_warehouse_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1369,7 +1457,7 @@ func (x *RowDiffRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RowDiffRequest.ProtoReflect.Descriptor instead.
 func (*RowDiffRequest) Descriptor() ([]byte, []int) {
-	return file_warehouse_v1_warehouse_proto_rawDescGZIP(), []int{24}
+	return file_warehouse_v1_warehouse_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *RowDiffRequest) GetRef() *TableRef {
@@ -1410,7 +1498,7 @@ type RowDiffResponse struct {
 
 func (x *RowDiffResponse) Reset() {
 	*x = RowDiffResponse{}
-	mi := &file_warehouse_v1_warehouse_proto_msgTypes[25]
+	mi := &file_warehouse_v1_warehouse_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1422,7 +1510,7 @@ func (x *RowDiffResponse) String() string {
 func (*RowDiffResponse) ProtoMessage() {}
 
 func (x *RowDiffResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_warehouse_v1_warehouse_proto_msgTypes[25]
+	mi := &file_warehouse_v1_warehouse_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1435,7 +1523,7 @@ func (x *RowDiffResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RowDiffResponse.ProtoReflect.Descriptor instead.
 func (*RowDiffResponse) Descriptor() ([]byte, []int) {
-	return file_warehouse_v1_warehouse_proto_rawDescGZIP(), []int{25}
+	return file_warehouse_v1_warehouse_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *RowDiffResponse) GetAdded() []byte {
@@ -1537,7 +1625,11 @@ const file_warehouse_v1_warehouse_proto_rawDesc = "" +
 	"intoBranch\"I\n" +
 	"\x13MergeBranchResponse\x12\x16\n" +
 	"\x06merged\x18\x01 \x01(\bR\x06merged\x12\x1a\n" +
-	"\bconflict\x18\x02 \x01(\tR\bconflict\"\x15\n" +
+	"\bconflict\x18\x02 \x01(\tR\bconflict\")\n" +
+	"\x13DeleteBranchRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"0\n" +
+	"\x14DeleteBranchResponse\x12\x18\n" +
+	"\adeleted\x18\x01 \x01(\bR\adeleted\"\x15\n" +
 	"\x13ListBranchesRequest\"2\n" +
 	"\x14ListBranchesResponse\x12\x1a\n" +
 	"\bbranches\x18\x01 \x03(\tR\bbranches\"\x8e\x01\n" +
@@ -1556,7 +1648,7 @@ const file_warehouse_v1_warehouse_proto_rawDesc = "" +
 	"\x16CAPABILITY_TIME_TRAVEL\x10\x02\x12\x17\n" +
 	"\x13CAPABILITY_ROW_DIFF\x10\x03\x12\x1a\n" +
 	"\x16CAPABILITY_SCD2_NATIVE\x10\x04\x12\"\n" +
-	"\x1eCAPABILITY_PARTITION_EVOLUTION\x10\x052\x85\t\n" +
+	"\x1eCAPABILITY_PARTITION_EVOLUTION\x10\x052\xf4\t\n" +
 	"\x10WarehouseService\x12a\n" +
 	"\bDescribe\x12).ratatouille.warehouse.v1.DescribeRequest\x1a*.ratatouille.warehouse.v1.DescribeResponse\x12s\n" +
 	"\x0eListNamespaces\x12/.ratatouille.warehouse.v1.ListNamespacesRequest\x1a0.ratatouille.warehouse.v1.ListNamespacesResponse\x12g\n" +
@@ -1569,6 +1661,7 @@ const file_warehouse_v1_warehouse_proto_rawDesc = "" +
 	"GetHistory\x12+.ratatouille.warehouse.v1.GetHistoryRequest\x1a,.ratatouille.warehouse.v1.GetHistoryResponse\x12m\n" +
 	"\fCreateBranch\x12-.ratatouille.warehouse.v1.CreateBranchRequest\x1a..ratatouille.warehouse.v1.CreateBranchResponse\x12j\n" +
 	"\vMergeBranch\x12,.ratatouille.warehouse.v1.MergeBranchRequest\x1a-.ratatouille.warehouse.v1.MergeBranchResponse\x12m\n" +
+	"\fDeleteBranch\x12-.ratatouille.warehouse.v1.DeleteBranchRequest\x1a..ratatouille.warehouse.v1.DeleteBranchResponse\x12m\n" +
 	"\fListBranches\x12-.ratatouille.warehouse.v1.ListBranchesRequest\x1a..ratatouille.warehouse.v1.ListBranchesResponse\x12^\n" +
 	"\aRowDiff\x12(.ratatouille.warehouse.v1.RowDiffRequest\x1a).ratatouille.warehouse.v1.RowDiffResponseB\xef\x01\n" +
 	"\x1ccom.ratatouille.warehouse.v1B\x0eWarehouseProtoP\x01Z=github.com/rat-data/rat/platform/gen/warehouse/v1;warehousev1\xa2\x02\x03RWX\xaa\x02\x18Ratatouille.Warehouse.V1\xca\x02\x18Ratatouille\\Warehouse\\V1\xe2\x02$Ratatouille\\Warehouse\\V1\\GPBMetadata\xea\x02\x1aRatatouille::Warehouse::V1b\x06proto3"
@@ -1586,7 +1679,7 @@ func file_warehouse_v1_warehouse_proto_rawDescGZIP() []byte {
 }
 
 var file_warehouse_v1_warehouse_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_warehouse_v1_warehouse_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_warehouse_v1_warehouse_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_warehouse_v1_warehouse_proto_goTypes = []any{
 	(Capability)(0),                // 0: ratatouille.warehouse.v1.Capability
 	(*TableRef)(nil),               // 1: ratatouille.warehouse.v1.TableRef
@@ -1611,30 +1704,32 @@ var file_warehouse_v1_warehouse_proto_goTypes = []any{
 	(*CreateBranchResponse)(nil),   // 20: ratatouille.warehouse.v1.CreateBranchResponse
 	(*MergeBranchRequest)(nil),     // 21: ratatouille.warehouse.v1.MergeBranchRequest
 	(*MergeBranchResponse)(nil),    // 22: ratatouille.warehouse.v1.MergeBranchResponse
-	(*ListBranchesRequest)(nil),    // 23: ratatouille.warehouse.v1.ListBranchesRequest
-	(*ListBranchesResponse)(nil),   // 24: ratatouille.warehouse.v1.ListBranchesResponse
-	(*RowDiffRequest)(nil),         // 25: ratatouille.warehouse.v1.RowDiffRequest
-	(*RowDiffResponse)(nil),        // 26: ratatouille.warehouse.v1.RowDiffResponse
-	nil,                            // 27: ratatouille.warehouse.v1.AttachDescriptor.OptionsEntry
-	nil,                            // 28: ratatouille.warehouse.v1.WriteHeader.OptionsEntry
-	(v1.Layer)(0),                  // 29: ratatouille.common.v1.Layer
-	(*v1.S3Credentials)(nil),       // 30: ratatouille.common.v1.S3Credentials
-	(*timestamppb.Timestamp)(nil),  // 31: google.protobuf.Timestamp
+	(*DeleteBranchRequest)(nil),    // 23: ratatouille.warehouse.v1.DeleteBranchRequest
+	(*DeleteBranchResponse)(nil),   // 24: ratatouille.warehouse.v1.DeleteBranchResponse
+	(*ListBranchesRequest)(nil),    // 25: ratatouille.warehouse.v1.ListBranchesRequest
+	(*ListBranchesResponse)(nil),   // 26: ratatouille.warehouse.v1.ListBranchesResponse
+	(*RowDiffRequest)(nil),         // 27: ratatouille.warehouse.v1.RowDiffRequest
+	(*RowDiffResponse)(nil),        // 28: ratatouille.warehouse.v1.RowDiffResponse
+	nil,                            // 29: ratatouille.warehouse.v1.AttachDescriptor.OptionsEntry
+	nil,                            // 30: ratatouille.warehouse.v1.WriteHeader.OptionsEntry
+	(v1.Layer)(0),                  // 31: ratatouille.common.v1.Layer
+	(*v1.S3Credentials)(nil),       // 32: ratatouille.common.v1.S3Credentials
+	(*timestamppb.Timestamp)(nil),  // 33: google.protobuf.Timestamp
 }
 var file_warehouse_v1_warehouse_proto_depIdxs = []int32{
-	29, // 0: ratatouille.warehouse.v1.TableRef.layer:type_name -> ratatouille.common.v1.Layer
+	31, // 0: ratatouille.warehouse.v1.TableRef.layer:type_name -> ratatouille.common.v1.Layer
 	0,  // 1: ratatouille.warehouse.v1.DescribeResponse.capabilities:type_name -> ratatouille.warehouse.v1.Capability
 	1,  // 2: ratatouille.warehouse.v1.ListTablesResponse.tables:type_name -> ratatouille.warehouse.v1.TableRef
 	1,  // 3: ratatouille.warehouse.v1.GetSchemaRequest.ref:type_name -> ratatouille.warehouse.v1.TableRef
 	12, // 4: ratatouille.warehouse.v1.AttachResponse.descriptor:type_name -> ratatouille.warehouse.v1.AttachDescriptor
-	30, // 5: ratatouille.warehouse.v1.AttachDescriptor.storage:type_name -> ratatouille.common.v1.S3Credentials
-	27, // 6: ratatouille.warehouse.v1.AttachDescriptor.options:type_name -> ratatouille.warehouse.v1.AttachDescriptor.OptionsEntry
+	32, // 5: ratatouille.warehouse.v1.AttachDescriptor.storage:type_name -> ratatouille.common.v1.S3Credentials
+	29, // 6: ratatouille.warehouse.v1.AttachDescriptor.options:type_name -> ratatouille.warehouse.v1.AttachDescriptor.OptionsEntry
 	14, // 7: ratatouille.warehouse.v1.WriteRequest.header:type_name -> ratatouille.warehouse.v1.WriteHeader
 	1,  // 8: ratatouille.warehouse.v1.WriteHeader.ref:type_name -> ratatouille.warehouse.v1.TableRef
-	28, // 9: ratatouille.warehouse.v1.WriteHeader.options:type_name -> ratatouille.warehouse.v1.WriteHeader.OptionsEntry
+	30, // 9: ratatouille.warehouse.v1.WriteHeader.options:type_name -> ratatouille.warehouse.v1.WriteHeader.OptionsEntry
 	1,  // 10: ratatouille.warehouse.v1.GetHistoryRequest.ref:type_name -> ratatouille.warehouse.v1.TableRef
 	18, // 11: ratatouille.warehouse.v1.GetHistoryResponse.snapshots:type_name -> ratatouille.warehouse.v1.Snapshot
-	31, // 12: ratatouille.warehouse.v1.Snapshot.committed_at:type_name -> google.protobuf.Timestamp
+	33, // 12: ratatouille.warehouse.v1.Snapshot.committed_at:type_name -> google.protobuf.Timestamp
 	1,  // 13: ratatouille.warehouse.v1.RowDiffRequest.ref:type_name -> ratatouille.warehouse.v1.TableRef
 	2,  // 14: ratatouille.warehouse.v1.WarehouseService.Describe:input_type -> ratatouille.warehouse.v1.DescribeRequest
 	4,  // 15: ratatouille.warehouse.v1.WarehouseService.ListNamespaces:input_type -> ratatouille.warehouse.v1.ListNamespacesRequest
@@ -1645,21 +1740,23 @@ var file_warehouse_v1_warehouse_proto_depIdxs = []int32{
 	16, // 20: ratatouille.warehouse.v1.WarehouseService.GetHistory:input_type -> ratatouille.warehouse.v1.GetHistoryRequest
 	19, // 21: ratatouille.warehouse.v1.WarehouseService.CreateBranch:input_type -> ratatouille.warehouse.v1.CreateBranchRequest
 	21, // 22: ratatouille.warehouse.v1.WarehouseService.MergeBranch:input_type -> ratatouille.warehouse.v1.MergeBranchRequest
-	23, // 23: ratatouille.warehouse.v1.WarehouseService.ListBranches:input_type -> ratatouille.warehouse.v1.ListBranchesRequest
-	25, // 24: ratatouille.warehouse.v1.WarehouseService.RowDiff:input_type -> ratatouille.warehouse.v1.RowDiffRequest
-	3,  // 25: ratatouille.warehouse.v1.WarehouseService.Describe:output_type -> ratatouille.warehouse.v1.DescribeResponse
-	5,  // 26: ratatouille.warehouse.v1.WarehouseService.ListNamespaces:output_type -> ratatouille.warehouse.v1.ListNamespacesResponse
-	7,  // 27: ratatouille.warehouse.v1.WarehouseService.ListTables:output_type -> ratatouille.warehouse.v1.ListTablesResponse
-	9,  // 28: ratatouille.warehouse.v1.WarehouseService.GetSchema:output_type -> ratatouille.warehouse.v1.GetSchemaResponse
-	11, // 29: ratatouille.warehouse.v1.WarehouseService.Attach:output_type -> ratatouille.warehouse.v1.AttachResponse
-	15, // 30: ratatouille.warehouse.v1.WarehouseService.Write:output_type -> ratatouille.warehouse.v1.WriteResponse
-	17, // 31: ratatouille.warehouse.v1.WarehouseService.GetHistory:output_type -> ratatouille.warehouse.v1.GetHistoryResponse
-	20, // 32: ratatouille.warehouse.v1.WarehouseService.CreateBranch:output_type -> ratatouille.warehouse.v1.CreateBranchResponse
-	22, // 33: ratatouille.warehouse.v1.WarehouseService.MergeBranch:output_type -> ratatouille.warehouse.v1.MergeBranchResponse
-	24, // 34: ratatouille.warehouse.v1.WarehouseService.ListBranches:output_type -> ratatouille.warehouse.v1.ListBranchesResponse
-	26, // 35: ratatouille.warehouse.v1.WarehouseService.RowDiff:output_type -> ratatouille.warehouse.v1.RowDiffResponse
-	25, // [25:36] is the sub-list for method output_type
-	14, // [14:25] is the sub-list for method input_type
+	23, // 23: ratatouille.warehouse.v1.WarehouseService.DeleteBranch:input_type -> ratatouille.warehouse.v1.DeleteBranchRequest
+	25, // 24: ratatouille.warehouse.v1.WarehouseService.ListBranches:input_type -> ratatouille.warehouse.v1.ListBranchesRequest
+	27, // 25: ratatouille.warehouse.v1.WarehouseService.RowDiff:input_type -> ratatouille.warehouse.v1.RowDiffRequest
+	3,  // 26: ratatouille.warehouse.v1.WarehouseService.Describe:output_type -> ratatouille.warehouse.v1.DescribeResponse
+	5,  // 27: ratatouille.warehouse.v1.WarehouseService.ListNamespaces:output_type -> ratatouille.warehouse.v1.ListNamespacesResponse
+	7,  // 28: ratatouille.warehouse.v1.WarehouseService.ListTables:output_type -> ratatouille.warehouse.v1.ListTablesResponse
+	9,  // 29: ratatouille.warehouse.v1.WarehouseService.GetSchema:output_type -> ratatouille.warehouse.v1.GetSchemaResponse
+	11, // 30: ratatouille.warehouse.v1.WarehouseService.Attach:output_type -> ratatouille.warehouse.v1.AttachResponse
+	15, // 31: ratatouille.warehouse.v1.WarehouseService.Write:output_type -> ratatouille.warehouse.v1.WriteResponse
+	17, // 32: ratatouille.warehouse.v1.WarehouseService.GetHistory:output_type -> ratatouille.warehouse.v1.GetHistoryResponse
+	20, // 33: ratatouille.warehouse.v1.WarehouseService.CreateBranch:output_type -> ratatouille.warehouse.v1.CreateBranchResponse
+	22, // 34: ratatouille.warehouse.v1.WarehouseService.MergeBranch:output_type -> ratatouille.warehouse.v1.MergeBranchResponse
+	24, // 35: ratatouille.warehouse.v1.WarehouseService.DeleteBranch:output_type -> ratatouille.warehouse.v1.DeleteBranchResponse
+	26, // 36: ratatouille.warehouse.v1.WarehouseService.ListBranches:output_type -> ratatouille.warehouse.v1.ListBranchesResponse
+	28, // 37: ratatouille.warehouse.v1.WarehouseService.RowDiff:output_type -> ratatouille.warehouse.v1.RowDiffResponse
+	26, // [26:38] is the sub-list for method output_type
+	14, // [14:26] is the sub-list for method input_type
 	14, // [14:14] is the sub-list for extension type_name
 	14, // [14:14] is the sub-list for extension extendee
 	0,  // [0:14] is the sub-list for field type_name
@@ -1680,7 +1777,7 @@ func file_warehouse_v1_warehouse_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_warehouse_v1_warehouse_proto_rawDesc), len(file_warehouse_v1_warehouse_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   28,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

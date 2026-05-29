@@ -63,6 +63,9 @@ class _BranchingWarehouse(_BaseWarehouse):
     def merge_branch(self, from_branch: str, *, into_branch: str = "main") -> None:
         return None
 
+    def delete_branch(self, name: str) -> bool:
+        return True
+
     def list_branches(self) -> list[str]:
         return ["main"]
 
