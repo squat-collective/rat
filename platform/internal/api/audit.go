@@ -34,10 +34,8 @@ func AuditMiddleware(store AuditStore) func(http.Handler) http.Handler {
 
 				action := strings.ToLower(r.Method)
 				resource := r.URL.Path
-				ip := r.Header.Get("X-Real-Ip")
-				if ip == "" {
-					ip = r.RemoteAddr
-				}
+				// Trusted-proxy-resolved client IP (realip.go); not the raw header.
+				ip := clientIP(r)
 
 				if err := store.Log(r.Context(), userID, action, resource, "", ip); err != nil {
 					slog.Warn("audit log failed", "error", err)

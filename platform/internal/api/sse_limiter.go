@@ -109,12 +109,11 @@ func (l *SSELimiter) IPCount(ip string) int64 {
 	return counter.Load()
 }
 
-// clientIP extracts the client IP from the request, preferring X-Real-Ip
-// (set by chi's RealIP middleware) and stripping the port from RemoteAddr.
+// clientIP returns the request's client IP by stripping the port from
+// r.RemoteAddr. realIPMiddleware (see realip.go) is responsible for having
+// resolved RemoteAddr from trusted-proxy forwarded headers upstream — callers
+// must NOT read X-Forwarded-For / X-Real-IP directly, as those are spoofable.
 func clientIP(r *http.Request) string {
-	if xri := r.Header.Get("X-Real-Ip"); xri != "" {
-		return xri
-	}
 	// RemoteAddr is "host:port" — strip the port.
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

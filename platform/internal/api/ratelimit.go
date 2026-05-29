@@ -206,11 +206,9 @@ func RateLimit(cfg RateLimitConfig) (*RateLimiter, func(http.Handler) http.Handl
 
 	mw := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := r.RemoteAddr
-			// chi's RealIP middleware sets X-Real-IP
-			if xri := r.Header.Get("X-Real-Ip"); xri != "" {
-				ip = xri
-			}
+			// clientIP reads the trusted-proxy-resolved RemoteAddr (realip.go);
+			// the raw X-Real-IP / X-Forwarded-For headers are not trusted here.
+			ip := clientIP(r)
 
 			result := rl.allow(ip)
 			setRateLimitHeaders(w, result)

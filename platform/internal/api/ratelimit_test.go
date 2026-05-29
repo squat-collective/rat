@@ -68,7 +68,10 @@ func TestRateLimit_DifferentIPsAreIndependent(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-func TestRateLimit_UsesXRealIP(t *testing.T) {
+// The limiter keys on the resolved client IP (r.RemoteAddr, set upstream by
+// realIPMiddleware) — NOT the raw X-Real-Ip header. A client must not be able to
+// dodge or forge its rate-limit identity by setting that header itself.
+func TestRateLimit_KeysOnRemoteAddr_IgnoresRawXRealIPHeader(t *testing.T) {
 	cfg := api.RateLimitConfig{
 		RequestsPerSecond: 10,
 		Burst:             1,
@@ -77,22 +80,23 @@ func TestRateLimit_UsesXRealIP(t *testing.T) {
 
 	rl, mw := api.RateLimit(cfg)
 	defer rl.Stop()
-	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// First request with X-Real-Ip header
+	// First request from a given peer (with some X-Real-Ip header set).
 	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
-	req.RemoteAddr = "proxy:1234"
-	req.Header.Set("X-Real-Ip", "client-ip")
+	req.RemoteAddr = "10.0.0.5:1234"
+	req.Header.Set("X-Real-Ip", "1.1.1.1")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	// Second request from same real IP — should be limited
+	// Second request from the SAME peer but a DIFFERENT spoofed X-Real-Ip —
+	// still limited, proving the header doesn't change the key.
 	req = httptest.NewRequest(http.MethodGet, "/", http.NoBody)
-	req.RemoteAddr = "proxy:1234"
-	req.Header.Set("X-Real-Ip", "client-ip")
+	req.RemoteAddr = "10.0.0.5:9999"
+	req.Header.Set("X-Real-Ip", "2.2.2.2")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
