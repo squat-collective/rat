@@ -1,0 +1,40 @@
+[project]
+name = "rat-warehouse-iceberg-nessie"
+version = "0.2.0b1"
+description = "Reference warehouse plugin for RAT — Apache Iceberg tables on S3/MinIO with a Nessie catalog. Serves warehouse/v1 (ADR-024)."
+requires-python = ">=3.14"
+dependencies = [
+    "pyiceberg[pyarrow]>=0.7",
+    "pyarrow>=17.0",
+    "duckdb>=1.1",
+    "grpcio>=1.65",
+    "protobuf>=6.33,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff==0.15.15",
+    "pyright>=1.1",
+    "grpcio-tools>=1.65",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rat_warehouse_iceberg"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+# extend-exclude (not exclude) so ruff's built-in excludes still apply on top.
+extend-exclude = ["src/rat_warehouse_iceberg/gen"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "TCH"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["SIM117", "TCH001", "TCH002", "TCH003", "B017", "N806", "E501"]
