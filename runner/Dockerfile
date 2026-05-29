@@ -1,6 +1,14 @@
 # Build stage — only production dependencies
-FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203 AS builder
+FROM python:3.14-slim@sha256:c845af9399020c7e562969a13689e929074a10fd057acd1b1fad06a2fb068e97 AS builder
 WORKDIR /build
+# C toolchain for source builds: pyiceberg ships no cp314 wheel yet, so its
+# avro `decoder_fast` C extension is compiled from sdist here. Builder-stage
+# only — the slim runtime stage just copies the resulting .venv, so the
+# compiler never lands in the shipped image. Drop this once pyiceberg
+# publishes cp314 wheels.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends build-essential \
+  && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv
 # Copy the lockfile + pyproject so uv can install from the frozen set
 # BEFORE we copy the source — keeps the dep layer cacheable across source changes.
@@ -18,7 +26,7 @@ COPY src/ ./src/
 RUN uv sync --locked --no-dev --no-editable
 
 # Runtime stage
-FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
+FROM python:3.14-slim@sha256:c845af9399020c7e562969a13689e929074a10fd057acd1b1fad06a2fb068e97
 LABEL org.opencontainers.image.title="rat-runner"
 LABEL org.opencontainers.image.description="RAT pipeline runner (Python execution engine)"
 LABEL org.opencontainers.image.source="https://github.com/squat-collective/rat"

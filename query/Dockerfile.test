@@ -1,7 +1,7 @@
 # Test image — deps pre-installed, source mounted at runtime.
 # Build: docker build -f query/Dockerfile.test -t rat-query-test query/
 # Run:   docker run --rm -v $(pwd)/query/src:/app/src -v $(pwd)/query/tests:/app/tests rat-query-test
-FROM python:3.12-slim
+FROM python:3.14-slim
 WORKDIR /app
 RUN pip install --no-cache-dir uv
 COPY pyproject.toml uv.lock ./
