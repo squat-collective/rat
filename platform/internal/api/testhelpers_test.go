@@ -265,13 +265,13 @@ func (m *memoryLandingZoneStore) UpdateZone(_ context.Context, namespace, name s
 			continue
 		}
 		if description != nil {
-			m.zones[i].LandingZone.Description = *description
+			m.zones[i].Description = *description
 		}
 		if owner != nil {
-			m.zones[i].LandingZone.Owner = owner
+			m.zones[i].Owner = owner
 		}
 		if expectedSchema != nil {
-			m.zones[i].LandingZone.ExpectedSchema = *expectedSchema
+			m.zones[i].ExpectedSchema = *expectedSchema
 		}
 		lz := m.zones[i].LandingZone
 		return &lz, nil
@@ -355,10 +355,10 @@ func (m *memoryLandingZoneStore) UpdateZoneLifecycle(_ context.Context, zoneID u
 	for i, z := range m.zones {
 		if z.ID == zoneID {
 			if processedMaxAgeDays != nil {
-				m.zones[i].LandingZone.ProcessedMaxAgeDays = processedMaxAgeDays
+				m.zones[i].ProcessedMaxAgeDays = processedMaxAgeDays
 			}
 			if autoPurge != nil {
-				m.zones[i].LandingZone.AutoPurge = *autoPurge
+				m.zones[i].AutoPurge = *autoPurge
 			}
 			return nil
 		}

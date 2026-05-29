@@ -137,14 +137,14 @@ func hasURLScheme(s string) bool {
 	}
 	for j := 0; j < i; j++ {
 		c := s[j]
-		switch {
-		case j == 0:
-			if !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') {
+		switch j {
+		case 0:
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
 				return false
 			}
 		default:
-			if !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') &&
-				!(c >= '0' && c <= '9') && c != '+' && c != '-' && c != '.' {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') &&
+				(c < '0' || c > '9') && c != '+' && c != '-' && c != '.' {
 				return false
 			}
 		}
