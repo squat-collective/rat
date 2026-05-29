@@ -24,7 +24,7 @@ test:
 		-v "$(shell pwd)":/work \
 		-v "$(ROOT)/platform":/platform \
 		-v "$(ROOT)/sdk-go":/sdk-go \
-		-w /work golang:1.24-alpine \
+		-w /work golang:1.26-alpine \
 		sh -c "go mod tidy && go test ./..."
 
 # Run the plugin on ratd's Docker network. The OpenAI settings here are only
