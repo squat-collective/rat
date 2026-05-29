@@ -1,12 +1,18 @@
 # RAT v2 — Documentation Deployment
-# Builds the Nextra docs site and deploys to GitHub Pages
-# on every push to main that touches docs or website files.
+# Builds the Nextra docs site on every PR that touches docs/website files
+# (validation only), and on push to main also deploys to GitHub Pages.
+# The PR build is the guard that catches website/dependency breakage BEFORE
+# merge — `npm ci` + `npm run build` against the real site.
 
 name: Docs
 
 on:
   push:
     branches: [main]
+    paths:
+      - "website/**"
+      - "docs/**"
+  pull_request:
     paths:
       - "website/**"
       - "docs/**"
@@ -51,7 +57,10 @@ jobs:
       - name: Build static site
         run: npm run build
 
+      # Only the push-to-main build feeds a Pages deploy; PR builds are
+      # validation only and skip the artifact upload.
       - name: Upload Pages artifact
+        if: github.event_name == 'push'
         uses: actions/upload-pages-artifact@v3
         with:
           path: website/out
@@ -59,6 +68,8 @@ jobs:
   deploy:
     name: Deploy to GitHub Pages
     needs: build
+    # Never deploy from a PR — only from push to main.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
