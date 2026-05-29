@@ -57,7 +57,7 @@
 | `mlly` | 1.8.0 | MIT | https://github.com/unjs/mlly |
 | `ms` | 2.1.3 | MIT | https://github.com/vercel/ms |
 | `mz` | 2.7.0 | MIT | https://github.com/normalize/mz |
-| `nanoid` | 3.3.11 | MIT | https://github.com/ai/nanoid |
+| `nanoid` | 3.3.12 | MIT | https://github.com/ai/nanoid |
 | `object-assign` | 4.1.1 | MIT | https://github.com/sindresorhus/object-assign |
 | `pathe` | 1.1.2 | MIT | https://github.com/unjs/pathe |
 | `pathe` | 2.0.3 | MIT | https://github.com/unjs/pathe |
@@ -67,7 +67,7 @@
 | `pirates` | 4.0.7 | MIT | https://github.com/danez/pirates |
 | `pkg-types` | 1.3.1 | MIT | https://github.com/unjs/pkg-types |
 | `postcss-load-config` | 6.0.1 | MIT | https://github.com/postcss/postcss-load-config |
-| `postcss` | 8.5.6 | MIT | https://github.com/postcss/postcss |
+| `postcss` | 8.5.15 | MIT | https://github.com/postcss/postcss |
 | `readdirp` | 4.1.2 | MIT | https://github.com/paulmillr/readdirp |
 | `resolve-from` | 5.0.0 | MIT | https://github.com/sindresorhus/resolve-from |
 | `rollup` | 4.57.1 | MIT | https://github.com/rollup/rollup |

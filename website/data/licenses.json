@@ -313,7 +313,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.16",
+    "version": "1.43.17",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "runner",
@@ -321,7 +321,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.16",
+    "version": "1.43.17",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "runner",
@@ -385,7 +385,7 @@
   },
   {
     "name": "idna",
-    "version": "3.16",
+    "version": "3.17",
     "license": "BSD-3-Clause",
     "url": "https://github.com/kjd/idna",
     "component": "runner",
@@ -537,7 +537,7 @@
   },
   {
     "name": "s3transfer",
-    "version": "0.17.1",
+    "version": "0.18.0",
     "license": "Apache Software License",
     "url": "https://github.com/boto/s3transfer",
     "component": "runner",
@@ -689,7 +689,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.16",
+    "version": "1.43.17",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "query",
@@ -697,7 +697,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.16",
+    "version": "1.43.17",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "query",
@@ -777,7 +777,7 @@
   },
   {
     "name": "idna",
-    "version": "3.16",
+    "version": "3.17",
     "license": "BSD-3-Clause",
     "url": "https://github.com/kjd/idna",
     "component": "query",
@@ -993,7 +993,7 @@
   },
   {
     "name": "s3transfer",
-    "version": "0.17.1",
+    "version": "0.18.0",
     "license": "Apache Software License",
     "url": "https://github.com/boto/s3transfer",
     "component": "query",
@@ -1161,7 +1161,7 @@
   },
   {
     "name": "@codemirror/lang-yaml",
-    "version": "6.1.2",
+    "version": "6.1.3",
     "license": "MIT",
     "url": "https://github.com/codemirror/lang-yaml",
     "component": "portal",
@@ -1177,9 +1177,9 @@
   },
   {
     "name": "@codemirror/lint",
-    "version": "6.9.4",
+    "version": "6.9.6",
     "license": "MIT",
-    "url": "https://github.com/codemirror/lint",
+    "url": "git+https://code.haverbeke.berlin/codemirror/lint",
     "component": "portal",
     "scope": "runtime"
   },
@@ -1193,7 +1193,7 @@
   },
   {
     "name": "@codemirror/state",
-    "version": "6.5.4",
+    "version": "6.6.0",
     "license": "MIT",
     "url": "https://github.com/codemirror/state",
     "component": "portal",
@@ -1209,9 +1209,9 @@
   },
   {
     "name": "@codemirror/view",
-    "version": "6.39.14",
+    "version": "6.43.0",
     "license": "MIT",
-    "url": "https://github.com/codemirror/view",
+    "url": "git+https://code.haverbeke.berlin/codemirror/view",
     "component": "portal",
     "scope": "runtime"
   },
@@ -1849,7 +1849,7 @@
   },
   {
     "name": "@xyflow/react",
-    "version": "12.10.0",
+    "version": "12.10.2",
     "license": "MIT",
     "url": "https://github.com/xyflow/xyflow",
     "component": "portal",
@@ -1857,7 +1857,7 @@
   },
   {
     "name": "@xyflow/system",
-    "version": "0.0.74",
+    "version": "0.0.76",
     "license": "MIT",
     "url": "https://github.com/xyflow/xyflow",
     "component": "portal",
@@ -1937,7 +1937,7 @@
   },
   {
     "name": "caniuse-lite",
-    "version": "1.0.30001769",
+    "version": "1.0.30001793",
     "license": "CC-BY-4.0",
     "url": "https://github.com/browserslist/caniuse-lite",
     "component": "portal",
@@ -2353,7 +2353,7 @@
   },
   {
     "name": "nanoid",
-    "version": "3.3.11",
+    "version": "3.3.12",
     "license": "MIT",
     "url": "https://github.com/ai/nanoid",
     "component": "portal",
@@ -2513,7 +2513,7 @@
   },
   {
     "name": "postcss",
-    "version": "8.5.6",
+    "version": "8.5.15",
     "license": "MIT",
     "url": "https://github.com/postcss/postcss",
     "component": "portal",
@@ -2665,7 +2665,7 @@
   },
   {
     "name": "swr",
-    "version": "2.4.0",
+    "version": "2.4.1",
     "license": "MIT",
     "url": "https://github.com/vercel/swr",
     "component": "portal",
@@ -2793,9 +2793,33 @@
   },
   {
     "name": "@asamuzakjp/css-color",
-    "version": "3.2.0",
+    "version": "5.1.11",
     "license": "MIT",
     "url": "https://github.com/asamuzaK/cssColor",
+    "component": "portal",
+    "scope": "dev"
+  },
+  {
+    "name": "@asamuzakjp/dom-selector",
+    "version": "7.1.1",
+    "license": "MIT",
+    "url": "https://github.com/asamuzaK/domSelector",
+    "component": "portal",
+    "scope": "dev"
+  },
+  {
+    "name": "@asamuzakjp/generational-cache",
+    "version": "1.0.1",
+    "license": "MIT",
+    "url": "https://github.com/asamuzaK/generationalCache",
+    "component": "portal",
+    "scope": "dev"
+  },
+  {
+    "name": "@asamuzakjp/nwsapi",
+    "version": "2.3.9",
+    "license": "MIT",
+    "url": "https://github.com/dperini/nwsapi",
     "component": "portal",
     "scope": "dev"
   },
@@ -2824,8 +2848,16 @@
     "scope": "dev"
   },
   {
+    "name": "@bramus/specificity",
+    "version": "2.4.2",
+    "license": "MIT",
+    "url": "https://github.com/bramus/specificity",
+    "component": "portal",
+    "scope": "dev"
+  },
+  {
     "name": "@csstools/color-helpers",
-    "version": "5.1.0",
+    "version": "6.0.2",
     "license": "MIT-0",
     "url": "https://github.com/csstools/postcss-plugins",
     "component": "portal",
@@ -2833,7 +2865,7 @@
   },
   {
     "name": "@csstools/css-calc",
-    "version": "2.1.4",
+    "version": "3.2.1",
     "license": "MIT",
     "url": "https://github.com/csstools/postcss-plugins",
     "component": "portal",
@@ -2841,7 +2873,7 @@
   },
   {
     "name": "@csstools/css-color-parser",
-    "version": "3.1.0",
+    "version": "4.1.1",
     "license": "MIT",
     "url": "https://github.com/csstools/postcss-plugins",
     "component": "portal",
@@ -2849,15 +2881,23 @@
   },
   {
     "name": "@csstools/css-parser-algorithms",
-    "version": "3.0.5",
+    "version": "4.0.0",
     "license": "MIT",
     "url": "https://github.com/csstools/postcss-plugins",
     "component": "portal",
     "scope": "dev"
   },
   {
+    "name": "@csstools/css-syntax-patches-for-csstree",
+    "version": "1.1.4",
+    "license": "MIT-0",
+    "url": "https://github.com/csstools/postcss-plugins",
+    "component": "portal",
+    "scope": "dev"
+  },
+  {
     "name": "@csstools/css-tokenizer",
-    "version": "3.0.4",
+    "version": "4.0.0",
     "license": "MIT",
     "url": "https://github.com/csstools/postcss-plugins",
     "component": "portal",
@@ -2908,6 +2948,14 @@
     "version": "8.57.1",
     "license": "MIT",
     "url": "https://github.com/eslint/eslint",
+    "component": "portal",
+    "scope": "dev"
+  },
+  {
+    "name": "@exodus/bytes",
+    "version": "1.15.1",
+    "license": "MIT",
+    "url": "https://github.com/ExodusOSS/bytes",
     "component": "portal",
     "scope": "dev"
   },
@@ -3025,7 +3073,7 @@
   },
   {
     "name": "@types/dagre",
-    "version": "0.7.53",
+    "version": "0.7.54",
     "license": "MIT",
     "url": "https://github.com/DefinitelyTyped/DefinitelyTyped",
     "component": "portal",
@@ -3057,7 +3105,7 @@
   },
   {
     "name": "@types/node",
-    "version": "20.19.33",
+    "version": "25.9.1",
     "license": "MIT",
     "url": "https://github.com/DefinitelyTyped/DefinitelyTyped",
     "component": "portal",
@@ -3240,14 +3288,6 @@
     "scope": "dev"
   },
   {
-    "name": "agent-base",
-    "version": "7.1.4",
-    "license": "MIT",
-    "url": "https://github.com/TooTallNate/proxy-agents",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
     "name": "ajv",
     "version": "6.12.6",
     "license": "MIT",
@@ -3400,16 +3440,8 @@
     "scope": "dev"
   },
   {
-    "name": "asynckit",
-    "version": "0.4.0",
-    "license": "MIT",
-    "url": "https://github.com/alexindigo/asynckit",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
     "name": "autoprefixer",
-    "version": "10.4.24",
+    "version": "10.5.0",
     "license": "MIT",
     "url": "https://github.com/postcss/autoprefixer",
     "component": "portal",
@@ -3449,9 +3481,17 @@
   },
   {
     "name": "baseline-browser-mapping",
-    "version": "2.9.19",
+    "version": "2.10.32",
     "license": "Apache-2.0",
     "url": "https://github.com/web-platform-dx/baseline-browser-mapping",
+    "component": "portal",
+    "scope": "dev"
+  },
+  {
+    "name": "bidi-js",
+    "version": "1.0.3",
+    "license": "MIT",
+    "url": "https://github.com/lojjic/bidi-js",
     "component": "portal",
     "scope": "dev"
   },
@@ -3473,7 +3513,7 @@
   },
   {
     "name": "browserslist",
-    "version": "4.28.1",
+    "version": "4.28.2",
     "license": "MIT",
     "url": "https://github.com/browserslist/browserslist",
     "component": "portal",
@@ -3576,14 +3616,6 @@
     "scope": "dev"
   },
   {
-    "name": "combined-stream",
-    "version": "1.0.8",
-    "license": "MIT",
-    "url": "https://github.com/felixge/node-combined-stream",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
     "name": "concat-map",
     "version": "0.0.1",
     "license": "MIT",
@@ -3616,10 +3648,10 @@
     "scope": "dev"
   },
   {
-    "name": "cssstyle",
-    "version": "4.6.0",
+    "name": "css-tree",
+    "version": "3.2.1",
     "license": "MIT",
-    "url": "https://github.com/jsdom/cssstyle",
+    "url": "https://github.com/csstree/csstree",
     "component": "portal",
     "scope": "dev"
   },
@@ -3633,7 +3665,7 @@
   },
   {
     "name": "data-urls",
-    "version": "5.0.0",
+    "version": "7.0.0",
     "license": "MIT",
     "url": "https://github.com/jsdom/data-urls",
     "component": "portal",
@@ -3720,14 +3752,6 @@
     "scope": "dev"
   },
   {
-    "name": "delayed-stream",
-    "version": "1.0.0",
-    "license": "MIT",
-    "url": "https://github.com/felixge/node-delayed-stream",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
     "name": "doctrine",
     "version": "2.1.0",
     "license": "Apache-2.0",
@@ -3769,9 +3793,9 @@
   },
   {
     "name": "electron-to-chromium",
-    "version": "1.5.286",
+    "version": "1.5.364",
     "license": "ISC",
-    "url": "https://github.com/kilian/electron-to-chromium",
+    "url": "https://github.com/Kilian/electron-to-chromium",
     "component": "portal",
     "scope": "dev"
   },
@@ -3793,7 +3817,7 @@
   },
   {
     "name": "entities",
-    "version": "6.0.1",
+    "version": "8.0.0",
     "license": "BSD-2-Clause",
     "url": "https://github.com/fb55/entities",
     "component": "portal",
@@ -4136,14 +4160,6 @@
     "scope": "dev"
   },
   {
-    "name": "form-data",
-    "version": "4.0.5",
-    "license": "MIT",
-    "url": "https://github.com/form-data/form-data",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
     "name": "fraction.js",
     "version": "5.3.4",
     "license": "MIT",
@@ -4313,33 +4329,9 @@
   },
   {
     "name": "html-encoding-sniffer",
-    "version": "4.0.0",
+    "version": "6.0.0",
     "license": "MIT",
     "url": "https://github.com/jsdom/html-encoding-sniffer",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
-    "name": "http-proxy-agent",
-    "version": "7.0.2",
-    "license": "MIT",
-    "url": "https://github.com/TooTallNate/proxy-agents",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
-    "name": "https-proxy-agent",
-    "version": "7.0.6",
-    "license": "MIT",
-    "url": "https://github.com/TooTallNate/proxy-agents",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
-    "name": "iconv-lite",
-    "version": "0.6.3",
-    "license": "MIT",
-    "url": "https://github.com/ashtuchkin/iconv-lite",
     "component": "portal",
     "scope": "dev"
   },
@@ -4641,7 +4633,7 @@
   },
   {
     "name": "jsdom",
-    "version": "25.0.1",
+    "version": "29.1.1",
     "license": "MIT",
     "url": "https://github.com/jsdom/jsdom",
     "component": "portal",
@@ -4760,6 +4752,14 @@
     "scope": "dev"
   },
   {
+    "name": "lru-cache",
+    "version": "11.5.1",
+    "license": "BlueOak-1.0.0",
+    "url": "https://github.com/isaacs/node-lru-cache",
+    "component": "portal",
+    "scope": "dev"
+  },
+  {
     "name": "lz-string",
     "version": "1.5.0",
     "license": "MIT",
@@ -4784,18 +4784,10 @@
     "scope": "dev"
   },
   {
-    "name": "mime-db",
-    "version": "1.52.0",
-    "license": "MIT",
-    "url": "https://github.com/jshttp/mime-db",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
-    "name": "mime-types",
-    "version": "2.1.35",
-    "license": "MIT",
-    "url": "https://github.com/jshttp/mime-types",
+    "name": "mdn-data",
+    "version": "2.27.1",
+    "license": "CC0-1.0",
+    "url": "https://github.com/mdn/data",
     "component": "portal",
     "scope": "dev"
   },
@@ -4865,17 +4857,9 @@
   },
   {
     "name": "node-releases",
-    "version": "2.0.27",
+    "version": "2.0.46",
     "license": "MIT",
     "url": "https://github.com/chicoxyzzy/node-releases",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
-    "name": "nwsapi",
-    "version": "2.2.23",
-    "license": "MIT",
-    "url": "https://github.com/dperini/nwsapi",
     "component": "portal",
     "scope": "dev"
   },
@@ -4985,7 +4969,7 @@
   },
   {
     "name": "parse5",
-    "version": "7.3.0",
+    "version": "8.0.1",
     "license": "MIT",
     "url": "https://github.com/inikulin/parse5",
     "component": "portal",
@@ -5136,6 +5120,14 @@
     "scope": "dev"
   },
   {
+    "name": "require-from-string",
+    "version": "2.0.2",
+    "license": "MIT",
+    "url": "https://github.com/floatdrop/require-from-string",
+    "component": "portal",
+    "scope": "dev"
+  },
+  {
     "name": "resolve-from",
     "version": "4.0.0",
     "license": "MIT",
@@ -5184,22 +5176,6 @@
     "scope": "dev"
   },
   {
-    "name": "rrweb-cssom",
-    "version": "0.7.1",
-    "license": "MIT",
-    "url": "https://github.com/rrweb-io/CSSOM",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
-    "name": "rrweb-cssom",
-    "version": "0.8.0",
-    "license": "MIT",
-    "url": "https://github.com/rrweb-io/CSSOM",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
     "name": "safe-array-concat",
     "version": "1.1.3",
     "license": "MIT",
@@ -5220,14 +5196,6 @@
     "version": "1.1.0",
     "license": "MIT",
     "url": "https://github.com/ljharb/safe-regex-test",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
-    "name": "safer-buffer",
-    "version": "2.1.2",
-    "license": "MIT",
-    "url": "https://github.com/ChALkeR/safer-buffer",
     "component": "portal",
     "scope": "dev"
   },
@@ -5545,7 +5513,7 @@
   },
   {
     "name": "tldts-core",
-    "version": "6.1.86",
+    "version": "7.4.1",
     "license": "MIT",
     "url": "https://github.com/remusao/tldts",
     "component": "portal",
@@ -5553,7 +5521,7 @@
   },
   {
     "name": "tldts",
-    "version": "6.1.86",
+    "version": "7.4.0",
     "license": "MIT",
     "url": "https://github.com/remusao/tldts",
     "component": "portal",
@@ -5561,7 +5529,7 @@
   },
   {
     "name": "tough-cookie",
-    "version": "5.1.2",
+    "version": "6.0.1",
     "license": "BSD-3-Clause",
     "url": "https://github.com/salesforce/tough-cookie",
     "component": "portal",
@@ -5569,7 +5537,7 @@
   },
   {
     "name": "tr46",
-    "version": "5.1.1",
+    "version": "6.0.0",
     "license": "MIT",
     "url": "https://github.com/jsdom/tr46",
     "component": "portal",
@@ -5681,7 +5649,15 @@
   },
   {
     "name": "undici-types",
-    "version": "6.21.0",
+    "version": "7.24.6",
+    "license": "MIT",
+    "url": "https://github.com/nodejs/undici",
+    "component": "portal",
+    "scope": "dev"
+  },
+  {
+    "name": "undici",
+    "version": "7.26.0",
     "license": "MIT",
     "url": "https://github.com/nodejs/undici",
     "component": "portal",
@@ -5745,23 +5721,15 @@
   },
   {
     "name": "webidl-conversions",
-    "version": "7.0.0",
+    "version": "8.0.1",
     "license": "BSD-2-Clause",
     "url": "https://github.com/jsdom/webidl-conversions",
     "component": "portal",
     "scope": "dev"
   },
   {
-    "name": "whatwg-encoding",
-    "version": "3.1.1",
-    "license": "MIT",
-    "url": "https://github.com/jsdom/whatwg-encoding",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
     "name": "whatwg-mimetype",
-    "version": "4.0.0",
+    "version": "5.0.0",
     "license": "MIT",
     "url": "https://github.com/jsdom/whatwg-mimetype",
     "component": "portal",
@@ -5769,7 +5737,7 @@
   },
   {
     "name": "whatwg-url",
-    "version": "14.2.0",
+    "version": "16.0.1",
     "license": "MIT",
     "url": "https://github.com/jsdom/whatwg-url",
     "component": "portal",
@@ -5852,14 +5820,6 @@
     "version": "1.0.2",
     "license": "ISC",
     "url": "https://github.com/npm/wrappy",
-    "component": "portal",
-    "scope": "dev"
-  },
-  {
-    "name": "ws",
-    "version": "8.19.0",
-    "license": "MIT",
-    "url": "https://github.com/websockets/ws",
     "component": "portal",
     "scope": "dev"
   },
@@ -6257,7 +6217,7 @@
   },
   {
     "name": "nanoid",
-    "version": "3.3.11",
+    "version": "3.3.12",
     "license": "MIT",
     "url": "https://github.com/ai/nanoid",
     "component": "sdk-typescript",
@@ -6337,7 +6297,7 @@
   },
   {
     "name": "postcss",
-    "version": "8.5.6",
+    "version": "8.5.15",
     "license": "MIT",
     "url": "https://github.com/postcss/postcss",
     "component": "sdk-typescript",
