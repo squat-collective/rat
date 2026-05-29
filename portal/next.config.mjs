@@ -1,6 +1,19 @@
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  // The SDK is consumed via a `file:../sdk-typescript` link and lives outside
+  // the portal dir. Next 16 builds with Turbopack by default, which only traces
+  // modules under the inferred project root — point that root one level up so
+  // the linked workspace package resolves (matches the Makefile mounts under
+  // /workspace).
+  turbopack: {
+    root: join(__dirname, ".."),
+  },
   experimental: {
     serverActions: {
       bodySizeLimit: "10mb",

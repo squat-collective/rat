@@ -30,7 +30,7 @@ function buildCsp(nonce: string, isDev: boolean): string {
   ].join("; ");
 }
 
-async function handleMiddleware(request: NextRequest) {
+async function handleProxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const isDev = process.env.NODE_ENV === "development";
 
@@ -52,8 +52,8 @@ async function handleMiddleware(request: NextRequest) {
   return response;
 }
 
-export function middleware(request: NextRequest) {
-  return handleMiddleware(request);
+export function proxy(request: NextRequest) {
+  return handleProxy(request);
 }
 
 export const config = {
