@@ -165,10 +165,12 @@ class SourceConnectorProtocol(Protocol):
 
 
 # ── Warehouse (rat.warehouses) ───────────────────────────────────────────────
-# The storage-substrate seam (ADR-024). Today's Iceberg+Nessie integration is
-# being refactored into the reference implementation behind this Protocol so
-# alternative catalogs/formats (Unity, Glue, Polaris, DuckLake, Delta) arrive as
-# plugins rather than core edits.
+# The storage-substrate seam (ADR-024). The cross-language wire contract is
+# warehouse/v1 (ConnectRPC, see proto/warehouse/v1). These Protocols are the
+# Python AUTHOR SDK: a warehouse plugin implements WarehouseProtocol (+ any
+# optional capability Protocols it supports) and an adapter (a later slice)
+# serves it as the gRPC WarehouseService. Today's Iceberg+Nessie integration
+# becomes the reference impl behind it.
 
 WarehouseCapability = Literal[
     "branching",  # ephemeral write branches + merge (Nessie-style)
@@ -188,24 +190,51 @@ class TableRef:
     name: str
 
 
+@dataclass(frozen=True)
+class AttachDescriptor:
+    """What a runner needs to READ a warehouse, without baking in an engine.
+
+    Backend-agnostic (ADR-024 §4): a DuckDB runner turns this into an ATTACH; a
+    future engine consumes it however it needs. Mirrors warehouse/v1's
+    ``AttachDescriptor`` message.
+    """
+
+    catalog_uri: str
+    format: str  # e.g. "iceberg", "delta"
+    storage: dict[str, str] = field(default_factory=dict)  # object-store creds/opts
+    options: dict[str, str] = field(default_factory=dict)  # engine-specific extras
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """One committed version of a table (TIME_TRAVEL)."""
+
+    id: str
+    committed_at: str  # ISO-8601
+    message: str
+    rows: int
+
+
+@dataclass(frozen=True)
+class RowDiff:
+    """Row-level diff between two refs (ROW_DIFF)."""
+
+    added: pa.Table
+    removed: pa.Table
+
+
 @runtime_checkable
 class WarehouseProtocol(Protocol):
-    """Protocol for a pluggable storage substrate / catalog (ADR-024).
+    """Required surface every warehouse implements (ADR-024).
 
-    A warehouse owns table discovery, read attachment for runners, and writes
-    (routing to a compatible merge-strategy implementation). The universal
-    surface below is always present.
+    Discovery, read-attach, and write. Optional features (branching, time
+    travel, row diff) are SEPARATE Protocols (below) that a warehouse opts into;
+    a caller checks ``capabilities`` and then ``isinstance(wh, BranchingWarehouse)``
+    etc. before using them, so a warehouse that lacks a feature never stubs it.
 
-    Optional, capability-gated operations (history / branch / row-diff) are NOT
-    part of this base Protocol: a caller first checks ``capabilities`` and then
-    invokes them through the capability-specific accessor added in a later
-    slice. This keeps warehouses that lack a feature from being forced to stub
-    it.
-
-    NOTE (ADR-024, slice 1): this is the contract only. The iceberg-nessie
-    reference implementation and the consumer migration (ratq, diff,
-    docs-assistant, pg-sync) land in later slices — defining this Protocol
-    changes no runtime behaviour.
+    NOTE (ADR-024 slice 1): contract only — no runtime behaviour change. The
+    iceberg-nessie reference impl + the warehouse/v1 serving adapter + the
+    consumer migration land in later slices.
     """
 
     @property
@@ -222,25 +251,19 @@ class WarehouseProtocol(Protocol):
         """List namespaces known to the warehouse."""
         ...
 
-    def list_tables(self, namespace: str) -> list[str]:
-        """List table names within a namespace."""
+    def list_tables(self, namespace: str) -> list[TableRef]:
+        """List tables within a namespace."""
         ...
 
-    def get_schema(self, ref: TableRef) -> pa.Schema:
+    def get_schema(self, ref: TableRef, *, branch: str = "main") -> pa.Schema:
         """Return the Arrow schema of a table."""
         ...
 
-    def attach_for_runner(
-        self,
-        runner_type: str,
-        conn: duckdb.DuckDBPyConnection,
-        *,
-        branch: str = "main",
-    ) -> None:
-        """Make the warehouse's tables readable by a runner.
+    def attach(self, runner_type: str, *, branch: str = "main") -> AttachDescriptor:
+        """Return an opaque descriptor a runner uses to read the warehouse.
 
-        For a DuckDB-backed runner this performs the catalog ATTACH / view
-        wiring; the runner itself stays warehouse-agnostic.
+        The runner stays warehouse-agnostic; the warehouse stays runner-agnostic
+        (ADR-024 §4).
         """
         ...
 
@@ -249,14 +272,48 @@ class WarehouseProtocol(Protocol):
         ref: TableRef,
         data: pa.Table,
         strategy: str,
-        opts: PipelineConfig | None,
+        options: dict[str, str] | None = None,
         *,
         branch: str = "main",
     ) -> int:
-        """Write ``data`` to ``ref`` using the named strategy; return rows written.
+        """Write ``data`` to ``ref`` via the named strategy; return rows written.
 
-        The warehouse resolves the (warehouse, strategy) pair to a compatible
-        strategy implementation (ADR-024 §3 — strategy *name* is universal, the
-        *implementation* declares its supported warehouses).
+        Strategy *name* is universal; the warehouse resolves it to a compatible
+        *implementation* (ADR-024 §3/§5).
         """
+        ...
+
+
+@runtime_checkable
+class BranchingWarehouse(Protocol):
+    """Optional capability ``branching``: ephemeral write branches + merge."""
+
+    def create_branch(self, name: str, *, from_ref: str = "main") -> str:
+        """Create a branch off ``from_ref``; return its name."""
+        ...
+
+    def merge_branch(self, from_branch: str, *, into_branch: str = "main") -> None:
+        """Merge ``from_branch`` into ``into_branch`` (raises on conflict)."""
+        ...
+
+    def list_branches(self) -> list[str]:
+        """List branch names."""
+        ...
+
+
+@runtime_checkable
+class TimeTravelWarehouse(Protocol):
+    """Optional capability ``time_travel``: read older snapshots / history."""
+
+    def get_history(self, ref: TableRef, *, limit: int = 0) -> list[Snapshot]:
+        """Return a table's commit history, newest first (0 => server default)."""
+        ...
+
+
+@runtime_checkable
+class RowDiffWarehouse(Protocol):
+    """Optional capability ``row_diff``: row-level diff between two refs."""
+
+    def row_diff(self, ref: TableRef, from_ref: str, to_ref: str, *, limit: int = 0) -> RowDiff:
+        """Return rows added/removed going from ``from_ref`` to ``to_ref``."""
         ...

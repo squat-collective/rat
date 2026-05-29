@@ -1,0 +1,188 @@
+syntax = "proto3";
+
+package ratatouille.warehouse.v1;
+
+option go_package = "github.com/rat-data/rat/platform/gen/warehouse/v1;warehousev1";
+
+import "common/v1/common.proto";
+import "google/protobuf/timestamp.proto";
+
+// WarehouseService is the cross-language storage-substrate contract (ADR-024).
+//
+// A warehouse plugin (e.g. the default `iceberg-nessie`) implements this; the
+// runner, ratq, ratd, and ratd-fronted Go plugins call it. Table data moves as
+// Arrow IPC, matching how RAT already streams Arrow between ratd and the
+// runner/query sidecars.
+//
+// The first six RPCs are the REQUIRED surface every warehouse implements. The
+// remaining RPCs are CAPABILITY-GATED: a warehouse advertises which it supports
+// in Describe, and a caller MUST check the capability set before invoking the
+// matching group. Calling an unadvertised RPC returns CodeUnimplemented.
+service WarehouseService {
+  // — Required surface —
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+  rpc ListNamespaces(ListNamespacesRequest) returns (ListNamespacesResponse);
+  rpc ListTables(ListTablesRequest) returns (ListTablesResponse);
+  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
+  rpc Attach(AttachRequest) returns (AttachResponse);
+  rpc Write(stream WriteRequest) returns (WriteResponse);
+
+  // — Capability-gated: TIME_TRAVEL —
+  rpc GetHistory(GetHistoryRequest) returns (GetHistoryResponse);
+
+  // — Capability-gated: BRANCHING —
+  rpc CreateBranch(CreateBranchRequest) returns (CreateBranchResponse);
+  rpc MergeBranch(MergeBranchRequest) returns (MergeBranchResponse);
+  rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse);
+
+  // — Capability-gated: ROW_DIFF —
+  rpc RowDiff(RowDiffRequest) returns (RowDiffResponse);
+}
+
+// Capability enumerates the OPTIONAL features a warehouse may support. Callers
+// gate on the set advertised in DescribeResponse before using the matching RPCs.
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+  CAPABILITY_BRANCHING = 1;            // ephemeral write branches + merge (Nessie-style)
+  CAPABILITY_TIME_TRAVEL = 2;          // read an older snapshot/version of a table
+  CAPABILITY_ROW_DIFF = 3;             // row-level diff between two refs/versions
+  CAPABILITY_SCD2_NATIVE = 4;          // native SCD2 support in the storage layer
+  CAPABILITY_PARTITION_EVOLUTION = 5;  // repartition without rewriting history
+}
+
+// TableRef addresses a table within a warehouse: namespace.layer.name.
+message TableRef {
+  string namespace = 1;
+  ratatouille.common.v1.Layer layer = 2;
+  string name = 3;
+}
+
+message DescribeRequest {}
+
+message DescribeResponse {
+  string name = 1;                       // warehouse identifier, e.g. "iceberg-nessie"
+  string version = 2;                    // plugin version
+  repeated Capability capabilities = 3;  // optional features this warehouse supports
+}
+
+message ListNamespacesRequest {}
+
+message ListNamespacesResponse {
+  repeated string namespaces = 1;
+}
+
+message ListTablesRequest {
+  string namespace = 1;
+}
+
+message ListTablesResponse {
+  repeated TableRef tables = 1;
+}
+
+message GetSchemaRequest {
+  TableRef ref = 1;
+  string branch = 2;  // "" => main
+}
+
+message GetSchemaResponse {
+  bytes arrow_schema = 1;  // Arrow IPC serialized Schema
+  int64 row_count = 2;     // approximate
+  int64 size_bytes = 3;    // approximate bytes on disk
+}
+
+// Attach hands a runner what it needs to READ the warehouse without baking in a
+// particular engine (ADR-024 §4). The descriptor is opaque beyond the documented
+// fields — a DuckDB runner turns it into an ATTACH; another engine consumes it
+// however it needs.
+message AttachRequest {
+  string runner_type = 1;  // e.g. "sql", "python", "duckdb"
+  string branch = 2;       // "" => main
+}
+
+message AttachResponse {
+  AttachDescriptor descriptor = 1;
+}
+
+message AttachDescriptor {
+  string catalog_uri = 1;                            // catalog/endpoint to attach to
+  string format = 2;                                 // e.g. "iceberg", "delta"
+  ratatouille.common.v1.S3Credentials storage = 3;   // object-store creds (optional)
+  map<string, string> options = 4;                   // engine-specific extras
+}
+
+// Write streams an Arrow table in and applies it with the named strategy. The
+// first message carries the WriteHeader; subsequent messages carry arrow_batch
+// chunks (header-then-chunks streaming, as RAT streams Arrow elsewhere).
+message WriteRequest {
+  oneof payload {
+    WriteHeader header = 1;
+    bytes arrow_batch = 2;  // Arrow IPC RecordBatch chunk
+  }
+}
+
+message WriteHeader {
+  TableRef ref = 1;
+  string strategy = 2;               // universal strategy name, e.g. "scd2"
+  string branch = 3;                 // "" => main
+  map<string, string> options = 4;   // strategy / pipeline-config options
+}
+
+message WriteResponse {
+  int64 rows_written = 1;
+}
+
+// — TIME_TRAVEL —
+message GetHistoryRequest {
+  TableRef ref = 1;
+  int32 limit = 2;  // 0 => server default
+}
+
+message GetHistoryResponse {
+  repeated Snapshot snapshots = 1;
+}
+
+message Snapshot {
+  string id = 1;
+  google.protobuf.Timestamp committed_at = 2;
+  string message = 3;
+  int64 rows = 4;
+}
+
+// — BRANCHING —
+message CreateBranchRequest {
+  string name = 1;
+  string from_ref = 2;  // branch or snapshot to fork from; "" => main
+}
+
+message CreateBranchResponse {
+  string name = 1;
+}
+
+message MergeBranchRequest {
+  string from_branch = 1;
+  string into_branch = 2;  // "" => main
+}
+
+message MergeBranchResponse {
+  bool merged = 1;
+  string conflict = 2;  // non-empty when merge failed on conflict
+}
+
+message ListBranchesRequest {}
+
+message ListBranchesResponse {
+  repeated string branches = 1;
+}
+
+// — ROW_DIFF —
+message RowDiffRequest {
+  TableRef ref = 1;
+  string from_ref = 2;  // snapshot or branch
+  string to_ref = 3;    // snapshot or branch
+  int32 limit = 4;      // 0 => server default
+}
+
+message RowDiffResponse {
+  bytes added = 1;    // Arrow IPC RecordBatch of added rows
+  bytes removed = 2;  // Arrow IPC RecordBatch of removed rows
+}
