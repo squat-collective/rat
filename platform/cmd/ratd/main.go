@@ -829,6 +829,21 @@ func main() {
 		srv.CORSOrigins = strings.Split(corsEnv, ",")
 	}
 
+	// Trusted reverse-proxy CIDRs / IPs (comma-separated, e.g.
+	// "10.0.0.0/8,192.168.1.5"). Only requests arriving from these peers have
+	// their X-Forwarded-For / X-Real-IP honored when resolving the client IP;
+	// everyone else is identified by their direct connection address. Empty
+	// (the default) trusts no proxy — the spoof-safe default for a direct bind.
+	if tp := os.Getenv("RAT_TRUSTED_PROXIES"); tp != "" {
+		proxies, err := api.ParseTrustedProxies(tp)
+		if err != nil {
+			slog.Error("invalid RAT_TRUSTED_PROXIES", "value", tp, "error", err)
+			os.Exit(1)
+		}
+		srv.TrustedProxies = proxies
+		slog.Info("trusted proxies configured", "count", len(proxies))
+	}
+
 	// Per-IP rate limiting (disable with RATE_LIMIT=0).
 	if rl := os.Getenv("RATE_LIMIT"); rl != "0" {
 		cfg := api.DefaultRateLimitConfig()

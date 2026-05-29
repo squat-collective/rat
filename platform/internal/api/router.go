@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -341,6 +342,7 @@ type Server struct {
 	PluginSources  PluginSourceStore  // plugin source repository management
 	PluginPolicies PluginPolicyStore  // plugin allow/deny policy management
 	CORSOrigins   []string          // Allowed CORS origins. Defaults to ["http://localhost:3000"].
+	TrustedProxies []netip.Prefix   // Proxies whose X-Forwarded-For/X-Real-IP are trusted. Empty = trust none (use direct peer).
 	RateLimit        *RateLimitConfig   // Per-IP rate limiting config. Nil disables rate limiting.
 	RateLimiterStop  func()            // Populated by NewRouter when rate limiting is enabled.
 	WebhookRateLimit *WebhookRateLimitConfig // Per-IP webhook rate limiting. Nil = uses default config.
@@ -427,11 +429,10 @@ func NewRouter(srv *Server) chi.Router {
 	r.Use(cors.Handler(corsOpts))
 	r.Use(securityHeaders)
 	r.Use(RequestID)
-	// SA1019: chi 5.3 deprecates RealIP over header spoofing. Here it only
-	// seeds the rate-limit / log client IP (not an authz boundary), and RAT
-	// sits behind the operator's own reverse proxy. Follow-up: replace with a
-	// trusted-proxy allowlist (see #31).
-	r.Use(middleware.RealIP) //nolint:staticcheck // deprecation accepted, see note above
+	// Resolve the real client IP from trusted-proxy forwarded headers (replaces
+	// chi's spoofable middleware.RealIP — see realip.go). With no trusted proxies
+	// configured (the default), the direct peer address is used verbatim.
+	r.Use(realIPMiddleware(srv.TrustedProxies))
 	r.Use(RequestLogger)
 	r.Use(middleware.Recoverer)
 
@@ -573,11 +574,10 @@ func NewInternalRouter(srv *Server) chi.Router {
 	// listener is for trusted in-cluster callers only.
 	r.Use(securityHeaders)
 	r.Use(RequestID)
-	// SA1019: chi 5.3 deprecates RealIP over header spoofing. Here it only
-	// seeds the rate-limit / log client IP (not an authz boundary), and RAT
-	// sits behind the operator's own reverse proxy. Follow-up: replace with a
-	// trusted-proxy allowlist (see #31).
-	r.Use(middleware.RealIP) //nolint:staticcheck // deprecation accepted, see note above
+	// Resolve the real client IP from trusted-proxy forwarded headers (replaces
+	// chi's spoofable middleware.RealIP — see realip.go). With no trusted proxies
+	// configured (the default), the direct peer address is used verbatim.
+	r.Use(realIPMiddleware(srv.TrustedProxies))
 	r.Use(RequestLogger)
 	r.Use(middleware.Recoverer)
 
