@@ -70,7 +70,7 @@ export function QualityTestDialog({
       console.error("Failed to create quality test:", e);
       triggerGlitch();
     }
-  }, [create, testName, sqlBody, onOpenChange, triggerGlitch]);
+  }, [create, testName, sqlBody, onOpenChange, triggerGlitch, mutate]);
 
   return (
     <Dialog

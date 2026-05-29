@@ -1,6 +1,12 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../../tailwind.config.ts";
+
+/*
+ * Tailwind v4 changed the default border / ring color from gray-200 to
+ * `currentColor`. The portal relies on `@apply border-border` resolving to
+ * the themed border token, so we don't depend on the v3 default — but we keep
+ * the base layer below to preserve the exact prior look.
+ */
 
 @layer base {
   :root {

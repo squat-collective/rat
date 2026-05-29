@@ -114,7 +114,12 @@ function FileTreeNode({
 
   if (node.type === "dir") {
     return (
-      <li role="treeitem" aria-expanded={expanded} tabIndex={-1}>
+      <li
+        role="treeitem"
+        aria-expanded={expanded}
+        aria-selected={selectedPath === node.path}
+        tabIndex={-1}
+      >
         <button
           onClick={() => setExpanded(!expanded)}
           onContextMenu={() => onContextMenu?.(node.path)}
