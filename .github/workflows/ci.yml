@@ -146,11 +146,12 @@ jobs:
         run: go vet ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        # Held at v6: golangci-lint-action >= v7 drops support for golangci-lint
+        # v1.x, but we pin golangci-lint v1.64.8 (lockstep with GO_LINT_IMAGE /
+        # the Makefile so `make ci` locally == this job). Bump this in lockstep
+        # with a migration to golangci-lint v2 + .golangci.yml, not before.
+        uses: golangci/golangci-lint-action@v6
         with:
-          # Pinned (not "latest") so a new golangci release can't silently
-          # turn a green build red — matches GO_LINT_IMAGE in the Makefile so
-          # `make ci` locally == this job.
           version: v1.64.8
           working-directory: platform
           args: --timeout=3m
