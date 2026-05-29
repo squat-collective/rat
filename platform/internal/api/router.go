@@ -352,6 +352,8 @@ type Server struct {
 	S3Health         HealthChecker     // S3/MinIO health check (BucketExists). Nil = skip.
 	RunnerHealth     HealthChecker     // Runner gRPC health check. Nil = skip.
 	QueryHealth      HealthChecker     // ratq gRPC health check. Nil = skip.
+	Warehouse        WarehouseClient   // Active warehouse plugin (ADR-024). Nil = none configured.
+	WarehouseHealth  HealthChecker     // Warehouse Describe health probe. Nil = skip.
 
 	// Metrics callables — exported as Prometheus gauges by HandleMetrics.
 	// Each is optional; the corresponding metric is omitted when nil so dev

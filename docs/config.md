@@ -292,6 +292,19 @@ When `RATQ_ADDR` is set, ratd creates a `query.Client` that:
 
 ---
 
+## Warehouse (ADR-024)
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `WAREHOUSE_ADDR` | No | — | ConnectRPC address of the active warehouse plugin (serves `warehouse/v1`; e.g. the `iceberg-nessie` reference warehouse). When set, ratd holds a `warehouse.Client`, reports the warehouse under `/health` (a `Describe` round-trip), and — in later slices — vends catalog/history/diff operations to consumers. When unset, no warehouse is wired (the runner uses its built-in storage path until the runner-switch slice lands). |
+
+**Example**:
+```
+WAREHOUSE_ADDR=http://warehouse-iceberg-nessie:50080
+```
+
+---
+
 ## Query Service (ratq)
 
 > Configuration for the query service itself (`rat-query`).

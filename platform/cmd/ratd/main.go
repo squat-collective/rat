@@ -55,6 +55,7 @@ import (
 	"github.com/rat-data/rat/platform/internal/storage"
 	"github.com/rat-data/rat/platform/internal/transport"
 	"github.com/rat-data/rat/platform/internal/trigger"
+	"github.com/rat-data/rat/platform/internal/warehouse"
 )
 
 // validateEnv checks that critical environment variables have valid values.
@@ -118,7 +119,7 @@ func validateEnv() []string {
 	}
 
 	// Validate gRPC address env vars (URL or host:port).
-	for _, name := range []string{"RUNNER_ADDR", "RATQ_ADDR"} {
+	for _, name := range []string{"RUNNER_ADDR", "RATQ_ADDR", "WAREHOUSE_ADDR"} {
 		if v := os.Getenv(name); v != "" {
 			// RUNNER_ADDR may be comma-separated for round-robin.
 			for _, addr := range strings.Split(v, ",") {
@@ -671,6 +672,16 @@ func main() {
 		srv.Query = query.NewClient(ratqAddr, grpcClient)
 		srv.QueryHealth = transport.NewTCPHealthChecker(ratqAddr, "query")
 		slog.Info("query service initialized", "ratq_addr", ratqAddr)
+	}
+
+	// Wire the warehouse plugin when WAREHOUSE_ADDR is set (ADR-024). ratd holds
+	// the client to introspect the warehouse and report its health; consumers go
+	// through it in later slices. A Describe round-trip is the health probe.
+	if whAddr := os.Getenv("WAREHOUSE_ADDR"); whAddr != "" {
+		whc := warehouse.NewClient(whAddr, grpcClient)
+		srv.Warehouse = whc
+		srv.WarehouseHealth = whc
+		slog.Info("warehouse service initialized", "warehouse_addr", whAddr)
 	}
 
 	// startBackgroundWorkers launches scheduler, trigger evaluator, and reaper.

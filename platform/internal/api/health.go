@@ -140,6 +140,9 @@ func (s *Server) healthCheckers() map[string]HealthChecker {
 	if s.QueryHealth != nil {
 		checkers["query"] = s.QueryHealth
 	}
+	if s.WarehouseHealth != nil {
+		checkers["warehouse"] = s.WarehouseHealth
+	}
 	return checkers
 }
 
