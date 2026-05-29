@@ -1,6 +1,6 @@
 # ADR-024: Warehouse plugin architecture
 
-## Status: Proposed (under review 2026-05-29)
+## Status: Accepted (2026-05-29)
 
 ## Context
 
@@ -121,6 +121,30 @@ preinstalled so "one-line deploy, data in 5 minutes" holds: the **`iceberg-nessi
 warehouse (today's stack, refactored into the reference plugin), `sql`/`python`
 runners, the six built-in strategies, core plugins (diff, docs-assistant, …).
 Every piece replaceable; nothing required-assembly.
+
+## Deployment shape
+
+A warehouse runs as its **own plugin process** serving `WarehouseService` over
+ConnectRPC — the same lifecycle as today's Go platform plugins
+(`.claude/rules/plugins.md`): it phones home to ratd's internal listener
+(`:8090`, ADR-019), advertises its endpoint + `Describe` (name + capabilities),
+and exposes a healthcheck. The language is free — the default **`iceberg-nessie`**
+warehouse is a **Python** ConnectRPC server wrapping today's `iceberg.py`/`nessie.py`
+behind the author-SDK adapter (§6); a third party could ship a Go one.
+
+- **Selection:** `rat.yaml` names the active warehouse; ratd holds the binding
+  and refuses to start a pipeline against an unregistered/unhealthy warehouse.
+- **Routing:** ratd is the front door. Go plugins (`diff`, `docs-assistant`,
+  `pg-sync`) and the portal call ratd, which proxies to the warehouse (mirrors
+  the existing `/api/v1/x/<plugin>/*` reverse-proxy). The runner and ratq, being
+  gRPC-native, may call the warehouse endpoint directly once ratd has vended it,
+  avoiding an extra hop on the Arrow write path.
+- **Default bundle:** the `iceberg-nessie` warehouse ships preinstalled and
+  wired in the default `docker-compose` (alongside postgres/minio/nessie), so the
+  "one-line deploy" story is unchanged — the warehouse is just one more managed
+  service, not operator assembly.
+- **Trust:** warehouse↔ratd uses the platform-token scheme (ADR-020); the
+  warehouse's own listener is network-isolated like the other internal services.
 
 ## Migration sequence (re-sliced for the cross-language design)
 
