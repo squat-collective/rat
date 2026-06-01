@@ -88,7 +88,7 @@
 | `tree-kill` | 1.2.2 | MIT | https://github.com/pkrumins/node-tree-kill |
 | `ts-interface-checker` | 0.1.13 | Apache-2.0 | https://github.com/gristlabs/ts-interface-checker |
 | `tsup` | 8.5.1 | MIT | https://github.com/egoist/tsup |
-| `typescript` | 5.9.3 | Apache-2.0 | https://github.com/microsoft/TypeScript |
+| `typescript` | 6.0.3 | Apache-2.0 | https://github.com/microsoft/TypeScript |
 | `ufo` | 1.6.3 | MIT | https://github.com/unjs/ufo |
 | `vite-node` | 2.1.9 | MIT | https://github.com/vitest-dev/vitest |
 | `vite` | 5.4.21 | MIT | https://github.com/vitejs/vite |
