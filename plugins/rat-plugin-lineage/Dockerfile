@@ -13,14 +13,14 @@
 #     -t rat-plugin-lineage examples/rat-plugin-lineage
 #
 # Or `make build` from this directory.
-FROM node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8 AS ui-builder
+FROM node:26-alpine@sha256:144769ec3f32e8ee36b3cfde91e82bee25d9367b20f31a151f3f7eea3a2a8541 AS ui-builder
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json* ./
 RUN npm install --no-audit --no-fund --silent || npm install --no-audit --no-fund
 COPY ui/ ./
 RUN npm run build
 
-FROM golang:1.26-alpine@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d AS go-builder
+FROM golang:1.26-alpine@sha256:f23e8b227fb4493eabe03bede4d5a32d04092da71962f1fb79b5f7d1e6c2a17f AS go-builder
 WORKDIR /build
 COPY --from=platform . /platform/
 COPY --from=sdk . /sdk-go/
