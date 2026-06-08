@@ -7,8 +7,8 @@
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
 | `annotated-types` | 0.7.0 | MIT License | https://github.com/annotated-types/annotated-types |
-| `boto3` | 1.43.18 | Apache-2.0 | https://github.com/boto/boto3 |
-| `botocore` | 1.43.18 | Apache-2.0 | https://github.com/boto/botocore |
+| `boto3` | 1.43.24 | Apache-2.0 | https://github.com/boto/boto3 |
+| `botocore` | 1.43.24 | Apache-2.0 | https://github.com/boto/botocore |
 | `cachetools` | 6.2.6 | MIT | https://github.com/tkem/cachetools/ |
 | `certifi` | 2026.5.20 | Mozilla Public License 2.0 (MPL 2.0) | https://github.com/certifi/python-certifi |
 | `charset-normalizer` | 3.4.7 | MIT | https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md |
@@ -18,7 +18,7 @@
 | `fsspec` | 2026.4.0 | BSD-3-Clause | https://github.com/fsspec/filesystem_spec |
 | `grpcio` | 1.81.0 | Apache-2.0 | https://grpc.io |
 | `grpcio-tools` | 1.81.0 | Apache-2.0 | https://grpc.io |
-| `idna` | 3.17 | BSD-3-Clause | https://github.com/kjd/idna |
+| `idna` | 3.18 | BSD-3-Clause | https://github.com/kjd/idna |
 | `iniconfig` | 2.3.0 | MIT | https://github.com/pytest-dev/iniconfig |
 | `Jinja2` | 3.1.6 | BSD License | https://github.com/pallets/jinja/ |
 | `jmespath` | 1.1.0 | MIT License | https://github.com/jmespath/jmespath.py |
@@ -36,7 +36,7 @@
 | `Pygments` | 2.20.0 | BSD-2-Clause | https://pygments.org |
 | `pyiceberg` | 0.11.1 | Apache-2.0 | https://py.iceberg.apache.org/ |
 | `pyparsing` | 3.3.2 | MIT | https://github.com/pyparsing/pyparsing/ |
-| `pyright` | 1.1.409 | MIT | https://github.com/RobertCraigie/pyright-python |
+| `pyright` | 1.1.410 | MIT | https://github.com/RobertCraigie/pyright-python |
 | `pyroaring` | 1.1.0 | MIT License | https://github.com/Ezibenroc/PyRoaringBitMap |
 | `pytest` | 9.0.3 | MIT | https://docs.pytest.org/en/latest/ |
 | `pytest-cov` | 7.1.0 | MIT | https://pytest-cov.readthedocs.io/en/latest/changelog.html |

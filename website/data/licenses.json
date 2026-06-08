@@ -9,7 +9,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.18",
+    "version": "1.43.24",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "runner",
@@ -17,7 +17,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.18",
+    "version": "1.43.24",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "runner",
@@ -81,7 +81,7 @@
   },
   {
     "name": "idna",
-    "version": "3.17",
+    "version": "3.18",
     "license": "BSD-3-Clause",
     "url": "https://github.com/kjd/idna",
     "component": "runner",
@@ -345,7 +345,7 @@
   },
   {
     "name": "pyright",
-    "version": "1.1.409",
+    "version": "1.1.410",
     "license": "MIT",
     "url": "https://github.com/RobertCraigie/pyright-python",
     "component": "runner",
@@ -385,7 +385,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.18",
+    "version": "1.43.24",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "query",
@@ -393,7 +393,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.18",
+    "version": "1.43.24",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "query",
@@ -473,7 +473,7 @@
   },
   {
     "name": "idna",
-    "version": "3.17",
+    "version": "3.18",
     "license": "BSD-3-Clause",
     "url": "https://github.com/kjd/idna",
     "component": "query",
@@ -617,7 +617,7 @@
   },
   {
     "name": "pyright",
-    "version": "1.1.409",
+    "version": "1.1.410",
     "license": "MIT",
     "url": "https://github.com/RobertCraigie/pyright-python",
     "component": "query",
