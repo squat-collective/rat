@@ -13,7 +13,7 @@
 #     -t rat-plugin-interconnect examples/rat-plugin-interconnect
 #
 # Or just run `make build` from this directory.
-FROM golang:1.26-alpine@sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d AS builder
+FROM golang:1.26-alpine@sha256:7a3e50096189ad57c9f9f865e7e4aa8585ed1585248513dc5cda498e2f41812c AS builder
 WORKDIR /build
 
 # The platform module supplies the generated plugin/v1 ConnectRPC stubs.
@@ -23,7 +23,7 @@ COPY . .
 
 RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /interconnect .
 
-FROM alpine:3.23@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+FROM alpine:3.24@sha256:a2d49ea686c2adfe3c992e47dc3b5e7fa6e6b5055609400dc2acaeb241c829f4
 RUN addgroup -S rat && adduser -S -G rat rat
 COPY --from=builder /interconnect /interconnect
 USER rat
