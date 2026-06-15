@@ -7,8 +7,8 @@
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
 | `annotated-types` | 0.7.0 | MIT License | https://github.com/annotated-types/annotated-types |
-| `boto3` | 1.43.24 | Apache-2.0 | https://github.com/boto/boto3 |
-| `botocore` | 1.43.24 | Apache-2.0 | https://github.com/boto/botocore |
+| `boto3` | 1.43.29 | Apache-2.0 | https://github.com/boto/boto3 |
+| `botocore` | 1.43.29 | Apache-2.0 | https://github.com/boto/botocore |
 | `cachetools` | 6.2.6 | MIT | https://github.com/tkem/cachetools/ |
 | `certifi` | 2026.5.20 | Mozilla Public License 2.0 (MPL 2.0) | https://github.com/certifi/python-certifi |
 | `charset-normalizer` | 3.4.7 | MIT | https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md |
@@ -16,8 +16,8 @@
 | `coverage` | 7.14.1 | Apache-2.0 | https://github.com/coveragepy/coveragepy |
 | `duckdb` | 1.5.3 | MIT License | https://github.com/duckdb/duckdb-python |
 | `fsspec` | 2026.4.0 | BSD-3-Clause | https://github.com/fsspec/filesystem_spec |
-| `grpcio` | 1.81.0 | Apache-2.0 | https://grpc.io |
-| `grpcio-tools` | 1.81.0 | Apache-2.0 | https://grpc.io |
+| `grpcio` | 1.81.1 | Apache-2.0 | https://grpc.io |
+| `grpcio-tools` | 1.81.1 | Apache-2.0 | https://grpc.io |
 | `idna` | 3.18 | BSD-3-Clause | https://github.com/kjd/idna |
 | `iniconfig` | 2.3.0 | MIT | https://github.com/pytest-dev/iniconfig |
 | `Jinja2` | 3.1.6 | BSD License | https://github.com/pallets/jinja/ |
@@ -38,7 +38,7 @@
 | `pyparsing` | 3.3.2 | MIT | https://github.com/pyparsing/pyparsing/ |
 | `pyright` | 1.1.410 | MIT | https://github.com/RobertCraigie/pyright-python |
 | `pyroaring` | 1.1.0 | MIT License | https://github.com/Ezibenroc/PyRoaringBitMap |
-| `pytest` | 9.0.3 | MIT | https://docs.pytest.org/en/latest/ |
+| `pytest` | 9.1.0 | MIT | https://docs.pytest.org/en/latest/ |
 | `pytest-cov` | 7.1.0 | MIT | https://pytest-cov.readthedocs.io/en/latest/changelog.html |
 | `python-dateutil` | 2.9.0.post0 | Apache Software License; BSD License | https://github.com/dateutil/dateutil |
 | `PyYAML` | 6.0.3 | MIT License | https://pyyaml.org/ |

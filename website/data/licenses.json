@@ -9,7 +9,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.24",
+    "version": "1.43.29",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "runner",
@@ -17,7 +17,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.24",
+    "version": "1.43.29",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "runner",
@@ -73,7 +73,7 @@
   },
   {
     "name": "grpcio",
-    "version": "1.81.0",
+    "version": "1.81.1",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "runner",
@@ -305,7 +305,7 @@
   },
   {
     "name": "grpcio-tools",
-    "version": "1.81.0",
+    "version": "1.81.1",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "runner",
@@ -353,7 +353,7 @@
   },
   {
     "name": "pytest",
-    "version": "9.0.3",
+    "version": "9.1.0",
     "license": "MIT",
     "url": "https://docs.pytest.org/en/latest/",
     "component": "runner",
@@ -385,7 +385,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.24",
+    "version": "1.43.29",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "query",
@@ -393,7 +393,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.24",
+    "version": "1.43.29",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "query",
@@ -457,7 +457,7 @@
   },
   {
     "name": "grpcio",
-    "version": "1.81.0",
+    "version": "1.81.1",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "query",
@@ -465,7 +465,7 @@
   },
   {
     "name": "grpcio-tools",
-    "version": "1.81.0",
+    "version": "1.81.1",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "query",
@@ -633,7 +633,7 @@
   },
   {
     "name": "pytest",
-    "version": "9.0.3",
+    "version": "9.1.0",
     "license": "MIT",
     "url": "https://docs.pytest.org/en/latest/",
     "component": "query",
