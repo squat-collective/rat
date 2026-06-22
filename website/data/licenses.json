@@ -9,7 +9,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.29",
+    "version": "1.43.34",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "runner",
@@ -17,7 +17,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.29",
+    "version": "1.43.34",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "runner",
@@ -33,7 +33,7 @@
   },
   {
     "name": "certifi",
-    "version": "2026.5.20",
+    "version": "2026.6.17",
     "license": "Mozilla Public License 2.0 (MPL 2.0)",
     "url": "https://github.com/certifi/python-certifi",
     "component": "runner",
@@ -57,7 +57,7 @@
   },
   {
     "name": "duckdb",
-    "version": "1.5.3",
+    "version": "1.5.4",
     "license": "MIT License",
     "url": "https://github.com/duckdb/duckdb-python",
     "component": "runner",
@@ -65,7 +65,7 @@
   },
   {
     "name": "fsspec",
-    "version": "2026.4.0",
+    "version": "2026.6.0",
     "license": "BSD-3-Clause",
     "url": "https://github.com/fsspec/filesystem_spec",
     "component": "runner",
@@ -233,7 +233,7 @@
   },
   {
     "name": "s3transfer",
-    "version": "0.18.0",
+    "version": "0.19.0",
     "license": "Apache Software License",
     "url": "https://github.com/boto/s3transfer",
     "component": "runner",
@@ -297,7 +297,7 @@
   },
   {
     "name": "coverage",
-    "version": "7.14.1",
+    "version": "7.14.2",
     "license": "Apache-2.0",
     "url": "https://github.com/coveragepy/coveragepy",
     "component": "runner",
@@ -353,7 +353,7 @@
   },
   {
     "name": "pytest",
-    "version": "9.1.0",
+    "version": "9.1.1",
     "license": "MIT",
     "url": "https://docs.pytest.org/en/latest/",
     "component": "runner",
@@ -385,7 +385,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.29",
+    "version": "1.43.34",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "query",
@@ -393,7 +393,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.29",
+    "version": "1.43.34",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "query",
@@ -409,7 +409,7 @@
   },
   {
     "name": "certifi",
-    "version": "2026.5.20",
+    "version": "2026.6.17",
     "license": "Mozilla Public License 2.0 (MPL 2.0)",
     "url": "https://github.com/certifi/python-certifi",
     "component": "query",
@@ -433,7 +433,7 @@
   },
   {
     "name": "coverage",
-    "version": "7.14.1",
+    "version": "7.14.2",
     "license": "Apache-2.0",
     "url": "https://github.com/coveragepy/coveragepy",
     "component": "query",
@@ -441,7 +441,7 @@
   },
   {
     "name": "duckdb",
-    "version": "1.5.3",
+    "version": "1.5.4",
     "license": "MIT License",
     "url": "https://github.com/duckdb/duckdb-python",
     "component": "query",
@@ -449,7 +449,7 @@
   },
   {
     "name": "fsspec",
-    "version": "2026.4.0",
+    "version": "2026.6.0",
     "license": "BSD-3-Clause",
     "url": "https://github.com/fsspec/filesystem_spec",
     "component": "query",
@@ -633,7 +633,7 @@
   },
   {
     "name": "pytest",
-    "version": "9.1.0",
+    "version": "9.1.1",
     "license": "MIT",
     "url": "https://docs.pytest.org/en/latest/",
     "component": "query",
@@ -689,7 +689,7 @@
   },
   {
     "name": "s3transfer",
-    "version": "0.18.0",
+    "version": "0.19.0",
     "license": "Apache Software License",
     "url": "https://github.com/boto/s3transfer",
     "component": "query",
