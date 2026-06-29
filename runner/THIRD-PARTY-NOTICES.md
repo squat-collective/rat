@@ -7,12 +7,12 @@
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
 | `annotated-types` | 0.7.0 | MIT License | https://github.com/annotated-types/annotated-types |
-| `boto3` | 1.43.34 | Apache-2.0 | https://github.com/boto/boto3 |
-| `botocore` | 1.43.34 | Apache-2.0 | https://github.com/boto/botocore |
+| `boto3` | 1.43.36 | Apache-2.0 | https://github.com/boto/boto3 |
+| `botocore` | 1.43.36 | Apache-2.0 | https://github.com/boto/botocore |
 | `cachetools` | 6.2.6 | MIT | https://github.com/tkem/cachetools/ |
 | `certifi` | 2026.6.17 | Mozilla Public License 2.0 (MPL 2.0) | https://github.com/certifi/python-certifi |
 | `charset-normalizer` | 3.4.7 | MIT | https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md |
-| `click` | 8.4.1 | BSD-3-Clause | https://github.com/pallets/click/ |
+| `click` | 8.4.2 | BSD-3-Clause | https://github.com/pallets/click/ |
 | `duckdb` | 1.5.4 | MIT License | https://github.com/duckdb/duckdb-python |
 | `fsspec` | 2026.6.0 | BSD-3-Clause | https://github.com/fsspec/filesystem_spec |
 | `grpcio` | 1.81.1 | Apache-2.0 | https://grpc.io |
@@ -48,13 +48,13 @@
 
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
-| `coverage` | 7.14.2 | Apache-2.0 | https://github.com/coveragepy/coveragepy |
+| `coverage` | 7.14.3 | Apache-2.0 | https://github.com/coveragepy/coveragepy |
 | `grpcio-tools` | 1.81.1 | Apache-2.0 | https://grpc.io |
 | `iniconfig` | 2.3.0 | MIT | https://github.com/pytest-dev/iniconfig |
 | `nodeenv` | 1.10.0 | BSD License | https://github.com/ekalinin/nodeenv |
 | `packaging` | 26.2 | Apache-2.0 OR BSD-2-Clause | https://github.com/pypa/packaging |
 | `pluggy` | 1.6.0 | MIT License | UNKNOWN |
-| `pyright` | 1.1.410 | MIT | https://github.com/RobertCraigie/pyright-python |
+| `pyright` | 1.1.411 | MIT | https://github.com/RobertCraigie/pyright-python |
 | `pytest` | 9.1.1 | MIT | https://docs.pytest.org/en/latest/ |
 | `pytest-cov` | 7.1.0 | MIT | https://pytest-cov.readthedocs.io/en/latest/changelog.html |
 | `ruff` | 0.15.15 | MIT | https://docs.astral.sh/ruff |

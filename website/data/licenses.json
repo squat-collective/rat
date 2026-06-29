@@ -9,7 +9,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.34",
+    "version": "1.43.36",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "runner",
@@ -17,7 +17,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.34",
+    "version": "1.43.36",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "runner",
@@ -49,7 +49,7 @@
   },
   {
     "name": "click",
-    "version": "8.4.1",
+    "version": "8.4.2",
     "license": "BSD-3-Clause",
     "url": "https://github.com/pallets/click/",
     "component": "runner",
@@ -297,7 +297,7 @@
   },
   {
     "name": "coverage",
-    "version": "7.14.2",
+    "version": "7.14.3",
     "license": "Apache-2.0",
     "url": "https://github.com/coveragepy/coveragepy",
     "component": "runner",
@@ -345,7 +345,7 @@
   },
   {
     "name": "pyright",
-    "version": "1.1.410",
+    "version": "1.1.411",
     "license": "MIT",
     "url": "https://github.com/RobertCraigie/pyright-python",
     "component": "runner",
@@ -385,7 +385,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.34",
+    "version": "1.43.36",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "query",
@@ -393,7 +393,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.34",
+    "version": "1.43.36",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "query",
@@ -425,7 +425,7 @@
   },
   {
     "name": "click",
-    "version": "8.4.1",
+    "version": "8.4.2",
     "license": "BSD-3-Clause",
     "url": "https://github.com/pallets/click/",
     "component": "query",
@@ -433,7 +433,7 @@
   },
   {
     "name": "coverage",
-    "version": "7.14.2",
+    "version": "7.14.3",
     "license": "Apache-2.0",
     "url": "https://github.com/coveragepy/coveragepy",
     "component": "query",
@@ -617,7 +617,7 @@
   },
   {
     "name": "pyright",
-    "version": "1.1.410",
+    "version": "1.1.411",
     "license": "MIT",
     "url": "https://github.com/RobertCraigie/pyright-python",
     "component": "query",
