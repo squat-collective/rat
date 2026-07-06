@@ -7,17 +7,17 @@
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
 | `annotated-types` | 0.7.0 | MIT License | https://github.com/annotated-types/annotated-types |
-| `boto3` | 1.43.36 | Apache-2.0 | https://github.com/boto/boto3 |
-| `botocore` | 1.43.36 | Apache-2.0 | https://github.com/boto/botocore |
+| `boto3` | 1.43.40 | Apache-2.0 | https://github.com/boto/boto3 |
+| `botocore` | 1.43.40 | Apache-2.0 | https://github.com/boto/botocore |
 | `cachetools` | 6.2.6 | MIT | https://github.com/tkem/cachetools/ |
 | `certifi` | 2026.6.17 | Mozilla Public License 2.0 (MPL 2.0) | https://github.com/certifi/python-certifi |
 | `charset-normalizer` | 3.4.7 | MIT | https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md |
 | `click` | 8.4.2 | BSD-3-Clause | https://github.com/pallets/click/ |
-| `coverage` | 7.14.3 | Apache-2.0 | https://github.com/coveragepy/coveragepy |
+| `coverage` | 7.15.0 | Apache-2.0 | https://github.com/coveragepy/coveragepy |
 | `duckdb` | 1.5.4 | MIT License | https://github.com/duckdb/duckdb-python |
 | `fsspec` | 2026.6.0 | BSD-3-Clause | https://github.com/fsspec/filesystem_spec |
-| `grpcio` | 1.81.1 | Apache-2.0 | https://grpc.io |
-| `grpcio-tools` | 1.81.1 | Apache-2.0 | https://grpc.io |
+| `grpcio` | 1.82.0 | Apache-2.0 | https://grpc.io |
+| `grpcio-tools` | 1.82.0 | Apache-2.0 | https://grpc.io |
 | `idna` | 3.18 | BSD-3-Clause | https://github.com/kjd/idna |
 | `iniconfig` | 2.3.0 | MIT | https://github.com/pytest-dev/iniconfig |
 | `Jinja2` | 3.1.6 | BSD License | https://github.com/pallets/jinja/ |
@@ -29,7 +29,7 @@
 | `nodeenv` | 1.10.0 | BSD License | https://github.com/ekalinin/nodeenv |
 | `packaging` | 26.2 | Apache-2.0 OR BSD-2-Clause | https://github.com/pypa/packaging |
 | `pluggy` | 1.6.0 | MIT License | UNKNOWN |
-| `protobuf` | 6.33.6 | 3-Clause BSD License | https://developers.google.com/protocol-buffers/ |
+| `protobuf` | 7.35.1 | 3-Clause BSD License | https://developers.google.com/protocol-buffers/ |
 | `pyarrow` | 24.0.0 | Apache-2.0 | https://arrow.apache.org/ |
 | `pydantic` | 2.13.4 | MIT | https://github.com/pydantic/pydantic |
 | `pydantic_core` | 2.46.4 | MIT | https://github.com/pydantic |
@@ -50,7 +50,7 @@
 | `strictyaml` | 1.7.3 | MIT License | https://hitchdev.com/strictyaml |
 | `tenacity` | 9.1.4 | Apache Software License | https://github.com/jd/tenacity |
 | `typing-inspection` | 0.4.2 | MIT | https://github.com/pydantic/typing-inspection |
-| `typing_extensions` | 4.15.0 | PSF-2.0 | https://github.com/python/typing_extensions |
+| `typing_extensions` | 4.16.0 | PSF-2.0 | https://github.com/python/typing_extensions |
 | `urllib3` | 2.7.0 | MIT | https://github.com/urllib3/urllib3/blob/main/CHANGES.rst |
 | `zstandard` | 0.25.0 | BSD-3-Clause | https://github.com/indygreg/python-zstandard |
 
