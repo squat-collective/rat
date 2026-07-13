@@ -21,7 +21,7 @@ jobs:
     name: Generate License Reports
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # ── Go setup ──
       - uses: actions/setup-go@v6
