@@ -1,5 +1,5 @@
 # Stage 1: Dependencies
-FROM node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8 AS deps
+FROM node:26-alpine@sha256:e88a35be04478413b7c71c455cd9865de9b9360e1f43456be5951032d7ac1a66 AS deps
 WORKDIR /app
 
 # Copy SDK first (local dependency)
@@ -21,7 +21,7 @@ COPY portal/ .
 RUN npm run build
 
 # Stage 3: Production
-FROM node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8 AS runner
+FROM node:26-alpine@sha256:e88a35be04478413b7c71c455cd9865de9b9360e1f43456be5951032d7ac1a66 AS runner
 LABEL org.opencontainers.image.title="rat-portal"
 LABEL org.opencontainers.image.description="RAT portal (Next.js web IDE)"
 LABEL org.opencontainers.image.source="https://github.com/squat-collective/rat"
