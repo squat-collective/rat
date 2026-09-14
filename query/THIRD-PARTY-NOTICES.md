@@ -7,17 +7,17 @@
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
 | `annotated-types` | 0.8.0 | MIT | https://github.com/annotated-types/annotated-types |
-| `boto3` | 1.43.89 | Apache-2.0 | https://github.com/boto/boto3 |
-| `botocore` | 1.43.89 | Apache-2.0 | https://github.com/boto/botocore |
+| `boto3` | 1.43.93 | Apache-2.0 | https://github.com/boto/boto3 |
+| `botocore` | 1.43.93 | Apache-2.0 | https://github.com/boto/botocore |
 | `cachetools` | 7.1.8 | MIT | https://github.com/tkem/cachetools/ |
 | `certifi` | 2026.7.22 | Mozilla Public License 2.0 (MPL 2.0) | https://github.com/certifi/python-certifi |
 | `charset-normalizer` | 3.5.1 | MIT | https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md |
 | `click` | 8.5.0 | BSD-3-Clause | https://github.com/pallets/click/ |
-| `coverage` | 7.16.0 | Apache-2.0 | https://github.com/coveragepy/coveragepy |
+| `coverage` | 7.16.1 | Apache-2.0 | https://github.com/coveragepy/coveragepy |
 | `duckdb` | 1.5.5 | MIT License | https://github.com/duckdb/duckdb-python |
 | `fsspec` | 2026.7.0 | BSD-3-Clause | https://github.com/fsspec/filesystem_spec |
-| `grpcio` | 1.83.1 | Apache-2.0 | https://grpc.io |
-| `grpcio-tools` | 1.83.1 | Apache-2.0 | https://grpc.io |
+| `grpcio` | 1.84.0 | Apache-2.0 | https://grpc.io |
+| `grpcio-tools` | 1.84.0 | Apache-2.0 | https://grpc.io |
 | `idna` | 3.19 | BSD-3-Clause | https://github.com/kjd/idna |
 | `iniconfig` | 2.3.0 | MIT | https://github.com/pytest-dev/iniconfig |
 | `Jinja2` | 3.1.6 | BSD License | https://github.com/pallets/jinja/ |
@@ -36,7 +36,7 @@
 | `Pygments` | 2.21.0 | BSD-2-Clause | https://pygments.org |
 | `pyiceberg` | 0.12.0 | Apache-2.0 | https://py.iceberg.apache.org/ |
 | `pyparsing` | 3.3.2 | MIT | https://github.com/pyparsing/pyparsing/ |
-| `pyright` | 1.1.411 | MIT | https://github.com/RobertCraigie/pyright-python |
+| `pyright` | 1.1.414 | MIT | https://github.com/RobertCraigie/pyright-python |
 | `pyroaring` | 1.1.0 | MIT License | https://github.com/Ezibenroc/PyRoaringBitMap |
 | `pytest` | 9.1.1 | MIT | https://docs.pytest.org/en/latest/ |
 | `pytest-cov` | 7.1.0 | MIT | https://pytest-cov.readthedocs.io/en/latest/changelog.html |

@@ -9,7 +9,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.89",
+    "version": "1.43.93",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "runner",
@@ -17,7 +17,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.89",
+    "version": "1.43.93",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "runner",
@@ -73,7 +73,7 @@
   },
   {
     "name": "grpcio",
-    "version": "1.83.1",
+    "version": "1.84.0",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "runner",
@@ -297,7 +297,7 @@
   },
   {
     "name": "coverage",
-    "version": "7.16.0",
+    "version": "7.16.1",
     "license": "Apache-2.0",
     "url": "https://github.com/coveragepy/coveragepy",
     "component": "runner",
@@ -305,7 +305,7 @@
   },
   {
     "name": "grpcio-tools",
-    "version": "1.83.1",
+    "version": "1.84.0",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "runner",
@@ -345,7 +345,7 @@
   },
   {
     "name": "pyright",
-    "version": "1.1.411",
+    "version": "1.1.414",
     "license": "MIT",
     "url": "https://github.com/RobertCraigie/pyright-python",
     "component": "runner",
@@ -385,7 +385,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.89",
+    "version": "1.43.93",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "query",
@@ -393,7 +393,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.89",
+    "version": "1.43.93",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "query",
@@ -433,7 +433,7 @@
   },
   {
     "name": "coverage",
-    "version": "7.16.0",
+    "version": "7.16.1",
     "license": "Apache-2.0",
     "url": "https://github.com/coveragepy/coveragepy",
     "component": "query",
@@ -457,7 +457,7 @@
   },
   {
     "name": "grpcio",
-    "version": "1.83.1",
+    "version": "1.84.0",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "query",
@@ -465,7 +465,7 @@
   },
   {
     "name": "grpcio-tools",
-    "version": "1.83.1",
+    "version": "1.84.0",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "query",
@@ -617,7 +617,7 @@
   },
   {
     "name": "pyright",
-    "version": "1.1.411",
+    "version": "1.1.414",
     "license": "MIT",
     "url": "https://github.com/RobertCraigie/pyright-python",
     "component": "query",
