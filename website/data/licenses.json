@@ -9,7 +9,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.93",
+    "version": "1.43.98",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "runner",
@@ -17,7 +17,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.93",
+    "version": "1.43.98",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "runner",
@@ -25,7 +25,7 @@
   },
   {
     "name": "cachetools",
-    "version": "7.1.8",
+    "version": "7.2.0",
     "license": "MIT",
     "url": "https://github.com/tkem/cachetools/",
     "component": "runner",
@@ -65,7 +65,7 @@
   },
   {
     "name": "fsspec",
-    "version": "2026.7.0",
+    "version": "2026.9.0",
     "license": "BSD-3-Clause",
     "url": "https://github.com/fsspec/filesystem_spec",
     "component": "runner",
@@ -81,7 +81,7 @@
   },
   {
     "name": "idna",
-    "version": "3.19",
+    "version": "3.20",
     "license": "BSD-3-Clause",
     "url": "https://github.com/kjd/idna",
     "component": "runner",
@@ -137,7 +137,7 @@
   },
   {
     "name": "protobuf",
-    "version": "7.36.1",
+    "version": "7.36.2",
     "license": "3-Clause BSD License",
     "url": "https://developers.google.com/protocol-buffers/",
     "component": "runner",
@@ -185,7 +185,7 @@
   },
   {
     "name": "pyparsing",
-    "version": "3.3.2",
+    "version": "3.3.3",
     "license": "MIT",
     "url": "https://github.com/pyparsing/pyparsing/",
     "component": "runner",
@@ -281,7 +281,7 @@
   },
   {
     "name": "urllib3",
-    "version": "2.7.0",
+    "version": "2.8.0",
     "license": "MIT",
     "url": "https://github.com/urllib3/urllib3/blob/main/CHANGES.rst",
     "component": "runner",
@@ -385,7 +385,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.93",
+    "version": "1.43.98",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "query",
@@ -393,7 +393,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.93",
+    "version": "1.43.98",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "query",
@@ -401,7 +401,7 @@
   },
   {
     "name": "cachetools",
-    "version": "7.1.8",
+    "version": "7.2.0",
     "license": "MIT",
     "url": "https://github.com/tkem/cachetools/",
     "component": "query",
@@ -449,7 +449,7 @@
   },
   {
     "name": "fsspec",
-    "version": "2026.7.0",
+    "version": "2026.9.0",
     "license": "BSD-3-Clause",
     "url": "https://github.com/fsspec/filesystem_spec",
     "component": "query",
@@ -473,7 +473,7 @@
   },
   {
     "name": "idna",
-    "version": "3.19",
+    "version": "3.20",
     "license": "BSD-3-Clause",
     "url": "https://github.com/kjd/idna",
     "component": "query",
@@ -561,7 +561,7 @@
   },
   {
     "name": "protobuf",
-    "version": "7.36.1",
+    "version": "7.36.2",
     "license": "3-Clause BSD License",
     "url": "https://developers.google.com/protocol-buffers/",
     "component": "query",
@@ -609,7 +609,7 @@
   },
   {
     "name": "pyparsing",
-    "version": "3.3.2",
+    "version": "3.3.3",
     "license": "MIT",
     "url": "https://github.com/pyparsing/pyparsing/",
     "component": "query",
@@ -737,7 +737,7 @@
   },
   {
     "name": "urllib3",
-    "version": "2.7.0",
+    "version": "2.8.0",
     "license": "MIT",
     "url": "https://github.com/urllib3/urllib3/blob/main/CHANGES.rst",
     "component": "query",
