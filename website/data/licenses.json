@@ -9,7 +9,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.98",
+    "version": "1.43.103",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "runner",
@@ -17,7 +17,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.98",
+    "version": "1.43.103",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "runner",
@@ -297,7 +297,7 @@
   },
   {
     "name": "coverage",
-    "version": "7.16.1",
+    "version": "7.16.2",
     "license": "Apache-2.0",
     "url": "https://github.com/coveragepy/coveragepy",
     "component": "runner",
@@ -321,7 +321,7 @@
   },
   {
     "name": "nodeenv",
-    "version": "1.10.0",
+    "version": "1.11.0",
     "license": "BSD License",
     "url": "https://github.com/ekalinin/nodeenv",
     "component": "runner",
@@ -385,7 +385,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.98",
+    "version": "1.43.103",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "query",
@@ -393,7 +393,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.98",
+    "version": "1.43.103",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "query",
@@ -433,7 +433,7 @@
   },
   {
     "name": "coverage",
-    "version": "7.16.1",
+    "version": "7.16.2",
     "license": "Apache-2.0",
     "url": "https://github.com/coveragepy/coveragepy",
     "component": "query",
@@ -537,7 +537,7 @@
   },
   {
     "name": "nodeenv",
-    "version": "1.10.0",
+    "version": "1.11.0",
     "license": "BSD License",
     "url": "https://github.com/ekalinin/nodeenv",
     "component": "query",
