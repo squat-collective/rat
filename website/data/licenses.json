@@ -9,7 +9,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.103",
+    "version": "1.43.108",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "runner",
@@ -17,7 +17,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.103",
+    "version": "1.43.108",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "runner",
@@ -41,7 +41,7 @@
   },
   {
     "name": "charset-normalizer",
-    "version": "3.5.1",
+    "version": "3.5.2",
     "license": "MIT",
     "url": "https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md",
     "component": "runner",
@@ -57,7 +57,7 @@
   },
   {
     "name": "duckdb",
-    "version": "1.5.5",
+    "version": "1.5.6",
     "license": "MIT License",
     "url": "https://github.com/duckdb/duckdb-python",
     "component": "runner",
@@ -113,7 +113,7 @@
   },
   {
     "name": "MarkupSafe",
-    "version": "3.0.3",
+    "version": "3.0.4",
     "license": "BSD-3-Clause",
     "url": "https://github.com/pallets/markupsafe/",
     "component": "runner",
@@ -129,7 +129,7 @@
   },
   {
     "name": "mmh3",
-    "version": "5.3.0",
+    "version": "5.3.1",
     "license": "MIT License",
     "url": "https://pypi.org/project/mmh3/",
     "component": "runner",
@@ -193,7 +193,7 @@
   },
   {
     "name": "pyroaring",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "license": "MIT License",
     "url": "https://github.com/Ezibenroc/PyRoaringBitMap",
     "component": "runner",
@@ -385,7 +385,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.103",
+    "version": "1.43.108",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "query",
@@ -393,7 +393,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.103",
+    "version": "1.43.108",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "query",
@@ -417,7 +417,7 @@
   },
   {
     "name": "charset-normalizer",
-    "version": "3.5.1",
+    "version": "3.5.2",
     "license": "MIT",
     "url": "https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md",
     "component": "query",
@@ -441,7 +441,7 @@
   },
   {
     "name": "duckdb",
-    "version": "1.5.5",
+    "version": "1.5.6",
     "license": "MIT License",
     "url": "https://github.com/duckdb/duckdb-python",
     "component": "query",
@@ -513,7 +513,7 @@
   },
   {
     "name": "MarkupSafe",
-    "version": "3.0.3",
+    "version": "3.0.4",
     "license": "BSD-3-Clause",
     "url": "https://github.com/pallets/markupsafe/",
     "component": "query",
@@ -529,7 +529,7 @@
   },
   {
     "name": "mmh3",
-    "version": "5.3.0",
+    "version": "5.3.1",
     "license": "MIT License",
     "url": "https://pypi.org/project/mmh3/",
     "component": "query",
@@ -625,7 +625,7 @@
   },
   {
     "name": "pyroaring",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "license": "MIT License",
     "url": "https://github.com/Ezibenroc/PyRoaringBitMap",
     "component": "query",

@@ -7,14 +7,14 @@
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
 | `annotated-types` | 0.8.0 | MIT | https://github.com/annotated-types/annotated-types |
-| `boto3` | 1.43.103 | Apache-2.0 | https://github.com/boto/boto3 |
-| `botocore` | 1.43.103 | Apache-2.0 | https://github.com/boto/botocore |
+| `boto3` | 1.43.108 | Apache-2.0 | https://github.com/boto/boto3 |
+| `botocore` | 1.43.108 | Apache-2.0 | https://github.com/boto/botocore |
 | `cachetools` | 7.2.0 | MIT | https://github.com/tkem/cachetools/ |
 | `certifi` | 2026.7.22 | Mozilla Public License 2.0 (MPL 2.0) | https://github.com/certifi/python-certifi |
-| `charset-normalizer` | 3.5.1 | MIT | https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md |
+| `charset-normalizer` | 3.5.2 | MIT | https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md |
 | `click` | 8.5.0 | BSD-3-Clause | https://github.com/pallets/click/ |
 | `coverage` | 7.16.2 | Apache-2.0 | https://github.com/coveragepy/coveragepy |
-| `duckdb` | 1.5.5 | MIT License | https://github.com/duckdb/duckdb-python |
+| `duckdb` | 1.5.6 | MIT License | https://github.com/duckdb/duckdb-python |
 | `fsspec` | 2026.9.0 | BSD-3-Clause | https://github.com/fsspec/filesystem_spec |
 | `grpcio` | 1.84.0 | Apache-2.0 | https://grpc.io |
 | `grpcio-tools` | 1.84.0 | Apache-2.0 | https://grpc.io |
@@ -23,9 +23,9 @@
 | `Jinja2` | 3.1.6 | BSD License | https://github.com/pallets/jinja/ |
 | `jmespath` | 1.1.0 | MIT License | https://github.com/jmespath/jmespath.py |
 | `markdown-it-py` | 4.2.0 | MIT License | https://github.com/executablebooks/markdown-it-py |
-| `MarkupSafe` | 3.0.3 | BSD-3-Clause | https://github.com/pallets/markupsafe/ |
+| `MarkupSafe` | 3.0.4 | BSD-3-Clause | https://github.com/pallets/markupsafe/ |
 | `mdurl` | 0.1.2 | MIT License | https://github.com/executablebooks/mdurl |
-| `mmh3` | 5.3.0 | MIT License | https://pypi.org/project/mmh3/ |
+| `mmh3` | 5.3.1 | MIT License | https://pypi.org/project/mmh3/ |
 | `nodeenv` | 1.11.0 | BSD License | https://github.com/ekalinin/nodeenv |
 | `packaging` | 26.3 | Apache-2.0 OR BSD-2-Clause | https://github.com/pypa/packaging |
 | `pluggy` | 1.6.0 | MIT License | UNKNOWN |
@@ -37,7 +37,7 @@
 | `pyiceberg` | 0.12.0 | Apache-2.0 | https://py.iceberg.apache.org/ |
 | `pyparsing` | 3.3.3 | MIT | https://github.com/pyparsing/pyparsing/ |
 | `pyright` | 1.1.414 | MIT | https://github.com/RobertCraigie/pyright-python |
-| `pyroaring` | 1.1.0 | MIT License | https://github.com/Ezibenroc/PyRoaringBitMap |
+| `pyroaring` | 1.2.0 | MIT License | https://github.com/Ezibenroc/PyRoaringBitMap |
 | `pytest` | 9.1.1 | MIT | https://docs.pytest.org/en/latest/ |
 | `pytest-cov` | 7.1.0 | MIT | https://pytest-cov.readthedocs.io/en/latest/changelog.html |
 | `python-dateutil` | 2.9.0.post0 | Apache Software License; BSD License | https://github.com/dateutil/dateutil |
