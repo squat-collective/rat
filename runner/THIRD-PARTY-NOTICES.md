@@ -7,10 +7,10 @@
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
 | `annotated-types` | 0.8.0 | MIT | https://github.com/annotated-types/annotated-types |
-| `boto3` | 1.43.111 | Apache-2.0 | https://github.com/boto/boto3 |
-| `botocore` | 1.43.111 | Apache-2.0 | https://github.com/boto/botocore |
-| `cachetools` | 7.2.1 | MIT | https://github.com/tkem/cachetools/ |
-| `certifi` | 2026.7.22 | Mozilla Public License 2.0 (MPL 2.0) | https://github.com/certifi/python-certifi |
+| `boto3` | 1.43.114 | Apache-2.0 | https://github.com/boto/boto3 |
+| `botocore` | 1.43.114 | Apache-2.0 | https://github.com/boto/botocore |
+| `cachetools` | 7.2.3 | MIT | https://github.com/tkem/cachetools/ |
+| `certifi` | 2026.10.18 | Mozilla Public License 2.0 (MPL 2.0) | https://github.com/certifi/python-certifi |
 | `charset-normalizer` | 3.5.2 | MIT | https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md |
 | `click` | 8.5.0 | BSD-3-Clause | https://github.com/pallets/click/ |
 | `duckdb` | 1.5.6 | MIT License | https://github.com/duckdb/duckdb-python |
@@ -53,7 +53,7 @@
 | `iniconfig` | 2.3.1 | MIT | https://github.com/pytest-dev/iniconfig |
 | `nodeenv` | 1.11.0 | BSD License | https://github.com/ekalinin/nodeenv |
 | `packaging` | 26.3 | Apache-2.0 OR BSD-2-Clause | https://github.com/pypa/packaging |
-| `pluggy` | 1.6.0 | MIT License | UNKNOWN |
+| `pluggy` | 1.7.0 | MIT License | https://github.com/pytest-dev/pluggy |
 | `pyright` | 1.1.414 | MIT | https://github.com/RobertCraigie/pyright-python |
 | `pytest` | 9.1.1 | MIT | https://docs.pytest.org/en/latest/ |
 | `pytest-cov` | 7.1.0 | MIT | https://pytest-cov.readthedocs.io/en/latest/changelog.html |
