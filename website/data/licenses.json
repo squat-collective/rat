@@ -9,7 +9,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.114",
+    "version": "1.43.118",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "runner",
@@ -17,7 +17,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.114",
+    "version": "1.43.118",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "runner",
@@ -25,7 +25,7 @@
   },
   {
     "name": "cachetools",
-    "version": "7.2.3",
+    "version": "7.2.5",
     "license": "MIT",
     "url": "https://github.com/tkem/cachetools/",
     "component": "runner",
@@ -33,7 +33,7 @@
   },
   {
     "name": "certifi",
-    "version": "2026.10.18",
+    "version": "2026.10.23",
     "license": "Mozilla Public License 2.0 (MPL 2.0)",
     "url": "https://github.com/certifi/python-certifi",
     "component": "runner",
@@ -57,7 +57,7 @@
   },
   {
     "name": "duckdb",
-    "version": "1.5.6",
+    "version": "2.0.0",
     "license": "MIT License",
     "url": "https://github.com/duckdb/duckdb-python",
     "component": "runner",
@@ -73,7 +73,7 @@
   },
   {
     "name": "grpcio",
-    "version": "1.84.0",
+    "version": "1.85.0",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "runner",
@@ -233,7 +233,7 @@
   },
   {
     "name": "s3transfer",
-    "version": "0.19.2",
+    "version": "0.19.3",
     "license": "Apache Software License",
     "url": "https://github.com/boto/s3transfer",
     "component": "runner",
@@ -297,7 +297,7 @@
   },
   {
     "name": "coverage",
-    "version": "7.16.2",
+    "version": "7.17.0",
     "license": "Apache-2.0",
     "url": "https://github.com/coveragepy/coveragepy",
     "component": "runner",
@@ -305,7 +305,7 @@
   },
   {
     "name": "grpcio-tools",
-    "version": "1.84.0",
+    "version": "1.85.0",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "runner",
@@ -385,7 +385,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.114",
+    "version": "1.43.118",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "query",
@@ -393,7 +393,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.114",
+    "version": "1.43.118",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "query",
@@ -401,7 +401,7 @@
   },
   {
     "name": "cachetools",
-    "version": "7.2.3",
+    "version": "7.2.5",
     "license": "MIT",
     "url": "https://github.com/tkem/cachetools/",
     "component": "query",
@@ -409,7 +409,7 @@
   },
   {
     "name": "certifi",
-    "version": "2026.10.18",
+    "version": "2026.10.23",
     "license": "Mozilla Public License 2.0 (MPL 2.0)",
     "url": "https://github.com/certifi/python-certifi",
     "component": "query",
@@ -433,7 +433,7 @@
   },
   {
     "name": "coverage",
-    "version": "7.16.2",
+    "version": "7.17.0",
     "license": "Apache-2.0",
     "url": "https://github.com/coveragepy/coveragepy",
     "component": "query",
@@ -441,7 +441,7 @@
   },
   {
     "name": "duckdb",
-    "version": "1.5.6",
+    "version": "2.0.0",
     "license": "MIT License",
     "url": "https://github.com/duckdb/duckdb-python",
     "component": "query",
@@ -457,7 +457,7 @@
   },
   {
     "name": "grpcio",
-    "version": "1.84.0",
+    "version": "1.85.0",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "query",
@@ -465,7 +465,7 @@
   },
   {
     "name": "grpcio-tools",
-    "version": "1.84.0",
+    "version": "1.85.0",
     "license": "Apache-2.0",
     "url": "https://grpc.io",
     "component": "query",
@@ -689,7 +689,7 @@
   },
   {
     "name": "s3transfer",
-    "version": "0.19.2",
+    "version": "0.19.3",
     "license": "Apache Software License",
     "url": "https://github.com/boto/s3transfer",
     "component": "query",

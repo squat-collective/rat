@@ -7,15 +7,15 @@
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
 | `annotated-types` | 0.8.0 | MIT | https://github.com/annotated-types/annotated-types |
-| `boto3` | 1.43.114 | Apache-2.0 | https://github.com/boto/boto3 |
-| `botocore` | 1.43.114 | Apache-2.0 | https://github.com/boto/botocore |
-| `cachetools` | 7.2.3 | MIT | https://github.com/tkem/cachetools/ |
-| `certifi` | 2026.10.18 | Mozilla Public License 2.0 (MPL 2.0) | https://github.com/certifi/python-certifi |
+| `boto3` | 1.43.118 | Apache-2.0 | https://github.com/boto/boto3 |
+| `botocore` | 1.43.118 | Apache-2.0 | https://github.com/boto/botocore |
+| `cachetools` | 7.2.5 | MIT | https://github.com/tkem/cachetools/ |
+| `certifi` | 2026.10.23 | Mozilla Public License 2.0 (MPL 2.0) | https://github.com/certifi/python-certifi |
 | `charset-normalizer` | 3.5.2 | MIT | https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md |
 | `click` | 8.5.0 | BSD-3-Clause | https://github.com/pallets/click/ |
-| `duckdb` | 1.5.6 | MIT License | https://github.com/duckdb/duckdb-python |
+| `duckdb` | 2.0.0 | MIT License | https://github.com/duckdb/duckdb-python |
 | `fsspec` | 2026.9.0 | BSD-3-Clause | https://github.com/fsspec/filesystem_spec |
-| `grpcio` | 1.84.0 | Apache-2.0 | https://grpc.io |
+| `grpcio` | 1.85.0 | Apache-2.0 | https://grpc.io |
 | `idna` | 3.20 | BSD-3-Clause | https://github.com/kjd/idna |
 | `Jinja2` | 3.1.6 | BSD License | https://github.com/pallets/jinja/ |
 | `jmespath` | 1.1.0 | MIT License | https://github.com/jmespath/jmespath.py |
@@ -35,7 +35,7 @@
 | `PyYAML` | 6.0.3 | MIT License | https://pyyaml.org/ |
 | `requests` | 2.34.2 | Apache Software License | https://github.com/psf/requests |
 | `rich` | 15.0.0 | MIT License | https://github.com/Textualize/rich |
-| `s3transfer` | 0.19.2 | Apache Software License | https://github.com/boto/s3transfer |
+| `s3transfer` | 0.19.3 | Apache Software License | https://github.com/boto/s3transfer |
 | `six` | 1.17.0 | MIT License | https://github.com/benjaminp/six |
 | `strictyaml` | 1.7.3 | MIT License | https://hitchdev.com/strictyaml |
 | `tenacity` | 9.2.1 | Apache-2.0 | https://github.com/jd/tenacity |
@@ -48,8 +48,8 @@
 
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
-| `coverage` | 7.16.2 | Apache-2.0 | https://github.com/coveragepy/coveragepy |
-| `grpcio-tools` | 1.84.0 | Apache-2.0 | https://grpc.io |
+| `coverage` | 7.17.0 | Apache-2.0 | https://github.com/coveragepy/coveragepy |
+| `grpcio-tools` | 1.85.0 | Apache-2.0 | https://grpc.io |
 | `iniconfig` | 2.3.1 | MIT | https://github.com/pytest-dev/iniconfig |
 | `nodeenv` | 1.11.0 | BSD License | https://github.com/ekalinin/nodeenv |
 | `packaging` | 26.3 | Apache-2.0 OR BSD-2-Clause | https://github.com/pypa/packaging |
