@@ -7,13 +7,13 @@
 | Package | Version | License | URL |
 |---------|---------|---------|-----|
 | `annotated-types` | 0.8.0 | MIT | https://github.com/annotated-types/annotated-types |
-| `boto3` | 1.43.123 | Apache-2.0 | https://github.com/boto/boto3 |
-| `botocore` | 1.43.123 | Apache-2.0 | https://github.com/boto/botocore |
-| `cachetools` | 7.2.8 | MIT | https://github.com/tkem/cachetools/ |
+| `boto3` | 1.43.126 | Apache-2.0 | https://github.com/boto/boto3 |
+| `botocore` | 1.43.126 | Apache-2.0 | https://github.com/boto/botocore |
+| `cachetools` | 8.0.0 | MIT | https://github.com/tkem/cachetools/ |
 | `certifi` | 2026.10.23 | Mozilla Public License 2.0 (MPL 2.0) | https://github.com/certifi/python-certifi |
 | `charset-normalizer` | 3.5.2 | MIT | https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md |
-| `click` | 8.5.0 | BSD-3-Clause | https://github.com/pallets/click/ |
-| `coverage` | 7.17.0 | Apache-2.0 | https://github.com/coveragepy/coveragepy |
+| `click` | 8.5.1 | BSD-3-Clause | https://github.com/pallets/click/ |
+| `coverage` | 7.17.2 | Apache-2.0 | https://github.com/coveragepy/coveragepy |
 | `duckdb` | 2.0.0 | MIT License | https://github.com/duckdb/duckdb-python |
 | `fsspec` | 2026.9.0 | BSD-3-Clause | https://github.com/fsspec/filesystem_spec |
 | `grpcio` | 1.85.1 | Apache-2.0 | https://grpc.io |
@@ -30,9 +30,9 @@
 | `packaging` | 26.3 | Apache-2.0 OR BSD-2-Clause | https://github.com/pypa/packaging |
 | `pluggy` | 1.7.0 | MIT License | https://github.com/pytest-dev/pluggy |
 | `protobuf` | 7.36.2 | 3-Clause BSD License | https://developers.google.com/protocol-buffers/ |
-| `pyarrow` | 26.0.0 | Apache-2.0 | https://arrow.apache.org/ |
-| `pydantic` | 2.14.2 | MIT | https://github.com/pydantic/pydantic |
-| `pydantic_core` | 2.50.2 | MIT | https://github.com/pydantic |
+| `pyarrow` | 26.0.1 | Apache-2.0 | https://arrow.apache.org/ |
+| `pydantic` | 2.14.3 | MIT | https://github.com/pydantic/pydantic |
+| `pydantic_core` | 2.50.4 | MIT | https://github.com/pydantic |
 | `Pygments` | 2.21.0 | BSD-2-Clause | https://pygments.org |
 | `pyiceberg` | 0.12.0 | Apache-2.0 | https://py.iceberg.apache.org/ |
 | `pyparsing` | 3.3.3 | MIT | https://github.com/pyparsing/pyparsing/ |
@@ -49,7 +49,7 @@
 | `six` | 1.17.0 | MIT License | https://github.com/benjaminp/six |
 | `strictyaml` | 1.7.3 | MIT License | https://hitchdev.com/strictyaml |
 | `tenacity` | 9.2.1 | Apache-2.0 | https://github.com/jd/tenacity |
-| `typing-inspection` | 0.4.4 | MIT | https://github.com/pydantic/typing-inspection |
+| `typing-inspection` | 0.4.5 | MIT | https://github.com/pydantic/typing-inspection |
 | `typing_extensions` | 4.16.0 | PSF-2.0 | https://github.com/python/typing_extensions |
 | `urllib3` | 2.8.0 | MIT | https://github.com/urllib3/urllib3/blob/main/CHANGES.rst |
 | `zstandard` | 0.25.0 | BSD-3-Clause | https://github.com/indygreg/python-zstandard |
