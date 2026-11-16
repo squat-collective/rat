@@ -9,7 +9,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.126",
+    "version": "1.44.3",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "runner",
@@ -17,7 +17,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.126",
+    "version": "1.44.3",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "runner",
@@ -105,7 +105,7 @@
   },
   {
     "name": "markdown-it-py",
-    "version": "4.2.0",
+    "version": "4.3.0",
     "license": "MIT License",
     "url": "https://github.com/executablebooks/markdown-it-py",
     "component": "runner",
@@ -297,7 +297,7 @@
   },
   {
     "name": "coverage",
-    "version": "7.17.2",
+    "version": "7.17.3",
     "license": "Apache-2.0",
     "url": "https://github.com/coveragepy/coveragepy",
     "component": "runner",
@@ -385,7 +385,7 @@
   },
   {
     "name": "boto3",
-    "version": "1.43.126",
+    "version": "1.44.3",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/boto3",
     "component": "query",
@@ -393,7 +393,7 @@
   },
   {
     "name": "botocore",
-    "version": "1.43.126",
+    "version": "1.44.3",
     "license": "Apache-2.0",
     "url": "https://github.com/boto/botocore",
     "component": "query",
@@ -433,7 +433,7 @@
   },
   {
     "name": "coverage",
-    "version": "7.17.2",
+    "version": "7.17.3",
     "license": "Apache-2.0",
     "url": "https://github.com/coveragepy/coveragepy",
     "component": "query",
@@ -505,7 +505,7 @@
   },
   {
     "name": "markdown-it-py",
-    "version": "4.2.0",
+    "version": "4.3.0",
     "license": "MIT License",
     "url": "https://github.com/executablebooks/markdown-it-py",
     "component": "query",
